@@ -209,3 +209,21 @@ p { line-height: 1.8; }
   .progress { width: 90px; }
   #toast { left: calc(50% + 32px); max-width: calc(100vw - 95px); }
 }
+.settings-layout { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(350px, 1.2fr); gap: 20px; align-items: start; }
+.settings-layout>.panel { margin: 0; }
+.settings-layout>.panel:last-child { grid-column: 1 / -1; }
+.settings-fields { display: grid; gap: 10px; }
+.settings-fields label { margin-top: 9px; color: #4b5563; font-size: 12px; }
+.settings-fields label small { margin-left: 5px; font-size: 10px; }
+.settings-fields input { width: 100%; min-width: 0; }
+.settings-footer { display: flex; justify-content: flex-end; margin-top: 22px; }
+.field-help { margin: 12px 0; color: #8a919d; font-size: 11px; }
+.account-row { display: flex; align-items: center; gap: 10px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+.account-row:last-child { border-bottom: 0; }
+.account-avatar { display: grid; place-items: center; width: 30px; height: 34px; border: 1px solid var(--line); border-radius: 4px; color: #8a919d; }
+.account-info { flex: 1; min-width: 0; }
+.account-info strong { display: block; overflow: hidden; text-overflow: ellipsis; font-weight: 500; font-size: 12px; }
+.account-info small { display: block; margin-top: 5px; font-size: 10px; }
+.account-row button { padding: 7px 9px; font-size: 11px; }
+#poolConcurrency { width: 90px; }
+@media(max-width: 1050px) { .settings-layout { grid-template-columns: 1fr; } .settings-layout>.panel:last-child { grid-column: auto; } }
