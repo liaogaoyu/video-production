@@ -9,7 +9,7 @@ app.whenReady().then(() => {
     return true;
   });
   function createWindow() {
-  const win = new BrowserWindow({ width: 1520, height: 980, minWidth: 1060, minHeight: 720, backgroundColor: '#111214', title: 'LumenX · 漫剧工作台', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const win = new BrowserWindow({ width: 1520, height: 980, minWidth: 1060, minHeight: 720, backgroundColor: '#ffffff', title: 'LumenX · 漫剧工作台', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   win.setMenuBarVisibility(false);
   win.loadFile('index.html');
   }
