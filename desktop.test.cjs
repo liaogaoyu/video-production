@@ -6,12 +6,13 @@ const path = require('node:path');
 const {pathToFileURL} = require('node:url');
 async function setup() {
   const handlers={}, windows=[], writes=[];
+  const userData=fs.mkdtempSync(require('node:path').join(require('node:os').tmpdir(),'storydock-desktop-'));
   class Window {
     constructor(options) {this.options=options; this.webContents={setWindowOpenHandler(){},on(){}};windows.push(this);}
     setMenuBarVisibility(){} loadFile(){} loadURL(){return Promise.resolve();} on(){} isDestroyed(){return false;} show(){} focus(){}
   }
   const session={fromPartition:partition=>({partition,cookies:{get:async()=>[],flushStore:async()=>{},on(){}}})};
-  const electron={session,app:{whenReady:()=>Promise.resolve(),getPath:()=>'/virtual-local',on(){}},BrowserWindow:Window,ipcMain:{handle:(n,f)=>handlers[n]=f},dialog:{},safeStorage:{isEncryptionAvailable:()=>true,encryptString:k=>Buffer.from('encrypted:'+k)}};
+  const electron={session,app:{whenReady:()=>Promise.resolve(),getPath:()=>userData,on(){}},BrowserWindow:Window,ipcMain:{handle:(n,f)=>handlers[n]=f},dialog:{},safeStorage:{isEncryptionAvailable:()=>true,encryptString:k=>Buffer.from('encrypted:'+k)}};
   const ctx=vm.createContext({require:n=>n==='electron'?electron:n==='node:fs/promises'?{writeFile:async(...args)=>writes.push(args),access:async()=>{throw Error();}}:require(n),__dirname,process:{platform:'darwin'},console});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'electron.cjs'),'utf8'),ctx);await Promise.resolve();
   return {handlers,windows,writes,event:{senderFrame:{url:pathToFileURL(path.join(__dirname,'index.html')).href}}};
@@ -35,5 +36,5 @@ test('remote pages cannot save keys or open account windows',async()=>{
 });
 test('API keys are encrypted before writing to a local file',async()=>{
  const x=await setup();const r=await x.handlers['save-image-key'](x.event,'fake-test-value');assert.equal(r.ok,true);
- assert.equal(x.writes[0][0],'/virtual-local/storydock-image-key.enc');assert.equal(x.writes[0][1].toString(),'encrypted:fake-test-value');assert.equal(x.writes[0][2].mode,0o600);
+ assert.match(x.writes[0][0],/storydock-image-key\.enc$/);assert.equal(x.writes[0][1].toString(),'encrypted:fake-test-value');assert.equal(x.writes[0][2].mode,0o600);
 });

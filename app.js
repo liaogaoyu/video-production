@@ -25,9 +25,9 @@ let localConnections;
 try{localConnections=JSON.parse(localStorage.getItem('storydock-connections-v1'));}catch{}
 let connections={image:{name:'GPT-Image-2',baseUrl:'',model:'gpt-image-2',...localConnections?.image},accounts:Array.isArray(localConnections?.accounts)?localConnections.accounts:[],pool:{strategy:'round-robin',concurrency:2,...localConnections?.pool}};
 let imageKeySaved=false;
-function persistConnections(){localStorage.setItem('storydock-connections-v1',JSON.stringify(connections));}
+function persistConnections(){localStorage.setItem('storydock-connections-v1',JSON.stringify(connections));window.desktop?.saveConnections?.(connections).catch(()=>toast('连接配置保存到 SQLite 失败'));}
 let view='projects',filter='全部资产',query='',statusFilter='all',selected=new Set(),listMode=false,timer=null,importKind='assets',parsedImport=null;
-const persist=()=>{try{activeProject.data=state;workspace.activeProjectId=activeProject.id;localStorage.setItem('storydock-projects-v1',JSON.stringify(workspace));}catch{toast('本地存储空间不足，请导出项目备份');}};
+const persist=()=>{try{activeProject.data=state;workspace.activeProjectId=activeProject.id;localStorage.setItem('storydock-projects-v1',JSON.stringify(workspace));window.desktop?.saveWorkspace?.(workspace).catch(()=>toast('项目保存到 SQLite 失败'));}catch{toast('本地存储空间不足，请导出项目备份');}};
 function toast(t){const el=document.querySelector('#toast');el.textContent=t;el.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove('show'),3200);}
 const btn=(action,label,n,cls='')=>`<button class="${cls}" data-action="${action}">${n?icon(n):''}${label}</button>`;
 function render(){
@@ -77,3 +77,4 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')close();});
 render();
 
 if(window.desktop?.imageKeyStatus){window.desktop.imageKeyStatus().then(status=>{imageKeySaved=status.saved;if(view==='settings')render();}).catch(()=>{});}
+if(window.desktop?.loadWorkspace){Promise.all([window.desktop.loadWorkspace(),window.desktop.loadConnections()]).then(([savedWorkspace,savedConnections])=>{if(savedWorkspace?.projects?.length){workspace=savedWorkspace;activeProject=workspace.projects.find(p=>p.id===workspace.activeProjectId)||workspace.projects[0];state=activeProject.data;}else{window.desktop.saveWorkspace(workspace).catch(()=>{});}if(savedConnections?.image&&Array.isArray(savedConnections.accounts)){connections={image:{name:'GPT-Image-2',baseUrl:'',model:'gpt-image-2',...savedConnections.image},accounts:savedConnections.accounts,pool:{strategy:'round-robin',concurrency:2,...savedConnections.pool}};}else{window.desktop.saveConnections(connections).catch(()=>{});}render();}).catch(()=>toast('SQLite 数据库读取失败，当前使用浏览器备份'));}
