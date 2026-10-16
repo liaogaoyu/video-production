@@ -1,62 +1,46 @@
-# LumenX 漫剧工作台 · Electron 交互原型
+# LumenX 漫剧工作台
 
-独立原型，不修改 Studio / Atelier 的运行时和数据。无需 API Key 即可体验。
+本地 Electron 客户端，用于管理漫剧项目、资产图片、整剧分镜和批量生成任务。客户端没有自身账号系统；项目、配置、任务和媒体默认保存在本机。
 
-## 启动
+## 启动与验证
 
 ```sh
-cd prototypes/storydock
+cd /Users/liaogaoyu/Documents/limenx/prototypes/storydock
 npm install
 npm start
+npm run check
+npm test
 ```
 
-浏览器预览：`npm run preview`，访问 http://127.0.0.1:4318 。
-验证：`npm run check` 与 `npm test`。
+浏览器只用于界面预览：`npm run preview`，访问 `http://127.0.0.1:4318/`。浏览器预览没有 SQLite、加密密钥、原生文件和真实生成能力。
+
+macOS Apple Silicon 构建：`npm run build:mac`。产物位于 `dist/LumenX 漫剧工作台-darwin-arm64/`。本次同时生成 `dist/LumenX-Storydock-0.1.0-arm64.dmg`。当前构建未签名、未公证。
 
 ## 已实现
 
-- 我的项目与独立创建项目页面：名称、简介、画幅、风格备忘；项目之间隔离资产、分镜、队列。
-- 资产库分类、搜索、批量选择、图文列表切换、图片替换、提示词编辑与锁定。
-- Codex JSON 导入指令、文件 / 粘贴导入、格式预检、名称去重。
-- 分镜按编号排序、提示词编辑、`@名称` 匹配和未锁定引用提示。
-- 仅就绪分镜进入演示队列；任务记录提交时的提示词与参考图快照；暂停 / 继续、并发偏好。
-- localStorage 保存项目，JSON 导出；Electron 使用原生保存窗口。
+- 项目列表和独立创建项目页面；项目之间隔离资产、分镜和任务。
+- Electron 主进程使用 SQLite 保存项目与连接配置；保留浏览器预览的 localStorage 回退。
+- 资产 JSON 导入预检、稳定 `assetKey`、图片本地存储和内容哈希去重。
+- 多个不可变图片版本和明确固定；重新生成不会修改已有任务的参考图快照。
+- OpenAI Images 协议生图适配器；API Key 使用 Electron `safeStorage` 加密；支持 base64 和 URL 响应。
+- 整剧分镜导入，支持 `episode + number`、稳定 shot key 和结构化 `refs[].assetKey`。
+- 官方 `dreamina` CLI 账号池：每账号独立 Docker volume、GNOME Keyring 和 OAuth；身份哈希去重；登录与生成权限分别显示。
+- 即梦多图视频参数校验、提交 ID 保存、查询、下载和客户端重启恢复。
+- 提交结果不明时不自动重复提交；下载失败不会重新生成。
+- 完整项目包导出和恢复，包含媒体与可移植 manifest，不导出密钥或登录凭据。
 
-## 原型边界
+## 外部运行条件
 
-- 图片 / 视频生成、账号池调度和自动下载尚未接入；队列是明确标注的模拟任务，图片完成时使用示例图，视频没有真实产物。
-- 图片上传上限 2MB，localStorage 配额有限，正式版应使用 SQLite + 文件资产目录。
-- 风格是项目备忘，暂不自动拼接提示词。
-- 当前只支持创建、切换项目，暂不支持删除项目或整份项目备份恢复。
-- 导入明确的 `refs` 可包含带空格的资产名；从 `@名称` 自动解析时，名称以空格 / 标点为结束。生产版应改用 asset_id 与结构化引用，名称只负责显示与导入匹配。
-- 此包未制作 DMG / EXE。
+生图需要用户提供可用的 OpenAI Images 协议服务、模型名和 API Key。保存配置不等于接口验证成功。
 
-## 示例素材
+即梦需要 Docker Desktop、`lumenx-dreamina-eval:1.4.20` 镜像、用户完成官方 OAuth，以及账号具备官方 CLI 生成权限。可选代理通过 `STORYDOCK_DREAMINA_PROXY` 启动环境变量设置，不写入镜像或项目导出。
 
-`assets/shen.png`、`assets/lu.png`、`assets/alley.png` 由内置 image_gen 工具生成。三组提示分别为：民国短卷发女侦探人物设定图；深蓝风衣男探长人物设定图；雨夜上海老街环境概念图。完整生成提示见 `assets/prompts.json`。人物变体卡复用示例角色图，仅演示资产组织。
+## 验证边界
 
-即梦连接调研见仓库 `docs/agents/deliverables/2026-10-16-jimeng-integration-research.md`，包含第三方 CLI 与网页提交方案、验证边界和验收条件。
+自动测试覆盖 SQLite 重开、加密会话、IPC 隔离、媒体存储、资产版本、结构化引用、项目包恢复、官方 CLI OAuth 解析、账号卷隔离、视频参数和异步状态解析。
 
+2026-10-17 的桌面实测完成：开发版和打包版启动、SQLite 项目重载、资产导入、Docker 镜像检查及官方 CLI 环境识别。
 
-## 本地模型配置与账号池
+当前真实即梦账号返回“仅限会员用户使用”，因此没有提交真实付费视频任务。两个不同真实 CLI 账号、真实多图视频结果和自动下载仍需有权限账号完成最终验收；客户端会阻止无权限账号提交。网页登录 Cookie 的第三方积分检查仅保留为研究代码，不用于生产视频提交。
 
-- 客户端无注册、登录或云端用户系统。白色界面保留项目、资产、分镜、队列与配置操作。
-- 「模型与账号」可配置生图服务名称、OpenAI 兼容接口地址、模型名称。配置存入独立的 `storydock-connections-v1` 本地存储，不写入项目导出文件。
-- Electron 端的 API Key 使用 `safeStorage` 加密后写入应用 `userData/storydock-image-key.enc`，不返回渲染层。浏览器预览不支持保存密钥。系统加密存储不可用时不保存明文。
-- 即梦账号别名支持一行一个批量添加、去重、暂停 / 启用；每个账号使用 `persist:storydock-jimeng-<UUID>` 独立浏览器会话。
-- 「打开即梦」在桌面端打开独立账号窗口，用户自行完成即梦登录；窗口不加载本地 preload，不具备 Node 能力。此处是第三方服务登录，与客户端自身用户体系无关。
-- 账号窗口是否成功登录、模型权限和额度尚不自动识别，账号条目显示「未验证登录状态」。分配策略及并行上限可保存，真实任务调度仍待接入。
-- 生图配置当前用于任务模型记录；真实图像接口调用尚未实现，队列保持演示模式。
-
-验证包含 9 项测试：导入去重与校验、分镜就绪条件、项目数据隔离、模型配置与项目导出隔离、账号批量去重、独立持久化会话、远端页面 IPC 拒绝，以及密钥在写盘前加密。
-
-## 即梦本地登录试验（2026-10-16）
-
-- 新增「检查登录」：只返回保存状态与积分，不向渲染层返回 Cookie / sessionid。
-- 除 Chromium 独立持久化 session 外，还用系统加密存储保存 Cookie 快照，覆盖 session Cookie 在应用重启后丢失的情况。快照在 `userData/storydock-jimeng-sessions/<UUID>.enc`。
-- Cookie 变动自动保存；点击检查登录时显式落盘；下次打开账号时恢复。用户主动退出即梦登录后，会用空快照覆盖旧会话。
-- 只读积分检查调用固定地址 `http://127.0.0.1:4329/v1/account/status`。离线或接口失败只标记「登录态已保存 · 接口待验证」，不假定账号有效，也不提交生成。
-- 测试服务来自用户指定的 `zhizinan1997/jimeng-free-api-all`，源码克隆在 `~/.local/share/lumenx-integrations/`；启动脚本为 `docs/agents/tools/run-jimeng-evaluation.cjs`，仅监听回环地址。
-- 本地测试服务的后台管理登录没有接进客户端；客户端仍然不需要注册或登录。此次只测试直接授权的只读账号查询，未把真实 Cookie 导入第三方账号池数据库。
-- 当前 13 项测试通过，新增加密 Cookie 重启恢复、退出登录后不恢复旧快照、固定回环请求与凭据不返回 UI 的测试。
-- 另已核实即梦官方 `dreamina` CLI 安装入口，详细比较见调研文档。网页登录会话与官方 CLI 的 OAuth 登录是两套不同凭据，不能假设互通。
+详细设计与验证账本位于 `docs/agents/deliverables/storydock-design/`。

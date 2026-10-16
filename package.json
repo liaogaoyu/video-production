@@ -1,6 +1,7 @@
 {
   "name": "lumenx-storydock-prototype",
   "version": "0.1.0",
+  "productName": "LumenX 漫剧工作台",
   "private": true,
   "description": "Local comic asset and storyboard workflow prototype",
   "main": "electron.cjs",
@@ -8,9 +9,11 @@
     "start": "electron .",
     "preview": "node serve.cjs",
     "check": "node --check app.js && node --check electron.cjs && node --check preload.cjs && node --check account-sessions.cjs && node --check database.cjs && node --check image-provider.cjs && node --check jimeng-cli.cjs && node --check media-store.cjs && node --check project-package.cjs",
-    "test": "node --test workflow.test.cjs desktop.test.cjs account-sessions.test.cjs database.test.cjs image-provider.test.cjs jimeng-cli.test.cjs media-store.test.cjs project-package.test.cjs"
+    "test": "node --test workflow.test.cjs desktop.test.cjs account-sessions.test.cjs database.test.cjs image-provider.test.cjs jimeng-cli.test.cjs media-store.test.cjs project-package.test.cjs",
+    "build:mac": "electron-packager . 'LumenX 漫剧工作台' --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --ignore='(^|/)(dist|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'"
   },
   "devDependencies": {
-    "electron": "^37.0.0"
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.8.0"
   }
 }
