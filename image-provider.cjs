@@ -26,6 +26,55 @@ function sizeForRatio(ratio) {
       : "1024x1024";
 }
 
+function isApiMart(baseUrl) {
+  const hostname = new URL(baseUrl).hostname.toLowerCase();
+  return hostname === "apimart.ai" || hostname.endsWith(".apimart.ai");
+}
+
+function resolutionForApiMart(value) {
+  const resolution = String(value || "1k").toLowerCase();
+  if (!["1k", "2k", "4k"].includes(resolution))
+    throw new Error("APIMart GPT-Image-2 分辨率只支持 1k、2k 或 4k");
+  return resolution;
+}
+
+function taskEndpoint(baseUrl, taskId) {
+  const url = new URL(endpointFor(baseUrl));
+  url.pathname = url.pathname.replace(
+    /\/images\/generations\/?$/,
+    `/tasks/${encodeURIComponent(taskId)}`,
+  );
+  return url.href;
+}
+
+function apiError(payload) {
+  const error = payload?.error;
+  if (!error) return "";
+  return String(error.message || error.detail || error.code || error).slice(0, 500);
+}
+
+function imageItem(payload) {
+  const candidates = [
+    payload?.data?.[0],
+    payload?.result?.images?.[0],
+    payload?.data?.result?.images?.[0],
+    payload?.output?.images?.[0],
+  ];
+  const value = candidates.find(Boolean);
+  if (typeof value === "string") return { url: value };
+  if (value?.image_url && !value.url) return { ...value, url: value.image_url };
+  if (value?.b64 && !value.b64_json) return { ...value, b64_json: value.b64 };
+  return value;
+}
+
+function submittedTask(payload) {
+  const status = String(payload?.status || payload?.data?.status || "").toLowerCase();
+  const id = payload?.task_id || payload?.data?.task_id;
+  return id && ["submitted", "queued", "pending", "processing", "running"].includes(status)
+    ? { id: String(id), status }
+    : null;
+}
+
 async function generateImage({
   config,
   prompt,
@@ -34,6 +83,8 @@ async function generateImage({
   assetId,
   outputRoot,
   fetchImpl = fetch,
+  pollIntervalMs = 3000,
+  maxPollAttempts = 200,
 }) {
   if (!config?.baseUrl || !config?.model || !prompt?.trim())
     throw new Error("生图配置或提示词不完整");
@@ -43,18 +94,29 @@ async function generateImage({
     !/^[a-z0-9_-]{1,80}$/i.test(assetId)
   )
     throw new Error("项目或资产 ID 不正确");
+  const apiMart = isApiMart(config.baseUrl);
+  const body = apiMart
+    ? {
+        model: config.model,
+        prompt: prompt.trim(),
+        size: config.ratio || "1:1",
+        resolution: resolutionForApiMart(config.resolution),
+        n: 1,
+      }
+    : {
+        model: config.model,
+        prompt: prompt.trim(),
+        size: sizeForRatio(config.ratio),
+        n: 1,
+      };
+  const headers = {
+    "content-type": "application/json",
+    authorization: `Bearer ${apiKey}`,
+  };
   const response = await fetchImpl(endpointFor(config.baseUrl), {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      prompt: prompt.trim(),
-      size: sizeForRatio(config.ratio),
-      n: 1,
-    }),
+    headers,
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const text = (await response.text())
@@ -64,8 +126,33 @@ async function generateImage({
       `生图接口返回 ${response.status}${text ? `：${text}` : ""}`,
     );
   }
-  const payload = await response.json();
-  const item = payload?.data?.[0];
+  let payload = await response.json();
+  const initialError = apiError(payload);
+  if (initialError) throw new Error(`生图接口错误：${initialError}`);
+  const task = submittedTask(payload);
+  if (task) {
+    let completed = false;
+    for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
+      if (pollIntervalMs) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      const polled = await fetchImpl(taskEndpoint(config.baseUrl, task.id), {
+        method: "GET",
+        headers: { authorization: headers.authorization },
+      });
+      if (!polled.ok) throw new Error(`生图任务查询失败：${polled.status}`);
+      payload = await polled.json();
+      const taskError = apiError(payload);
+      if (taskError) throw new Error(`生图任务失败：${taskError}`);
+      const status = String(payload?.status || payload?.data?.status || "").toLowerCase();
+      if (["failed", "error", "cancelled", "canceled"].includes(status))
+        throw new Error(`生图任务失败：${status}`);
+      if (imageItem(payload)) {
+        completed = true;
+        break;
+      }
+    }
+    if (!completed) throw new Error("生图任务等待超时，可稍后重试");
+  }
+  const item = imageItem(payload);
   let bytes;
   let extension = "png";
   if (item?.b64_json) bytes = Buffer.from(item.b64_json, "base64");
@@ -103,4 +190,12 @@ async function generateImage({
   return { path: target, url: pathToFileURL(target).href, bytes: bytes.length };
 }
 
-module.exports = { endpointFor, sizeForRatio, generateImage };
+module.exports = {
+  endpointFor,
+  sizeForRatio,
+  isApiMart,
+  resolutionForApiMart,
+  taskEndpoint,
+  imageItem,
+  generateImage,
+};
