@@ -13,6 +13,7 @@ const { createDatabase } = require("./database.cjs");
 const { generateImage } = require("./image-provider.cjs");
 const { createJimengCliPool } = require("./jimeng-cli.cjs");
 const { storeAssetImage } = require("./media-store.cjs");
+const { exportProjectPackage, importProjectPackage } = require("./project-package.cjs");
 const localPage = pathToFileURL(path.join(__dirname, "index.html")).href;
 const accountWindows = new Map();
 const { createAccountSessions } = require("./account-sessions.cjs");
@@ -173,17 +174,17 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("export-project", async (event, payload) => {
     assertLocal(event);
-    const name = String(payload.name || "project").replace(
-      /[\\/:*?"<>|]/g,
-      "_",
-    );
-    const { canceled, filePath } = await dialog.showSaveDialog({
-      defaultPath: `${name}-project.json`,
-      filters: [{ name: "项目文件", extensions: ["json"] }],
-    });
-    if (canceled) return false;
-    await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
-    return true;
+    const picked = await dialog.showOpenDialog({ title: "选择项目包保存位置", properties: ["openDirectory", "createDirectory"] });
+    if (picked.canceled || !picked.filePaths[0]) return false;
+    const output = await exportProjectPackage({ project: payload, projectRoot: path.join(app.getPath("userData"), "projects"), destination: picked.filePaths[0] });
+    return { ok: true, output };
+  });
+  ipcMain.handle("import-project", async (event) => {
+    assertLocal(event);
+    const picked = await dialog.showOpenDialog({ title: "选择 Storydock 项目包中的 manifest.json", properties: ["openFile"], filters: [{ name: "Storydock 项目清单", extensions: ["json"] }] });
+    if (picked.canceled || !picked.filePaths[0]) return { canceled: true };
+    const project = await importProjectPackage({ manifestPath: picked.filePaths[0], projectRoot: path.join(app.getPath("userData"), "projects") });
+    return { canceled: false, project };
   });
   ipcMain.handle("image-key-status", async (event) => {
     assertLocal(event);

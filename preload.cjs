@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("desktop", {
   submitJimengVideo: (request) => ipcRenderer.invoke("submit-jimeng-video", request),
   queryJimengVideo: (request) => ipcRenderer.invoke("query-jimeng-video", request),
   exportProject: (project) => ipcRenderer.invoke("export-project", project),
+  importProject: () => ipcRenderer.invoke("import-project"),
   saveImageKey: (apiKey) => ipcRenderer.invoke("save-image-key", apiKey),
   imageKeyStatus: () => ipcRenderer.invoke("image-key-status"),
   checkJimengAccount: (id) => ipcRenderer.invoke("check-jimeng-account", id),

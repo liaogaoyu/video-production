@@ -266,7 +266,7 @@ function switchProject(id) {
   render();
 }
 function projectsPage() {
-  return `<div class="heading"><h1>我的项目 <small>${workspace.projects.length}</small></h1>${btn("new-project", "创建项目", "plus", "primary")}</div><div class="project-grid">${workspace.projects
+  return `<div class="heading"><h1>我的项目 <small>${workspace.projects.length}</small></h1><div class="actions">${window.desktop?.importProject ? btn("import-project", "恢复项目", "upload") : ""}${btn("new-project", "创建项目", "plus", "primary")}</div></div><div class="project-grid">${workspace.projects
     .map((p) => {
       const image =
         p.data.assets.find((a) => a.image && a.type === "场景")?.image ||
@@ -784,13 +784,8 @@ function startQueue() {
 }
 async function exportProject() {
   if (window.desktop) {
-    const ok = await window.desktop.exportProject({
-      name: activeProject.name,
-      description: activeProject.description,
-      style: activeProject.style,
-      ...state,
-    });
-    if (ok) toast("项目备份已保存");
+    const result = await window.desktop.exportProject(activeProject);
+    if (result?.ok) toast("完整项目包已保存");
     return;
   }
   const url = URL.createObjectURL(
@@ -1058,6 +1053,19 @@ document.addEventListener("click", async (e) => {
   }
   if (action === "add-account") {
     addAccountModal();
+    return;
+  }
+  if (action === "import-project") {
+    try {
+      const result = await window.desktop.importProject();
+      if (!result.canceled) {
+        workspace.projects.unshift(result.project);
+        switchProject(result.project.id);
+        toast("项目和媒体已恢复");
+      }
+    } catch (error) {
+      toast(String(error?.message || error).slice(0, 180));
+    }
     return;
   }
   if (action === "projects") {
