@@ -34,3 +34,5 @@ npm start
 ## 示例素材
 
 `assets/shen.png`、`assets/lu.png`、`assets/alley.png` 由内置 image_gen 工具生成。三组提示分别为：民国短卷发女侦探人物设定图；深蓝风衣男探长人物设定图；雨夜上海老街环境概念图。完整生成提示见 `assets/prompts.json`。人物变体卡复用示例角色图，仅演示资产组织。
+
+即梦连接调研见仓库 `docs/agents/deliverables/2026-10-16-jimeng-integration-research.md`，包含第三方 CLI 与网页提交方案、验证边界和验收条件。
