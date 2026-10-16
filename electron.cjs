@@ -11,6 +11,7 @@ const { pathToFileURL } = require("node:url");
 const fs = require("node:fs/promises");
 const { createDatabase } = require("./database.cjs");
 const { generateImage } = require("./image-provider.cjs");
+const { createJimengCliPool } = require("./jimeng-cli.cjs");
 const localPage = pathToFileURL(path.join(__dirname, "index.html")).href;
 const accountWindows = new Map();
 const { createAccountSessions } = require("./account-sessions.cjs");
@@ -47,6 +48,58 @@ app.whenReady().then(() => {
     safeStorage,
     directory: path.join(app.getPath("userData"), "storydock-jimeng-sessions"),
   });
+  const jimengCli = createJimengCliPool({
+    directory: path.join(app.getPath("userData"), "storydock-jimeng-cli"),
+    safeStorage,
+  });
+  function validAccount(account) {
+    return !!account && /^[a-f0-9-]{36}$/.test(account.id) && typeof account.name === "string" && account.name.length <= 60;
+  }
+  function allowedJimengUrl(value) {
+    try { const url = new URL(value); return url.protocol === "https:" && url.hostname === "jimeng.jianying.com"; }
+    catch { return false; }
+  }
+  async function navigateAccount(account, url) {
+    if (!validAccount(account) || !allowedJimengUrl(url)) return { ok: false, message: "账号或即梦地址不正确" };
+    let win = accountWindows.get(account.id);
+    if (win && !win.isDestroyed()) {
+      await win.loadURL(url);
+      win.show();
+      win.focus();
+      return { ok: true };
+    }
+    const accountSession = await accountSessions.get(account.id);
+    win = new BrowserWindow({
+      width: 1200,
+      height: 850,
+      title: `即梦 · ${account.name}`,
+      webPreferences: { session: accountSession, nodeIntegration: false, contextIsolation: true, sandbox: true },
+    });
+    accountWindows.set(account.id, win);
+    win.webContents.setWindowOpenHandler(({ url: next }) => {
+      if (allowedJimengUrl(next)) win.loadURL(next).catch(() => {});
+      return { action: "deny" };
+    });
+    win.webContents.on("will-navigate", (event, next) => {
+      if (!allowedJimengUrl(next)) event.preventDefault();
+    });
+    win.on("closed", () => {
+      accountWindows.delete(account.id);
+      accountSessions.snapshot(account.id, accountSession).catch(() => {});
+    });
+    await win.loadURL(url);
+    return { ok: true };
+  }
+  ipcMain.handle("jimeng-runtime-status", (event) => { assertLocal(event); return jimengCli.runtimeStatus(); });
+  ipcMain.handle("begin-jimeng-cli-auth", async (event, account) => {
+    assertLocal(event);
+    if (!validAccount(account)) throw new Error("账号格式不正确");
+    const auth = await jimengCli.beginAuth(account.id);
+    await navigateAccount(account, auth.authorizationUrl);
+    return { ok: true, expiresAt: auth.expiresAt };
+  });
+  ipcMain.handle("finish-jimeng-cli-auth", (event, id) => { assertLocal(event); return jimengCli.finishAuth(id); });
+  ipcMain.handle("check-jimeng-cli", (event, id) => { assertLocal(event); return jimengCli.inspect(id); });
   ipcMain.handle("check-jimeng-account", async (event, id) => {
     assertLocal(event);
     try {
@@ -125,48 +178,8 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("open-jimeng-account", async (event, account) => {
     assertLocal(event);
-    if (
-      !account ||
-      !/^[a-f0-9-]{36}$/.test(account.id) ||
-      typeof account.name !== "string" ||
-      account.name.length > 60
-    )
-      return { ok: false, message: "账号格式不正确" };
-    let win = accountWindows.get(account.id);
-    if (win && !win.isDestroyed()) {
-      win.show();
-      win.focus();
-      return { ok: true };
-    }
-    const accountSession = await accountSessions.get(account.id);
-    win = new BrowserWindow({
-      width: 1200,
-      height: 850,
-      title: `即梦 · ${account.name}`,
-      webPreferences: {
-        session: accountSession,
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-      },
-    });
-    accountWindows.set(account.id, win);
-    win.webContents.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith("https://")) {
-        win.loadURL(url).catch(() => {});
-      }
-      return { action: "deny" };
-    });
-    win.webContents.on("will-navigate", (e, url) => {
-      if (!url.startsWith("https://")) e.preventDefault();
-    });
-    win.on("closed", () => {
-      accountWindows.delete(account.id);
-      accountSessions.snapshot(account.id, accountSession).catch(() => {});
-    });
     try {
-      await win.loadURL("https://jimeng.jianying.com/ai-tool/home");
-      return { ok: true };
+      return await navigateAccount(account, "https://jimeng.jianying.com/ai-tool/home");
     } catch {
       return { ok: false, message: "即梦加载失败，可在账号窗口重试" };
     }

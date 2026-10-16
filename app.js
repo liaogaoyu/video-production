@@ -197,6 +197,7 @@ let connections = {
   pool: { strategy: "round-robin", concurrency: 2, ...localConnections?.pool },
 };
 let imageKeySaved = false;
+let jimengRuntime = null;
 function persistConnections() {
   localStorage.setItem("storydock-connections-v1", JSON.stringify(connections));
   window.desktop
@@ -326,6 +327,14 @@ jobsPage = function () {
 function settingsPage() {
   return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">待接入生成</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}" placeholder="例如：GPT-Image-2"><label for="imageBaseUrl">接口地址 <small>OpenAI 兼容</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://你的接口地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}" placeholder="gpt-image-2"><label for="imageApiKey">API Key <small>${imageKeySaved ? "已保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" placeholder="${window.desktop?.saveImageKey ? "输入 API Key" : "密钥请在桌面客户端配置"}" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦账号池 <small>${connections.accounts.length}</small></h2>${btn("add-account", "添加账号", "plus")}</div><p class="field-help">每个账号使用独立的即梦窗口，登录状态保存在本机。</p><div class="account-list">${connections.accounts.map((a) => `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(a.name)}</strong><small>${a.enabled ? esc(a.loginMessage || "等待即梦登录") : "已暂停"}${typeof a.totalCredit === "number" ? " · " + a.totalCredit + " 积分" : ""}</small></div><button data-open-account="${a.id}">打开即梦</button><button data-check-account="${a.id}">检查登录</button><button class="ghost" data-toggle-account="${a.id}">${a.enabled ? "暂停" : "启用"}</button></div>`).join("") || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy" aria-label="账号分配方式"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><div class="setting-row"><span>账号池并行上限</span><input id="poolConcurrency" aria-label="账号池并行上限" type="number" min="1" max="20" value="${connections.pool.concurrency}"></div><p class="field-help">登录后点击「检查登录」保存并验证；生成待联调。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>演示队列并行任务数</span><select id="concurrency">${[1, 2, 3].map((n) => `<option value="${n}" ${+state.settings.concurrency === n ? "selected" : ""}>${n}</option>`).join("")}</select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
 }
+settingsPage = function () {
+  const accounts = connections.accounts.map((account) => {
+    const stateText = account.enabled ? account.cliMessage || "等待官方 CLI 授权" : "已暂停";
+    const credit = typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : "";
+    return `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(account.name)}</strong><small>${esc(stateText)}${credit}</small></div><button data-open-account="${account.id}">网页</button><button data-auth-cli="${account.id}">CLI 授权</button><button data-verify-cli="${account.id}">${account.authPending ? "完成授权" : "检查"}</button><button class="ghost" data-toggle-account="${account.id}">${account.enabled ? "暂停" : "启用"}</button></div>`;
+  }).join("");
+  return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI Images 协议</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageApiKey">API Key <small>${imageKeySaved ? "已加密保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2>${btn("add-account", "添加账号", "plus")}</div><p class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
+};
 async function saveImageModel() {
   const name = document.querySelector("#imageName").value.trim(),
     baseUrl = document.querySelector("#imageBaseUrl").value.trim(),
@@ -860,6 +869,64 @@ document.addEventListener("click", async (e) => {
     }
     return;
   }
+  if (el.dataset.authCli) {
+    const account = connections.accounts.find((a) => a.id === el.dataset.authCli);
+    if (!window.desktop?.beginJimengCliAuth) {
+      toast("请在桌面客户端使用官方 CLI 授权");
+      return;
+    }
+    el.disabled = true;
+    el.textContent = "启动中…";
+    try {
+      await window.desktop.beginJimengCliAuth({ id: account.id, name: account.name });
+      account.authPending = true;
+      account.cliMessage = "请在即梦页面确认账号并同意授权";
+      persistConnections();
+      render();
+      toast("授权页已打开，完成后点击“完成授权”");
+    } catch (error) {
+      toast(String(error?.message || error).slice(0, 180));
+      render();
+    }
+    return;
+  }
+  if (el.dataset.verifyCli) {
+    const account = connections.accounts.find((a) => a.id === el.dataset.verifyCli);
+    if (!window.desktop?.checkJimengCli) {
+      toast("请在桌面客户端检查官方 CLI");
+      return;
+    }
+    el.disabled = true;
+    el.textContent = "检查中…";
+    try {
+      const result = account.authPending
+        ? await window.desktop.finishJimengCliAuth(account.id)
+        : await window.desktop.checkJimengCli(account.id);
+      account.authPending = false;
+      account.cliMessage = result.message;
+      account.cliAuthorized = result.authorized;
+      account.cliPermission = result.permission;
+      if (typeof result.totalCredit === "number") account.totalCredit = result.totalCredit;
+      if (result.identityHash) {
+        const duplicate = connections.accounts.find((candidate) => candidate.id !== account.id && candidate.identityHash === result.identityHash);
+        account.identityHash = result.identityHash;
+        if (duplicate) {
+          account.enabled = false;
+          account.cliMessage = `与“${duplicate.name}”是同一个即梦账号，已暂停`;
+        }
+      }
+      persistConnections();
+      render();
+      toast(account.cliMessage);
+    } catch (error) {
+      account.authPending = false;
+      account.cliMessage = String(error?.message || error).slice(0, 180);
+      persistConnections();
+      render();
+      toast(account.cliMessage);
+    }
+    return;
+  }
   if (el.dataset.checkAccount) {
     const account = connections.accounts.find(
       (a) => a.id === el.dataset.checkAccount,
@@ -1113,6 +1180,12 @@ if (window.desktop?.imageKeyStatus) {
       if (view === "settings") render();
     })
     .catch(() => {});
+}
+if (window.desktop?.jimengRuntimeStatus) {
+  window.desktop.jimengRuntimeStatus().then((status) => {
+    jimengRuntime = status;
+    if (view === "settings") render();
+  }).catch(() => { jimengRuntime = { ok: false, message: "无法检查官方 CLI 运行环境" }; });
 }
 if (window.desktop?.loadWorkspace) {
   Promise.all([

@@ -67,6 +67,7 @@ async function setup() {
           : require(n),
     __dirname,
     process: { platform: "darwin" },
+    URL,
     console,
   });
   vm.runInContext(

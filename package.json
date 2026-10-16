@@ -7,8 +7,8 @@
   "scripts": {
     "start": "electron .",
     "preview": "node serve.cjs",
-    "check": "node --check app.js && node --check electron.cjs && node --check preload.cjs && node --check account-sessions.cjs && node --check database.cjs && node --check image-provider.cjs",
-    "test": "node --test workflow.test.cjs desktop.test.cjs account-sessions.test.cjs database.test.cjs image-provider.test.cjs"
+    "check": "node --check app.js && node --check electron.cjs && node --check preload.cjs && node --check account-sessions.cjs && node --check database.cjs && node --check image-provider.cjs && node --check jimeng-cli.cjs",
+    "test": "node --test workflow.test.cjs desktop.test.cjs account-sessions.test.cjs database.test.cjs image-provider.test.cjs jimeng-cli.test.cjs"
   },
   "devDependencies": {
     "electron": "^37.0.0"
