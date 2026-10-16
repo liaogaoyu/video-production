@@ -249,6 +249,8 @@ function render() {
       .join(
         "",
       )}</nav><div class="sidebar-bottom nav"><button aria-label="模型与账号" data-view="settings" class="${view === "settings" ? "active" : ""}">${icon("settings")}<span>模型与账号</span></button></div></aside><main class="main"><header class="topbar"><div class="crumb">我的项目 <span>/</span><b>${view === "projects" ? "项目列表" : view === "create" ? "创建项目" : esc(activeProject.name)}</b></div><div class="topright"><span class="pill demo">演示模式</span>${btn("export", "导出项目", "down", "ghost")}</div></header><div class="content">${view === "projects" ? projectsPage() : view === "create" ? createPage() : view === "assets" ? assetsPage() : view === "shots" ? shotsPage() : view === "jobs" ? jobsPage() : settingsPage()}</div>${footer()}</main></div>`;
+  const mode = document.querySelector(".pill.demo");
+  if (mode) mode.textContent = window.desktop ? "本地模式" : "浏览器演示";
 }
 function switchProject(id) {
   if (timer) {
@@ -296,16 +298,23 @@ function art(a) {
 function assetCard(a) {
   return `<article class="asset-card ${selected.has(a.id) ? "selected" : ""}" data-detail="${a.id}"><div class="asset-image ${a.type === "场景" ? "scene" : ""}"><button class="select-box" data-select="${a.id}" aria-label="选择${esc(a.name)}">${selected.has(a.id) ? icon("check") : ""}</button>${art(a)}<span class="tag" >${icon(a.locked ? "lock" : a.image ? "check" : "image")}${a.locked ? "已锁定" : a.image ? "待确认" : "待生成"}</span></div><div class="card-body"><div class="card-title"><strong>${esc(a.name)}</strong><span class="category ${a.type === "场景" ? "scene" : a.type === "道具" ? "prop" : ""}">${a.type}</span></div><div class="card-desc">${esc(a.description)}</div></div></article>`;
 }
+function assetForReference(shot, index) {
+  const key = shot.refKeys?.[index];
+  return key
+    ? state.assets.find((asset) => asset.externalKey === key)
+    : state.assets.find((asset) => asset.name === shot.refs[index]);
+}
 function missing(s) {
-  return s.refs.filter(
-    (n) => !state.assets.find((a) => a.name === n && a.locked && a.image),
-  );
+  return s.refs.filter((name, index) => {
+    const asset = assetForReference(s, index);
+    return !asset?.locked || !asset.image;
+  });
 }
 function shotsPage() {
   return `<div class="heading"><h1>分镜脚本</h1>${btn("import-shots", "导入分镜脚本", "upload", "primary")}</div><div class="section-title"><h2>分镜列表 <small style="font-size:11px;margin-left:10px">${state.shots.length} 个分镜</small></h2><span class="muted">Seedance · ${state.settings.ratio}</span></div>${state.shots.some((s) => missing(s).length) ? `<div class="notice">${icon("info")} 部分引用未就绪，请先生成并锁定对应资产。</div>` : ""}<div class="shot-list">${state.shots
     .map((s) => {
       const m = missing(s);
-      const a = state.assets.find((a) => s.refs.includes(a.name) && a.image);
+      const a = s.refs.map((_, index) => assetForReference(s, index)).find((asset) => asset?.image);
       return `<article class="shot"><img class="shot-thumb" src="${esc(a?.image || "assets/alley.png")}" alt="分镜参考"><div><h3><span class="muted" style="font:11px monospace;margin-right:10px">${String(s.number).padStart(3, "0")}</span>${esc(s.title)}</h3><p>${esc(s.prompt)}</p>${s.refs.map((n) => `<span class="reference ${m.includes(n) ? "bad" : ""}">${m.includes(n) ? "!" : "↗"} @${esc(n)}</span>`).join("")}</div><div class="shot-meta"><span>${s.duration}s · ${state.settings.ratio}</span><span class="${m.length ? "error" : "success"}">${m.length ? `${m.length} 个引用待确认` : "✓ 资产已匹配"}</span><button data-edit-shot="${s.id}" class="ghost">编辑提示词</button></div></article>`;
     })
     .join("")}</div>`;
@@ -335,6 +344,8 @@ settingsPage = function () {
   }).join("");
   return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI Images 协议</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageApiKey">API Key <small>${imageKeySaved ? "已加密保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2>${btn("add-account", "添加账号", "plus")}</div><p class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
 };
+const renderSettingsPage = settingsPage;
+settingsPage = () => renderSettingsPage().replace("导出 JSON", "导出完整项目包");
 async function saveImageModel() {
   const name = document.querySelector("#imageName").value.trim(),
     baseUrl = document.querySelector("#imageBaseUrl").value.trim(),
@@ -441,8 +452,11 @@ function detail(id) {
   );
 }
 const assetTemplate = {
+  schemaVersion: 1,
+  kind: "assets",
   assets: [
     {
+      key: "char-example",
       name: "新角色",
       type: "角色",
       description: "年龄、身份、外观特征",
@@ -451,13 +465,17 @@ const assetTemplate = {
   ],
 };
 const shotTemplate = {
+  schemaVersion: 1,
+  kind: "shots",
   shots: [
     {
+      key: "ep001-shot001",
+      episode: 1,
       number: 1,
       title: "镜头名称",
       duration: 8,
       prompt: "@沈知微 走进 @雨夜老街 ，镜头缓慢推进。",
-      refs: ["沈知微", "雨夜老街"],
+      refs: [{ assetKey: "char-shen" }, { assetKey: "scene-alley" }],
     },
   ],
 };
@@ -477,6 +495,8 @@ function validateImport() {
       throw Error("需要 1–5000 条记录的数组");
     if (importKind === "assets") {
       const names = new Set(state.assets.map((a) => a.name));
+      const keys = new Set(state.assets.map((a) => a.externalKey).filter(Boolean));
+      const typeMap = { character: "角色", scene: "场景", prop: "道具", 角色: "角色", 场景: "场景", 道具: "道具" };
       const fresh = [];
       let skipped = 0;
       for (const [i, a] of rows.entries()) {
@@ -485,21 +505,25 @@ function validateImport() {
           !a.name.trim() ||
           typeof a.prompt !== "string" ||
           !a.prompt.trim() ||
-          !["角色", "场景", "道具"].includes(a.type)
+          !typeMap[a.type]
         )
           throw Error(
             `第 ${i + 1} 条需要 name、prompt，以及 type（角色/场景/道具）`,
           );
         const name = a.name.trim();
-        if (names.has(name)) {
+        const externalKey = String(a.key || `asset-${crypto.randomUUID()}`).trim();
+        if (!/^[a-zA-Z0-9_-]{1,120}$/.test(externalKey)) throw Error(`第 ${i + 1} 条 key 只能包含字母、数字、横线和下划线`);
+        if (names.has(name) || keys.has(externalKey)) {
           skipped++;
           continue;
         }
         names.add(name);
+        keys.add(externalKey);
         fresh.push({
           id: crypto.randomUUID(),
+          externalKey,
           name,
-          type: a.type,
+          type: typeMap[a.type],
           prompt: a.prompt,
           description: String(a.description || ""),
           locked: false,
@@ -511,8 +535,11 @@ function validateImport() {
       document.querySelector("#importResult").innerHTML =
         `<div class="import-check">✓ 格式正确，将新增 ${fresh.length} 个资产，跳过 ${skipped} 个重复名称。<br>${fresh.map((a) => esc(a.name)).join(" · ")}</div>`;
     } else {
-      const numbers = new Set(state.shots.map((s) => s.number));
+      const numbers = new Set(state.shots.map((s) => `${s.episode || 1}:${s.number}`));
+      const shotKeys = new Set(state.shots.map((s) => s.externalKey).filter(Boolean));
       parsedImport = rows.map((s, i) => {
+        const episode = Number.isInteger(s.episode) && s.episode > 0 ? s.episode : 1;
+        const externalKey = String(s.key || `ep${episode}-shot${s.number}`).trim();
         if (
           typeof s.prompt !== "string" ||
           !s.prompt.trim() ||
@@ -520,7 +547,8 @@ function validateImport() {
           !s.title.trim() ||
           !Number.isInteger(s.number) ||
           s.number < 1 ||
-          numbers.has(s.number) ||
+          numbers.has(`${episode}:${s.number}`) ||
+          shotKeys.has(externalKey) ||
           !Number.isInteger(s.duration) ||
           s.duration < 1 ||
           s.duration > 60
@@ -528,23 +556,34 @@ function validateImport() {
           throw Error(
             `第 ${i + 1} 条需要不重复的正整数 number、title、prompt 和 1–60 秒 duration`,
           );
-        numbers.add(s.number);
+        if (!/^[a-zA-Z0-9_-]{1,120}$/.test(externalKey)) throw Error(`第 ${i + 1} 条 key 格式不正确`);
+        numbers.add(`${episode}:${s.number}`);
+        shotKeys.add(externalKey);
         const mentions = Array.from(
           s.prompt.matchAll(/@([^\s，。！？、；：,.!?:;]+)/g),
           (m) => m[1],
         );
-        if (
-          s.refs !== undefined &&
-          (!Array.isArray(s.refs) || s.refs.some((n) => typeof n !== "string"))
-        )
-          throw Error(`第 ${i + 1} 条 refs 必须是名称字符串数组`);
+        if (s.refs !== undefined && !Array.isArray(s.refs)) throw Error(`第 ${i + 1} 条 refs 必须是数组`);
+        const structured = (s.refs || []).map((ref) => {
+          if (typeof ref === "string") return { name: ref };
+          if (!ref || typeof ref !== "object" || (!ref.assetKey && !ref.name)) throw Error(`第 ${i + 1} 条包含无效资产引用`);
+          return { key: ref.assetKey, name: ref.name };
+        });
+        const resolved = structured.map((ref) => {
+          const asset = ref.key ? state.assets.find((item) => item.externalKey === ref.key) : state.assets.find((item) => item.name === ref.name);
+          return { key: ref.key || asset?.externalKey || "", name: asset?.name || ref.name || ref.key };
+        });
+        for (const mention of mentions) if (!resolved.some((ref) => ref.name === mention)) resolved.push({ key: state.assets.find((asset) => asset.name === mention)?.externalKey || "", name: mention });
         return {
           id: crypto.randomUUID(),
+          externalKey,
+          episode,
           number: s.number,
           title: s.title,
           prompt: s.prompt,
           duration: s.duration,
-          refs: [...new Set([...(s.refs || []), ...mentions])],
+          refs: resolved.map((ref) => ref.name),
+          refKeys: resolved.map((ref) => ref.key),
         };
       });
       const unresolved = parsedImport.reduce(
@@ -1116,7 +1155,7 @@ document.addEventListener("click", async (e) => {
   if (action === "confirm-import" && parsedImport) {
     const count = parsedImport.length;
     state[importKind].push(...parsedImport);
-    if (importKind === "shots") state.shots.sort((a, b) => a.number - b.number);
+    if (importKind === "shots") state.shots.sort((a, b) => (a.episode || 1) - (b.episode || 1) || a.number - b.number);
     persist();
     close();
     render();
@@ -1127,7 +1166,7 @@ document.addEventListener("click", async (e) => {
   }
   if (action === "copy-template") {
     const template = importKind === "assets" ? assetTemplate : shotTemplate;
-    const text = `请根据我提供的剧本输出${importKind === "assets" ? "全部角色、场景、道具资产" : "整部剧所有分镜"}，只输出符合以下结构的 JSON，不要 Markdown 围栏：\n${JSON.stringify(template, null, 2)}\n${importKind === "shots" ? "引用资产用 @名称，并在 refs 中列出完全一致的资产名称。number 从 1 递增，duration 为 1–60 的整数秒。" : "type 只能为角色、场景、道具。每个资产名称唯一，prompt 必须完整描述可用于 GPT-Image-2 生成的外观和统一视觉风格。"}`;
+    const text = `请根据我提供的剧本输出${importKind === "assets" ? "全部角色、场景、道具资产" : "整部剧所有分镜"}，只输出符合以下结构的 JSON，不要 Markdown 围栏：\n${JSON.stringify(template, null, 2)}\n${importKind === "shots" ? "每个镜头提供稳定且唯一的 key、episode 和 number；refs 使用资产清单里的 assetKey。duration 为 4–30 的整数秒。" : "每个资产提供稳定且唯一的 key；type 只能为 character、scene、prop。prompt 必须是完整且可独立生图的提示词。"}`;
     try {
       await navigator.clipboard.writeText(text);
       toast("已复制，可把指令和剧本一起发给 Codex");
