@@ -795,6 +795,21 @@ document.addEventListener("click", async (e) => {
   }
   if (el.dataset.replace) {
     const id = el.dataset.replace;
+    if (window.desktop?.selectAssetImage) {
+      try {
+        const result = await window.desktop.selectAssetImage({ projectId: activeProject.id, assetId: id });
+        if (!result.canceled) {
+          state.assets.find((asset) => asset.id === id).image = result.url;
+          persist();
+          detail(id);
+          render();
+          toast("图片已保存到项目目录");
+        }
+      } catch (error) {
+        toast(String(error?.message || error).slice(0, 180));
+      }
+      return;
+    }
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/png,image/jpeg,image/webp";

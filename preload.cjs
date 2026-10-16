@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("desktop", {
   saveConnections: (connections) =>
     ipcRenderer.invoke("save-connections", connections),
   generateImage: (request) => ipcRenderer.invoke("generate-image", request),
+  selectAssetImage: (request) => ipcRenderer.invoke("select-asset-image", request),
   jimengRuntimeStatus: () => ipcRenderer.invoke("jimeng-runtime-status"),
   beginJimengCliAuth: (account) => ipcRenderer.invoke("begin-jimeng-cli-auth", account),
   finishJimengCliAuth: (id) => ipcRenderer.invoke("finish-jimeng-cli-auth", id),

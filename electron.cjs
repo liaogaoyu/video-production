@@ -12,6 +12,7 @@ const fs = require("node:fs/promises");
 const { createDatabase } = require("./database.cjs");
 const { generateImage } = require("./image-provider.cjs");
 const { createJimengCliPool } = require("./jimeng-cli.cjs");
+const { storeAssetImage } = require("./media-store.cjs");
 const localPage = pathToFileURL(path.join(__dirname, "index.html")).href;
 const accountWindows = new Map();
 const { createAccountSessions } = require("./account-sessions.cjs");
@@ -133,6 +134,13 @@ app.whenReady().then(() => {
       assetId: request.assetId,
       outputRoot: path.join(app.getPath("userData"), "projects"),
     });
+  });
+  ipcMain.handle("select-asset-image", async (event, request) => {
+    assertLocal(event);
+    if (!request) throw new Error("图片请求格式不正确");
+    const picked = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }] });
+    if (picked.canceled || !picked.filePaths[0]) return { canceled: true };
+    return storeAssetImage({ source: picked.filePaths[0], outputRoot: path.join(app.getPath("userData"), "projects"), projectId: request.projectId, assetId: request.assetId });
   });
   ipcMain.handle("export-project", async (event, payload) => {
     assertLocal(event);
