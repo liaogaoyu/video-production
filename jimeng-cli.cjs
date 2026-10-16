@@ -38,16 +38,17 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
   function execute(file, args, options = {}) {
     return new Promise((resolve) => execFileImpl(file, args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024, ...options }, (error, stdout = '', stderr = '') => resolve({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr) })));
   }
-  async function run(accountId, command) {
+  async function run(accountId, command, mounts = [], timeout = 120000) {
     const password = await ensureSecret(accountId);
     const runtime = await fsp.mkdtemp(path.join(os.tmpdir(), 'storydock-dreamina-'));
     const unlockFile = path.join(runtime, 'keyring-password');
     await fsp.writeFile(unlockFile, `${password}\n`, { mode: 0o600 });
     const slug = accountId.replaceAll('-', '');
     const args = ['run', '--rm', '--name', `storydock-dreamina-${slug.slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--memory=768m', '--cpus=1', '--mount', `type=volume,source=storydock-dreamina-${slug},target=/root`, '--mount', `type=bind,source=${unlockFile},target=/run/secrets/keyring_password,readonly`];
+    for (const mount of mounts) args.push('--mount', `type=bind,source=${mount.source},target=${mount.target}${mount.readonly ? ',readonly' : ''}`);
     if (proxy) args.push('--env', `HTTP_PROXY=${proxy}`, '--env', `HTTPS_PROXY=${proxy}`);
     args.push(image, ...command);
-    try { return await execute('docker', args); }
+    try { return await execute('docker', args, { timeout }); }
     finally { await fsp.rm(runtime, { recursive: true, force: true }); }
   }
   function match(output, name) {
@@ -65,6 +66,18 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       identityHash: identity ? crypto.createHash('sha256').update(identity).digest('hex') : undefined,
       message: /仅限会员用户使用/.test(output) ? '已授权，但账号没有 CLI 会员权限' : result.code === 0 ? '官方 CLI 已授权' : /未检测到有效登录态/.test(output) ? '等待官方 CLI 授权' : '官方 CLI 检查失败'
     };
+  }
+  function taskResult(result) {
+    const output = `${result.stdout}\n${result.stderr}`;
+    const submitId = output.match(/"submit_id"\s*:\s*"([a-zA-Z0-9-]+)"|submit_id:\s*([a-zA-Z0-9-]+)/)?.slice(1).find(Boolean);
+    const status = output.match(/"gen_status"\s*:\s*"([a-zA-Z_]+)"|gen_status:\s*([a-zA-Z_]+)/)?.slice(1).find(Boolean);
+    const reason = output.match(/"fail_reason"\s*:\s*"([^"]+)"|fail_reason:\s*(.+)/)?.slice(1).find(Boolean);
+    if (submitId && (!status || status === 'querying')) return { kind: 'accepted', submitId, status: status || 'querying' };
+    if (status === 'success') return { kind: 'succeeded', submitId };
+    if (status === 'fail') return { kind: 'failed', submitId, message: String(reason || '即梦生成失败').slice(0, 500) };
+    if (/AigcComplianceConfirmationRequired/.test(output)) return { kind: 'blocked', code: 'web_confirmation_required', message: '请先在即梦网页完成该模型首次使用确认' };
+    if (/没有 dreamina_cli 使用权限|仅限会员用户使用/.test(output)) return { kind: 'blocked', code: 'permission_denied', message: '账号没有官方 CLI 生成权限' };
+    return { kind: result.code === 0 ? 'unrecognized' : 'rejected', message: '无法识别官方 CLI 返回结果' };
   }
   return {
     async runtimeStatus() {
@@ -92,6 +105,51 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     async inspect(accountId) {
       const result = await run(accountId, ['user_credit']);
       return publicResult(result);
+    },
+    async submitVideo(accountId, request) {
+      validateAccount(accountId);
+      if (!request || !/^[a-z0-9_-]{1,80}$/i.test(request.jobId) || typeof request.prompt !== 'string' || !request.prompt.trim() || request.prompt.length > 20000) throw new Error('视频任务格式不正确');
+      const models = new Set(['seedance2.0', 'seedance2.0fast', 'seedance2.0_vip', 'seedance2.0fast_vip', 'seedance2.0mini', 'seedance2.5']);
+      const ratios = new Set(['1:1', '3:4', '16:9', '4:3', '9:16', '21:9']);
+      if (!models.has(request.model) || !ratios.has(request.ratio) || !Number.isInteger(request.duration) || request.duration < 4 || request.duration > (request.model === 'seedance2.5' ? 30 : 15)) throw new Error('视频模型、画幅或时长不受支持');
+      const allowedResolutions = request.model === 'seedance2.5' ? ['480p', '720p', '1080p'] : request.model === 'seedance2.0_vip' ? ['720p', '1080p', '4k'] : ['720p'];
+      if (!allowedResolutions.includes(request.resolution)) throw new Error('该模型不支持所选分辨率');
+      if (!Array.isArray(request.images) || request.images.length < 1 || request.images.length > (request.model === 'seedance2.5' ? 30 : 9)) throw new Error('参考图数量不受支持');
+      const runRoot = path.join(accountDirectory(accountId), 'runs', request.jobId);
+      const input = path.join(runRoot, 'input');
+      await fsp.mkdir(input, { recursive: true, mode: 0o700 });
+      const command = ['multimodal2video'];
+      for (const [index, source] of request.images.entries()) {
+        const extension = path.extname(source).toLowerCase();
+        if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) throw new Error('参考图格式不正确');
+        const stat = await fsp.stat(source);
+        if (!stat.isFile() || stat.size < 1 || stat.size > 50 * 1024 * 1024) throw new Error('参考图为空或超过 50MB');
+        const name = `${String(index + 1).padStart(2, '0')}${extension}`;
+        await fsp.copyFile(source, path.join(input, name));
+        command.push('--image', `/work/input/${name}`);
+      }
+      command.push('--prompt', request.prompt.trim(), '--duration', String(request.duration), '--ratio', request.ratio, '--video_resolution', request.resolution, '--model_version', request.model, '--poll', '0');
+      return taskResult(await run(accountId, command, [{ source: input, target: '/work/input', readonly: true }], 180000));
+    },
+    async queryVideo(accountId, submitId, download = false) {
+      validateAccount(accountId);
+      if (!/^[a-zA-Z0-9-]{6,100}$/.test(submitId)) throw new Error('任务 ID 不正确');
+      const output = path.join(accountDirectory(accountId), 'outputs', submitId);
+      const command = ['query_result', `--submit_id=${submitId}`];
+      const mounts = [];
+      if (download) {
+        await fsp.mkdir(output, { recursive: true, mode: 0o700 });
+        command.push('--download_dir=/work/output');
+        mounts.push({ source: output, target: '/work/output', readonly: false });
+      }
+      const parsed = taskResult(await run(accountId, command, mounts, 180000));
+      if (download && parsed.kind === 'succeeded') {
+        const names = await fsp.readdir(output);
+        const files = names.filter(name => /\.(mp4|mov|webm)$/i.test(name)).map(name => path.join(output, name));
+        if (!files.length) return { kind: 'download_failed', submitId, message: '即梦返回成功，但没有下载到视频文件' };
+        parsed.files = files;
+      }
+      return parsed;
     }
   };
 }

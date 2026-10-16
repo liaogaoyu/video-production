@@ -316,9 +316,9 @@ function jobsPage() {
 }
 jobsPage = function () {
   const done = state.jobs.filter((job) => job.status === "done").length;
-  const pending = state.jobs.filter((job) => ["waiting", "running", "error"].includes(job.status)).length;
+  const pending = state.jobs.filter((job) => ["waiting", "running", "submitting", "remote_running", "download_failed", "submit_unknown", "error"].includes(job.status)).length;
   const rows = state.jobs.map((job) => {
-    const status = job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.progress ? `处理中 ${job.progress}%` : "等待中";
+    const status = job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.status === "submit_unknown" ? "提交待确认" : job.status === "download_failed" ? "下载失败" : job.status === "remote_running" ? "即梦生成中" : job.progress ? `处理中 ${job.progress}%` : "等待中";
     const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${job.real ? " · 真实任务" : " · 演示任务"}${job.error ? " · " + esc(job.error) : ""}`;
     return `<div class="job"><img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt=""><div class="job-name"><strong>${esc(job.title)}</strong><small>${detail}</small></div><div class="progress"><i style="width:${job.progress}%"></i></div><span class="job-status">${status}</span></div>`;
   }).join("");
@@ -604,6 +604,66 @@ async function runRealAssetGeneration(assets) {
   }
   toast("生图任务处理完成，请确认图片后锁定资产");
 }
+let videoPollTimer = null;
+async function pollRemoteVideos() {
+  if (!window.desktop?.queryJimengVideo) return;
+  const jobs = workspace.projects.flatMap((project) => project.data.jobs || []).filter((job) => job.kind === "shot" && job.real && ["remote_running", "download_failed"].includes(job.status));
+  for (const job of jobs) {
+    try {
+      let result = await window.desktop.queryJimengVideo({ accountId: job.accountId, submitId: job.submitId, download: false });
+      if (result.kind === "succeeded") result = await window.desktop.queryJimengVideo({ accountId: job.accountId, submitId: job.submitId, download: true });
+      if (result.kind === "succeeded" && result.urls?.length) {
+        job.status = "done";
+        job.progress = 100;
+        job.video = result.urls[0];
+      } else if (result.kind === "failed" || result.kind === "blocked" || result.kind === "rejected") {
+        job.status = "error";
+        job.error = result.message;
+      } else if (result.kind === "download_failed") {
+        job.status = "download_failed";
+        job.error = result.message;
+      }
+    } catch (error) {
+      job.lastQueryError = String(error?.message || error).slice(0, 300);
+    }
+  }
+  persist();
+  if (view === "jobs") render();
+  const remaining = workspace.projects.some((project) => project.data.jobs?.some((job) => job.real && ["remote_running", "download_failed"].includes(job.status)));
+  if (!remaining && videoPollTimer) { clearInterval(videoPollTimer); videoPollTimer = null; }
+}
+function ensureVideoPolling() {
+  if (!videoPollTimer) videoPollTimer = setInterval(pollRemoteVideos, 15000);
+}
+async function runRealVideoGeneration(shots, account, config) {
+  close();
+  view = "jobs";
+  for (const shot of shots) {
+    const references = shot.refs.map((name) => state.assets.find((asset) => asset.name === name));
+    const job = { id: crypto.randomUUID(), sourceId: shot.id, kind: "shot", title: `${String(shot.number).padStart(3, "0")}_${shot.title}`, prompt: shot.prompt, refs: references.map((asset) => ({ id: asset.id, name: asset.name, image: asset.image })), accountId: account.id, accountName: account.name, model: config.model, ratio: state.settings.ratio, duration: Math.max(4, Math.min(shot.duration, config.model === "seedance2.5" ? 30 : 15)), resolution: config.resolution, progress: 10, status: "submitting", real: true };
+    state.jobs.push(job);
+    persist();
+    render();
+    try {
+      const result = await window.desktop.submitJimengVideo({ accountId: account.id, jobId: job.id, prompt: shot.prompt, images: references.map((asset) => asset.image), model: config.model, ratio: state.settings.ratio, duration: job.duration, resolution: config.resolution });
+      if (result.kind === "accepted") {
+        job.submitId = result.submitId;
+        job.status = "remote_running";
+        job.progress = 25;
+      } else {
+        job.status = "error";
+        job.error = result.message || "即梦未接受任务";
+      }
+    } catch (error) {
+      job.status = "submit_unknown";
+      job.error = `提交结果待确认：${String(error?.message || error).slice(0, 240)}`;
+    }
+    persist();
+    render();
+  }
+  ensureVideoPolling();
+  await pollRemoteVideos();
+}
 function generate(kind) {
   let rows;
   if (kind === "asset") {
@@ -632,6 +692,19 @@ function generate(kind) {
   const realImage = kind === "asset" && window.desktop?.generateImage;
   if (realImage && !connections.image.baseUrl) {
     toast("请先在模型与账号中填写生图接口");
+    return;
+  }
+  if (kind === "shot" && window.desktop?.submitJimengVideo) {
+    const accounts = connections.accounts.filter((account) => account.enabled && account.cliPermission === "allowed" && account.cliAuthorized);
+    if (!accounts.length) {
+      toast("没有已授权且具备官方 CLI 生成权限的账号");
+      return;
+    }
+    modal("确认即梦视频任务", `<p>将提交 ${available.length} 个真实视频任务，产生的积分以即梦实际记录为准。</p><label>执行账号</label><select id="videoAccount">${accounts.map((account) => `<option value="${account.id}">${esc(account.name)}${typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : ""}</option>`).join("")}</select><label>模型</label><select id="videoModel"><option value="seedance2.0">Seedance 2.0</option><option value="seedance2.0fast">Seedance 2.0 Fast</option><option value="seedance2.0_vip">Seedance 2.0 VIP</option><option value="seedance2.5">Seedance 2.5</option></select><label>分辨率</label><select id="videoResolution"><option value="720p">720p</option></select><div class="notice">参考图按分镜资产顺序提交；关闭客户端后可按任务 ID 恢复查询，不会自动重复提交。</div><div class="modal-actions">${btn("close", "取消")}<button class="primary" id="startRealVideo">确认并提交</button></div>`);
+    document.querySelector("#startRealVideo").onclick = () => {
+      const account = accounts.find((candidate) => candidate.id === document.querySelector("#videoAccount").value);
+      runRealVideoGeneration(available, account, { model: document.querySelector("#videoModel").value, resolution: document.querySelector("#videoResolution").value });
+    };
     return;
   }
   modal(
@@ -1236,6 +1309,10 @@ if (window.desktop?.loadWorkspace) {
         window.desktop.saveConnections(connections).catch(() => {});
       }
       render();
+      if (workspace.projects.some((project) => project.data.jobs?.some((job) => job.real && ["remote_running", "download_failed"].includes(job.status)))) {
+        ensureVideoPolling();
+        pollRemoteVideos();
+      }
     })
     .catch(() => toast("SQLite 数据库读取失败，当前使用浏览器备份"));
 }

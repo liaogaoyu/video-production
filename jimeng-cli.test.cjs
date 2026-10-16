@@ -45,3 +45,38 @@ test('runtime status uses the pinned image and invalid IDs never reach Docker', 
   assert.deepEqual(calls[0].args.slice(0, 3), ['image', 'inspect', 'lumenx-dreamina-eval:1.4.20']);
   await assert.rejects(() => pool.inspect('../escape'), /ID/);
 });
+
+test('video submission stages ordered images and returns an accepted remote id', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storydock-video-'));
+  const one = path.join(root, 'one.png');
+  const two = path.join(root, 'two.jpg');
+  fs.writeFileSync(one, 'one');
+  fs.writeFileSync(two, 'two');
+  const { pool, calls } = setup([{ stdout: 'submit_id: remote-123\ngen_status: querying\n' }]);
+  const result = await pool.submitVideo('33333333-3333-3333-3333-333333333333', { jobId: 'job-1', prompt: '人物在场景中转身', images: [one, two], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' });
+  assert.deepEqual(result, { kind: 'accepted', submitId: 'remote-123', status: 'querying' });
+  const command = calls[0].args;
+  assert.ok(command.indexOf('/work/input/01.png') < command.indexOf('/work/input/02.jpg'));
+  assert.equal(command.includes('--model_version'), true);
+  assert.equal(command.includes('seedance2.0'), true);
+});
+
+test('video preflight rejects invalid limits before starting Docker', async () => {
+  const { pool, calls } = setup([]);
+  await assert.rejects(() => pool.submitVideo('44444444-4444-4444-4444-444444444444', { jobId: 'job-2', prompt: 'p', images: [], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' }), /参考图数量/);
+  assert.equal(calls.length, 0);
+});
+
+test('video query distinguishes running, success and terminal failure', async () => {
+  const { pool } = setup([
+    { stdout: 'submit_id: remote-456\ngen_status: querying\n' },
+    { stdout: 'submit_id: remote-456\ngen_status: success\n' },
+    { stdout: 'submit_id: remote-456\ngen_status: fail\nfail_reason: 内容校验失败\n', code: 1 },
+  ]);
+  const account = '55555555-5555-5555-5555-555555555555';
+  assert.equal((await pool.queryVideo(account, 'remote-456')).kind, 'accepted');
+  assert.equal((await pool.queryVideo(account, 'remote-456')).kind, 'succeeded');
+  const failed = await pool.queryVideo(account, 'remote-456');
+  assert.equal(failed.kind, 'failed');
+  assert.match(failed.message, /内容校验失败/);
+});

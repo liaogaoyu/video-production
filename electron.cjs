@@ -7,7 +7,7 @@ const {
   session,
 } = require("electron");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
+const { pathToFileURL, fileURLToPath } = require("node:url");
 const fs = require("node:fs/promises");
 const { createDatabase } = require("./database.cjs");
 const { generateImage } = require("./image-provider.cjs");
@@ -101,6 +101,35 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("finish-jimeng-cli-auth", (event, id) => { assertLocal(event); return jimengCli.finishAuth(id); });
   ipcMain.handle("check-jimeng-cli", (event, id) => { assertLocal(event); return jimengCli.inspect(id); });
+  function allowedCliAccount(id) {
+    const account = database.readConnections()?.accounts?.find((item) => item.id === id);
+    if (!account?.enabled || account.cliPermission !== "allowed") throw new Error("账号未启用或没有官方 CLI 生成权限");
+    return account;
+  }
+  async function resolveProjectImage(value) {
+    const candidate = value.startsWith("file:") ? fileURLToPath(value) : value;
+    const root = await fs.realpath(path.join(app.getPath("userData"), "projects"));
+    const actual = await fs.realpath(candidate);
+    const relative = path.relative(root, actual);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("参考图不在项目媒体目录");
+    return actual;
+  }
+  ipcMain.handle("submit-jimeng-video", async (event, request) => {
+    assertLocal(event);
+    if (!request || !Array.isArray(request.images)) throw new Error("视频任务格式不正确");
+    allowedCliAccount(request.accountId);
+    const images = [];
+    for (const value of request.images) images.push(await resolveProjectImage(value));
+    return jimengCli.submitVideo(request.accountId, { ...request, images });
+  });
+  ipcMain.handle("query-jimeng-video", async (event, request) => {
+    assertLocal(event);
+    allowedCliAccount(request?.accountId);
+    const result = await jimengCli.queryVideo(request.accountId, request.submitId, !!request.download);
+    if (result.files) result.urls = result.files.map((file) => pathToFileURL(file).href);
+    delete result.files;
+    return result;
+  });
   ipcMain.handle("check-jimeng-account", async (event, id) => {
     assertLocal(event);
     try {
