@@ -295,6 +295,15 @@ function art(a) {
     ? `<img src="${esc(a.image)}" alt="${esc(a.name)}角色或场景参考图">`
     : `<div class="empty-art">${icon("image")}</div>`;
 }
+function addAssetVersion(asset, output, source = "upload") {
+  asset.versions ||= [];
+  const version = { id: crypto.randomUUID(), image: output.url || output, path: output.path, prompt: asset.prompt, source, createdAt: new Date().toISOString() };
+  asset.versions.push(version);
+  asset.selectedVersionId = version.id;
+  asset.image = version.image;
+  asset.locked = false;
+  return version;
+}
 function assetCard(a) {
   return `<article class="asset-card ${selected.has(a.id) ? "selected" : ""}" data-detail="${a.id}"><div class="asset-image ${a.type === "场景" ? "scene" : ""}"><button class="select-box" data-select="${a.id}" aria-label="选择${esc(a.name)}">${selected.has(a.id) ? icon("check") : ""}</button>${art(a)}<span class="tag" >${icon(a.locked ? "lock" : a.image ? "check" : "image")}${a.locked ? "已锁定" : a.image ? "待确认" : "待生成"}</span></div><div class="card-body"><div class="card-title"><strong>${esc(a.name)}</strong><span class="category ${a.type === "场景" ? "scene" : a.type === "道具" ? "prop" : ""}">${a.type}</span></div><div class="card-desc">${esc(a.description)}</div></div></article>`;
 }
@@ -446,9 +455,10 @@ function close() {
 }
 function detail(id) {
   const a = state.assets.find((a) => a.id === id);
+  const versions = (a.versions || []).map((version, index) => `<button class="asset-version ${a.selectedVersionId === version.id ? "active" : ""}" data-select-version="${version.id}" data-asset-id="${a.id}"><img src="${esc(version.image)}" alt="版本 ${index + 1}"><small>V${index + 1}</small></button>`).join("");
   modal(
     `${esc(a.name)} <span class="category">${a.type}</span>`,
-    `${a.image ? `<img class="detail-image" src="${esc(a.image)}" alt="${esc(a.name)}">` : ""}<label>资产名称</label><input id="assetName" value="${esc(a.name)}" ${a.locked ? "disabled" : ""}><label>图片生成提示词</label><textarea id="assetPrompt" class="detail-prompt" ${a.locked ? "disabled" : ""}>${esc(a.prompt)}</textarea><small>${a.locked ? "已锁定，解锁后可编辑。" : "锁定后可用于分镜。"}</small><div class="modal-actions"><div>${!a.locked ? `<button data-replace="${id}">${icon("upload")}替换图片</button>` : ""}</div><div class="actions"><button data-lock="${id}">${icon(a.locked ? "lock" : "check")}${a.locked ? "解锁编辑" : a.image ? "保存并锁定" : "保存提示词"}</button></div></div>`,
+    `${a.image ? `<img class="detail-image" src="${esc(a.image)}" alt="${esc(a.name)}">` : ""}${versions ? `<label>图片版本</label><div class="asset-versions">${versions}</div>` : ""}<label>资产名称</label><input id="assetName" value="${esc(a.name)}" ${a.locked ? "disabled" : ""}><label>图片生成提示词</label><textarea id="assetPrompt" class="detail-prompt" ${a.locked ? "disabled" : ""}>${esc(a.prompt)}</textarea><small>${a.locked ? "已固定当前版本，解锁后可切换。" : "固定后可用于分镜；重新生成不会覆盖历史版本。"}</small><div class="modal-actions"><div>${!a.locked ? `<button data-replace="${id}">${icon("upload")}上传新版本</button>` : ""}</div><div class="actions"><button data-lock="${id}">${icon(a.locked ? "lock" : "check")}${a.locked ? "解锁编辑" : a.image ? "固定当前版本" : "保存提示词"}</button></div></div>`,
   );
 }
 const assetTemplate = {
@@ -627,8 +637,7 @@ async function runRealAssetGeneration(assets) {
         prompt: asset.prompt,
         config: { ...connections.image, ratio: state.settings.ratio },
       });
-      asset.image = output.url;
-      asset.locked = false;
+      addAssetVersion(asset, output, "generation");
       job.image = output.url;
       job.outputPath = output.path;
       job.progress = 100;
@@ -812,7 +821,7 @@ function startQueue() {
         j.status = "done";
         if (j.kind === "asset") {
           const a = state.assets.find((a) => a.id === j.sourceId);
-          if (a && !a.locked) a.image = j.image;
+          if (a && !a.locked) addAssetVersion(a, j.image, "demo");
         }
       }
     });
@@ -906,7 +915,7 @@ document.addEventListener("click", async (e) => {
       try {
         const result = await window.desktop.selectAssetImage({ projectId: activeProject.id, assetId: id });
         if (!result.canceled) {
-          state.assets.find((asset) => asset.id === id).image = result.url;
+          addAssetVersion(state.assets.find((asset) => asset.id === id), result, "upload");
           persist();
           detail(id);
           render();
@@ -929,7 +938,7 @@ document.addEventListener("click", async (e) => {
       }
       const reader = new FileReader();
       reader.onload = () => {
-        state.assets.find((a) => a.id === id).image = reader.result;
+        addAssetVersion(state.assets.find((a) => a.id === id), reader.result, "upload");
         persist();
         detail(id);
         render();
@@ -970,6 +979,19 @@ document.addEventListener("click", async (e) => {
   }
   if (el.dataset.detail) {
     detail(el.dataset.detail);
+    return;
+  }
+  if (el.dataset.selectVersion) {
+    const asset = state.assets.find((item) => item.id === el.dataset.assetId);
+    if (asset.locked) { toast("请先解锁资产再切换版本"); return; }
+    const version = asset.versions?.find((item) => item.id === el.dataset.selectVersion);
+    if (version) {
+      asset.selectedVersionId = version.id;
+      asset.image = version.image;
+      persist();
+      detail(asset.id);
+      render();
+    }
     return;
   }
   if (el.dataset.openAccount) {
