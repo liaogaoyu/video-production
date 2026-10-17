@@ -458,9 +458,10 @@ function close() {
 function detail(id) {
   const a = state.assets.find((a) => a.id === id);
   const versions = (a.versions || []).map((version, index) => `<button class="asset-version ${a.selectedVersionId === version.id ? "active" : ""}" data-select-version="${version.id}" data-asset-id="${a.id}"><img src="${esc(version.image)}" alt="版本 ${index + 1}"><small>V${index + 1}</small></button>`).join("");
+  const references = (a.references || []).map((reference, index) => `<div class="reference-image"><img src="${esc(reference.url)}" alt="参考图 ${index + 1}"><span>参考 ${index + 1}</span>${a.locked ? "" : `<button data-remove-reference="${reference.id}" data-asset-id="${a.id}" aria-label="删除参考图 ${index + 1}">${icon("close")}</button>`}</div>`).join("");
   modal(
     `${esc(a.name)} <span class="category">${a.type}</span>`,
-    `${a.image ? `<img class="detail-image" src="${esc(a.image)}" alt="${esc(a.name)}">` : ""}${versions ? `<label>图片版本</label><div class="asset-versions">${versions}</div>` : ""}<label>资产名称</label><input id="assetName" value="${esc(a.name)}" ${a.locked ? "disabled" : ""}><label>图片生成提示词</label><textarea id="assetPrompt" class="detail-prompt" ${a.locked ? "disabled" : ""}>${esc(a.prompt)}</textarea><small>${a.locked ? "已固定当前版本，解锁后可切换。" : "固定后可用于分镜；重新生成不会覆盖历史版本。"}</small><div class="modal-actions"><div>${!a.locked ? `<button data-replace="${id}">${icon("upload")}上传新版本</button>` : ""}</div><div class="actions"><button data-lock="${id}">${icon(a.locked ? "lock" : "check")}${a.locked ? "解锁编辑" : a.image ? "固定当前版本" : "保存提示词"}</button></div></div>`,
+    `<div class="asset-detail-layout"><section class="asset-detail-media"><div class="detail-preview">${a.image ? `<img class="detail-image" src="${esc(a.image)}" alt="${esc(a.name)}">` : `<div class="detail-empty">${icon("image")}<span>尚未生成资产图片</span></div>`}</div>${versions ? `<div class="detail-section-head"><strong>图片版本</strong><small>${a.versions.length} 个</small></div><div class="asset-versions">${versions}</div>` : ""}<div class="detail-section-head"><strong>生成参考图</strong><small>${(a.references || []).length}/15</small></div><div class="reference-images">${references}${!a.locked && (a.references || []).length < 15 ? `<button class="reference-add" data-add-reference="${id}">${icon("upload")}<span>上传参考图</span></button>` : ""}</div><p class="detail-help">参考图仅在生成新图片时提交给模型，不会替换当前版本。</p></section><section class="asset-detail-form"><label>资产名称</label><input id="assetName" value="${esc(a.name)}" ${a.locked ? "disabled" : ""}><label>图片生成提示词</label><textarea id="assetPrompt" class="detail-prompt" ${a.locked ? "disabled" : ""}>${esc(a.prompt)}</textarea><small>${a.locked ? "已固定当前版本，解锁后可编辑。" : "固定后可用于分镜；新生成结果会作为独立版本保存。"}</small></section></div><div class="modal-actions asset-detail-actions"><div>${!a.locked ? `<button data-replace="${id}">${icon("upload")}上传成品版本</button>` : ""}</div><div class="actions"><button data-lock="${id}">${icon(a.locked ? "lock" : "check")}${a.locked ? "解锁编辑" : a.image ? "固定当前版本" : "保存提示词"}</button></div></div>`,
   );
 }
 const assetTemplate = {
@@ -637,6 +638,7 @@ async function runRealAssetGeneration(assets) {
         projectId: activeProject.id,
         assetId: asset.id,
         prompt: asset.prompt,
+        references: (asset.references || []).map((reference) => reference.url),
         config: { ...connections.image, ratio: state.settings.ratio },
       });
       addAssetVersion(asset, output, "generation");
@@ -909,6 +911,52 @@ document.addEventListener("click", async (e) => {
     persist();
     detail(a.id);
     render();
+    return;
+  }
+  if (el.dataset.addReference) {
+    const asset = state.assets.find((item) => item.id === el.dataset.addReference);
+    if (!asset || asset.locked) return;
+    if (window.desktop?.selectReferenceImages) {
+      try {
+        const result = await window.desktop.selectReferenceImages({ projectId: activeProject.id, assetId: asset.id });
+        if (!result.canceled) {
+          const existing = new Set((asset.references || []).map((item) => item.sha256));
+          asset.references = [...(asset.references || []), ...result.images.filter((item) => !existing.has(item.sha256)).map((item) => ({ id: crypto.randomUUID(), url: item.url, sha256: item.sha256 }))].slice(0, 15);
+          persist();
+          detail(asset.id);
+          toast(`已添加 ${result.images.length} 张参考图`);
+        }
+      } catch (error) {
+        toast(String(error?.message || error).slice(0, 180));
+      }
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = "image/png,image/jpeg,image/webp";
+    input.onchange = () => {
+      const files = [...input.files].slice(0, 15 - (asset.references || []).length);
+      files.forEach((file) => {
+        if (file.size > 2 * 1024 * 1024) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          asset.references = [...(asset.references || []), { id: crypto.randomUUID(), url: reader.result }];
+          persist();
+          detail(asset.id);
+        };
+        reader.readAsDataURL(file);
+      });
+    };
+    input.click();
+    return;
+  }
+  if (el.dataset.removeReference) {
+    const asset = state.assets.find((item) => item.id === el.dataset.assetId);
+    if (!asset || asset.locked) return;
+    asset.references = (asset.references || []).filter((item) => item.id !== el.dataset.removeReference);
+    persist();
+    detail(asset.id);
     return;
   }
   if (el.dataset.replace) {

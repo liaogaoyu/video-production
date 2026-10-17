@@ -156,10 +156,27 @@ app.whenReady().then(() => {
       throw new Error("系统加密存储不可用");
     const encrypted = await fs.readFile(keyPath);
     const apiKey = safeStorage.decryptString(encrypted);
+    const references = [];
+    if (request.references !== undefined && !Array.isArray(request.references))
+      throw new Error("参考图格式不正确");
+    if ((request.references || []).length > 15)
+      throw new Error("参考图最多 15 张");
+    let referenceBytes = 0;
+    for (const value of request.references || []) {
+      const file = await resolveProjectImage(String(value));
+      const bytes = await fs.readFile(file);
+      referenceBytes += bytes.length;
+      if (bytes.length > 20 * 1024 * 1024 || referenceBytes > 256 * 1024 * 1024)
+        throw new Error("参考图单张不能超过 20MB，总计不能超过 256MB");
+      const extension = path.extname(file).toLowerCase();
+      const mime = extension === ".png" ? "image/png" : extension === ".webp" ? "image/webp" : "image/jpeg";
+      references.push(`data:${mime};base64,${bytes.toString("base64")}`);
+    }
     return generateImage({
       config: request.config,
       prompt: request.prompt,
       apiKey,
+      references,
       projectId: request.projectId,
       assetId: request.assetId,
       outputRoot: path.join(app.getPath("userData"), "projects"),
@@ -171,6 +188,27 @@ app.whenReady().then(() => {
     const picked = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }] });
     if (picked.canceled || !picked.filePaths[0]) return { canceled: true };
     return storeAssetImage({ source: picked.filePaths[0], outputRoot: path.join(app.getPath("userData"), "projects"), projectId: request.projectId, assetId: request.assetId });
+  });
+  ipcMain.handle("select-reference-images", async (event, request) => {
+    assertLocal(event);
+    if (!request) throw new Error("参考图请求格式不正确");
+    const picked = await dialog.showOpenDialog({
+      title: "选择参考图（最多 15 张）",
+      properties: ["openFile", "multiSelections"],
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (picked.canceled) return { canceled: true, images: [] };
+    if (picked.filePaths.length > 15) throw new Error("参考图最多 15 张");
+    const images = [];
+    for (const source of picked.filePaths) {
+      images.push(await storeAssetImage({
+        source,
+        outputRoot: path.join(app.getPath("userData"), "projects"),
+        projectId: request.projectId,
+        assetId: `${request.assetId}_refs`,
+      }));
+    }
+    return { canceled: false, images };
   });
   ipcMain.handle("export-project", async (event, payload) => {
     assertLocal(event);
