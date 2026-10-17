@@ -87,12 +87,27 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     const output = `${result.stdout}\n${result.stderr}`;
     const submitId = output.match(/"submit_id"\s*:\s*"([a-zA-Z0-9-]+)"|submit_id:\s*([a-zA-Z0-9-]+)/)?.slice(1).find(Boolean);
     const status = output.match(/"gen_status"\s*:\s*"([a-zA-Z_]+)"|gen_status:\s*([a-zA-Z_]+)/)?.slice(1).find(Boolean);
-    const reason = output.match(/"fail_reason"\s*:\s*"([^"]+)"|fail_reason:\s*(.+)/)?.slice(1).find(Boolean);
-    if (submitId && (!status || status === 'querying')) return { kind: 'accepted', submitId, status: status || 'querying' };
+    const encodedReason = output.match(/"fail_reason"\s*:\s*"((?:\\.|[^"\\])*)"/)?.[1];
+    let reason = output.match(/fail_reason:\s*(.+)/)?.[1];
+    if (encodedReason !== undefined) {
+      try { reason = JSON.parse(`"${encodedReason}"`); }
+      catch { reason = encodedReason; }
+    }
+    const queueIndex = output.match(/"queue_idx"\s*:\s*(\d+)/)?.[1];
+    const remainingSeconds = Number(output.match(/"estimated_remaining_seconds"\s*:\s*(\d+)/)?.[1]);
+    const queueNote = [
+      queueIndex ? `前面约 ${queueIndex} 个` : "",
+      Number.isFinite(remainingSeconds) && remainingSeconds > 0
+        ? remainingSeconds >= 3600
+          ? `预计还需约 ${Math.round(remainingSeconds / 3600)} 小时`
+          : `预计还需约 ${Math.max(1, Math.round(remainingSeconds / 60))} 分钟`
+        : "",
+    ].filter(Boolean).join("，");
+    if (submitId && (!status || status === 'querying')) return { kind: 'accepted', submitId, status: status || 'querying', message: queueNote };
     if (status === 'success') return { kind: 'succeeded', submitId };
-    if (status === 'fail') return { kind: 'failed', submitId, message: String(reason || '即梦生成失败').slice(0, 500) };
-    if (/AigcComplianceConfirmationRequired/.test(output)) return { kind: 'blocked', code: 'web_confirmation_required', message: '请先在即梦网页完成该模型首次使用确认' };
-    if (/没有 dreamina_cli 使用权限|仅限会员用户使用/.test(output)) return { kind: 'blocked', code: 'permission_denied', message: '账号没有官方 CLI 生成权限' };
+    if (/AigcComplianceConfirmationRequired/.test(output)) return { kind: 'blocked', code: 'web_confirmation_required', submitId, message: '请先用这个即梦账号在网页里打开 Seedance，完成首次使用确认后再提交' };
+    if (/没有 dreamina_cli 使用权限|仅限会员用户使用/.test(output)) return { kind: 'blocked', code: 'permission_denied', submitId, message: '账号没有官方 CLI 生成权限' };
+    if (status === 'fail') return { kind: 'failed', code: /upload resource/i.test(reason || '') ? 'resource_upload_failed' : undefined, submitId, message: String(reason || '即梦生成失败').slice(0, 500) };
     return { kind: result.code === 0 ? 'unrecognized' : 'rejected', message: '无法识别官方 CLI 返回结果' };
   }
   return {

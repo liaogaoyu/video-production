@@ -99,3 +99,31 @@ test('video query distinguishes running, success and terminal failure', async ()
   assert.equal(failed.kind, 'failed');
   assert.match(failed.message, /内容校验失败/);
 });
+
+test('escaped resource upload failure keeps the complete official CLI reason', async () => {
+  const { pool } = setup([{
+    stdout: '{"gen_status":"fail","fail_reason":"upload resource \\\"/work/input/04.png\\\": request timeout"}\n',
+    code: 1,
+  }]);
+  const result = await pool.queryVideo('55555555-5555-5555-5555-555555555555', 'remote-upload');
+  assert.equal(result.kind, 'failed');
+  assert.equal(result.code, 'resource_upload_failed');
+  assert.equal(result.message, 'upload resource "/work/input/04.png": request timeout');
+});
+
+test('queued JSON result stays accepted and reports the official wait', async () => {
+  const { pool } = setup([{ stdout: '{"submit_id":"f4eb3670-84d5-4f26-9303-d685680141d0","gen_status":"querying","queue_info":{"queue_idx":3559,"queue_status":"Queueing"},"estimated_remaining_seconds":29028}\n' }]);
+  const result = await pool.queryVideo('66666666-6666-6666-6666-666666666666', 'f4eb3670-84d5-4f26-9303-d685680141d0');
+  assert.equal(result.kind, 'accepted');
+  assert.equal(result.status, 'querying');
+  assert.match(result.message, /前面约 3559 个/);
+  assert.match(result.message, /8 小时/);
+});
+
+test('first-use compliance failure is not shown as a raw API error', async () => {
+  const { pool } = setup([{ stdout: 'submit_id: remote-789\ngen_status: fail\nfail_reason: api error: ret=4010, message=AigcComplianceConfirmationRequired, aigc compliance confirmation required\n', code: 1 }]);
+  const result = await pool.queryVideo('66666666-6666-6666-6666-666666666666', 'remote-789');
+  assert.equal(result.kind, 'blocked');
+  assert.equal(result.code, 'web_confirmation_required');
+  assert.match(result.message, /首次使用确认/);
+});
