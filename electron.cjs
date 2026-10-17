@@ -5,6 +5,7 @@ const {
   dialog,
   safeStorage,
   session,
+  shell,
 } = require("electron");
 const path = require("node:path");
 const { pathToFileURL, fileURLToPath } = require("node:url");
@@ -130,6 +131,19 @@ app.whenReady().then(() => {
     if (result.files) result.urls = result.files.map((file) => pathToFileURL(file).href);
     delete result.files;
     return result;
+  });
+  ipcMain.handle("open-video-folder", async (event, fileUrl) => {
+    assertLocal(event);
+    const filePath = fileURLToPath(String(fileUrl || ""));
+    const root = await fs.realpath(path.join(app.getPath("userData"), "storydock-jimeng-cli"));
+    const actual = await fs.realpath(filePath);
+    const relative = path.relative(root, actual);
+    const parts = relative.split(path.sep);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || parts[1] !== "outputs") throw new Error("视频不在本机下载目录");
+    const folder = path.join(root, parts[0], "outputs");
+    const error = await shell.openPath(folder);
+    if (error) throw new Error("无法打开视频文件夹");
+    return { ok: true };
   });
   ipcMain.handle("check-jimeng-account", async (event, id) => {
     assertLocal(event);

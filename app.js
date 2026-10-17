@@ -14,6 +14,7 @@ const paths = {
   lock: "M6 10h12v11H6z M8 10V6a4 4 0 0 1 8 0v4",
   more: "M5 12h.01 M12 12h.01 M19 12h.01",
   close: "M6 6l12 12 M6 18L18 6",
+  trash: "M4 7h16 M9 7V4h6v3 M7 7l1 13h8l1-13",
   play: "M8 4l13 8-13 8z",
   list: "M8 6h13 M8 12h13 M8 18h13 M3 6h.01 M3 12h.01 M3 18h.01",
   refresh:
@@ -208,13 +209,20 @@ function persistConnections() {
 let view = "projects",
   filter = "全部资产",
   query = "",
+  jobQueueStatus = "all",
+  jobKindFilter = "all",
+  jobSort = "newest",
   statusFilter = "all",
+  shotStatusFilter = "all",
   selected = new Set(),
+  selectedShots = new Set(),
   listMode = false,
   timer = null,
   importKind = "assets",
   parsedImport = null;
+let workspaceGeneration = 0;
 const persist = () => {
+  workspaceGeneration += 1;
   try {
     activeProject.data = state;
     workspace.activeProjectId = activeProject.id;
@@ -261,9 +269,14 @@ function switchProject(id) {
   activeProject = workspace.projects.find((p) => p.id === id);
   state = activeProject.data;
   selected = new Set();
+  selectedShots = new Set();
   query = "";
   filter = "全部资产";
   statusFilter = "all";
+  shotStatusFilter = "all";
+  jobQueueStatus = "all";
+  jobKindFilter = "all";
+  jobSort = "newest";
   view = "assets";
   persist();
   render();
@@ -281,15 +294,20 @@ function projectsPage() {
 function createPage() {
   return `<div class="heading"><h1>创建项目</h1>${btn("projects", "返回项目", "", "ghost")}</div><div class="panel create-form"><label for="projectName">项目名称 <span class="required">*</span></label><input id="projectName" maxlength="80" placeholder="输入项目名称" autofocus><label for="projectDescription">项目简介 <small>选填</small></label><textarea id="projectDescription" placeholder="输入项目简介" maxlength="500"></textarea><label for="projectRatio">视频画幅</label><select id="projectRatio"><option value="16:9">16:9 横屏</option><option value="9:16">9:16 竖屏</option><option value="1:1">1:1 方形</option></select><label for="projectStyle">风格备注 <small>选填</small></label><input id="projectStyle" placeholder="例如：半写实国漫、民国悬疑"><div class="modal-actions">${btn("projects", "取消")}${btn("create-project", "创建项目", "", "primary")}</div></div>`;
 }
+function assetMatchesStatus(asset) {
+  if (statusFilter === "locked") return asset.locked;
+  if (statusFilter === "missing") return !asset.image;
+  if (statusFilter === "unfixed") return Boolean(asset.image) && !asset.locked;
+  return true;
+}
 function assetsPage() {
   const a = state.assets.filter(
     (a) =>
       (filter === "全部资产" || a.type === filter) &&
       (!query || `${a.name}${a.description}`.includes(query)) &&
-      (statusFilter === "all" ||
-        (statusFilter === "locked" ? a.locked : !a.image)),
+      assetMatchesStatus(a),
   );
-  return `<div class="heading"><h1>资产库</h1><div class="actions">${btn("add", "新建资产", "plus")}${btn("import-assets", "导入资产清单", "upload", "primary")}</div></div><div class="section-title"><h2>项目资产 <span style="font-weight:400;font-size:11px;color:#767982;margin-left:10px">${state.assets.length} 个资产 · ${state.assets.filter((a) => a.locked).length} 个已锁定</span></h2><span class="muted">${esc(connections.image.name)}</span></div><div class="tabs">${["全部资产", "角色", "场景", "道具"].map((t) => `<button data-filter="${t}" class="${filter === t ? "active" : ""}">${t}<span class="tabcount">${t === "全部资产" ? state.assets.length : state.assets.filter((a) => a.type === t).length}</span></button>`).join("")}</div><div class="toolbar"><label class="search">${icon("search")}<input id="search" placeholder="搜索资产名称、描述…" value="${esc(query)}"></label><div class="tools"><select id="statusFilter" aria-label="资产状态"><option value="all" ${statusFilter === "all" ? "selected" : ""}>全部状态</option><option value="locked" ${statusFilter === "locked" ? "selected" : ""}>已锁定</option><option value="missing" ${statusFilter === "missing" ? "selected" : ""}>待生成</option></select>${btn("select-missing", "选择待生成", "check")}<div class="divider"></div>${btn("grid", "", "grid", !listMode ? "" : "ghost")}${btn("list", "", "list", listMode ? "" : "ghost")}</div></div><div class="asset-grid ${listMode ? "list-mode" : ""}">${a.map(assetCard).join("") || `<div class="empty empty-library">${icon("image")}<h2>${state.assets.length ? "没有符合条件的资产" : "暂无资产"}</h2><p>${state.assets.length ? "试试其他名称或筛选条件" : "导入资产清单或新建资产。"}</p>${btn("import-assets", "导入资产清单", "upload", "primary")}</div>`}</div>`;
+  return `<div class="heading"><h1>资产库</h1><div class="actions">${btn("select-all", selected.size === state.assets.length && state.assets.length ? "取消全选" : "全选", "check")}${btn("batch-lock", "批量固定", "lock")}${btn("delete-assets", "删除", "trash", "danger")}${btn("add", "新建资产", "plus")}${btn("import-assets", "导入资产清单", "upload", "primary")}</div></div><div class="section-title"><h2>项目资产 <span style="font-weight:400;font-size:11px;color:#767982;margin-left:10px">${state.assets.length} 个资产 · ${state.assets.filter((a) => a.locked).length} 个已锁定</span></h2><span class="muted">${esc(connections.image.name)}</span></div><div class="tabs">${["全部资产", "角色", "场景", "道具"].map((t) => `<button data-filter="${t}" class="${filter === t ? "active" : ""}">${t}<span class="tabcount">${t === "全部资产" ? state.assets.length : state.assets.filter((a) => a.type === t).length}</span></button>`).join("")}</div><div class="toolbar"><label class="search">${icon("search")}<input id="search" placeholder="搜索资产名称、描述…" value="${esc(query)}"></label><div class="tools"><select id="statusFilter" aria-label="资产状态"><option value="all" ${statusFilter === "all" ? "selected" : ""}>全部状态</option><option value="locked" ${statusFilter === "locked" ? "selected" : ""}>已锁定</option><option value="missing" ${statusFilter === "missing" ? "selected" : ""}>待生成</option><option value="unfixed" ${statusFilter === "unfixed" ? "selected" : ""}>待固定</option></select>${btn("select-missing", "选择待生成", "check")}<div class="divider"></div>${btn("grid", "", "grid", !listMode ? "" : "ghost")}${btn("list", "", "list", listMode ? "" : "ghost")}</div></div><div class="asset-grid ${listMode ? "list-mode" : ""}">${a.map(assetCard).join("") || `<div class="empty empty-library">${icon("image")}<h2>${state.assets.length ? "没有符合条件的资产" : "暂无资产"}</h2><p>${state.assets.length ? "试试其他名称或筛选条件" : "导入资产清单或新建资产。"}</p>${btn("import-assets", "导入资产清单", "upload", "primary")}</div>`}</div>`;
 }
 function art(a) {
   return a.image
@@ -320,14 +338,295 @@ function missing(s) {
     return !asset?.locked || !asset.image;
   });
 }
+function latestShotJob(shot) {
+  const jobs = state.jobs.filter((job) => job.kind === "shot" && job.sourceId === shot.id);
+  return jobs.length ? jobs[jobs.length - 1] : null;
+}
+function shotStatus(shot) {
+  const job = latestShotJob(shot);
+  if (job?.status === "done") return "done";
+  if (["error", "download_failed", "submit_unknown"].includes(job?.status)) return "failed";
+  if (["waiting", "running", "submitting", "remote_running"].includes(job?.status)) return "queued";
+  return missing(shot).length ? "pending" : "ready";
+}
+function shotStatusParts(shot) {
+  const status = shotStatus(shot);
+  const job = latestShotJob(shot);
+  if (status === "done") return { title: "视频已生成", detail: "" };
+  if (status === "failed") return { title: "生成失败", detail: job?.error || "" };
+  if (status === "queued") return { title: job?.queueNote ? "排队中" : "生成中", detail: String(job?.queueNote || "").replace("，", " · ") };
+  const gaps = missing(shot);
+  return { title: gaps.length ? `${gaps.length} 个引用待确认` : "资产已匹配", detail: "" };
+}
+function latestShotVideo(shot) {
+  const jobs = state.jobs.filter((job) => job.kind === "shot" && job.sourceId === shot.id && job.status === "done" && job.video);
+  return jobs.length ? jobs[jobs.length - 1].video : "";
+}
+function shotMatchesStatus(shot) {
+  return shotStatusFilter === "all" || shotStatus(shot) === shotStatusFilter;
+}
+function nextShotNumber(episode = 1) {
+  const numbers = state.shots
+    .filter((shot) => (shot.episode || 1) === episode)
+    .map((shot) => shot.number);
+  return numbers.length ? Math.max(...numbers) + 1 : 1;
+}
+function mentionAtCaret(value, caret) {
+  const before = String(value || "").slice(0, caret);
+  const match = before.match(/@([^@\s，。！？、；：,.!?:;]*)$/);
+  if (!match) return null;
+  return { start: caret - match[0].length, query: match[1] };
+}
+function mentionAssets(query) {
+  const keyword = String(query || "").trim().toLowerCase();
+  return state.assets
+    .filter(
+      (asset) =>
+        !keyword ||
+        asset.name.toLowerCase().includes(keyword) ||
+        String(asset.externalKey || "").toLowerCase().includes(keyword),
+    )
+    .slice(0, 20);
+}
+let mentionRange = null;
+function paintMentionMenu(range) {
+  const menu = document.querySelector("#mentionMenu");
+  const list = document.querySelector("#mentionList");
+  if (!menu || !list) return;
+  if (!range) {
+    menu.hidden = true;
+    mentionRange = null;
+    return;
+  }
+  mentionRange = range;
+  menu.hidden = false;
+  const assets = mentionAssets(range.query);
+  list.innerHTML = assets.length
+    ? assets
+        .map(
+          (asset, index) =>
+            `<button type="button" class="mention-option${index === 0 ? " active" : ""}" data-mention="${esc(asset.name)}"><strong>${esc(asset.name)}</strong><small>${esc(asset.type)}${asset.externalKey ? " · " + esc(asset.externalKey) : ""}</small></button>`,
+        )
+        .join("")
+    : `<div class="mention-empty">没有匹配的资产</div>`;
+}
+function refreshMentionFromPrompt(area) {
+  const token = mentionAtCaret(area.value, area.selectionStart ?? 0);
+  const search = document.querySelector("#mentionSearch");
+  if (!token) {
+    paintMentionMenu(null);
+    return;
+  }
+  if (search) search.value = token.query;
+  paintMentionMenu({
+    start: token.start,
+    end: area.selectionStart ?? token.start,
+    query: token.query,
+  });
+}
+function promptHtml(text) {
+  const names = state.assets
+    .map((asset) => asset.name)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  let html = "";
+  let index = 0;
+  const source = String(text || "");
+  while (index < source.length) {
+    const found = source[index] === "@"
+      ? names.find((name) => {
+          if (!source.startsWith(`@${name}`, index)) return false;
+          const next = source[index + name.length + 1] || "";
+          return !next || /[\s，。！？、；：,.!?:;]/.test(next);
+        })
+      : null;
+    if (found) {
+      html += `<span class="mention-chip" contenteditable="false" data-mention-chip="${esc(found)}">@${esc(found)}</span>`;
+      index += found.length + 1;
+      continue;
+    }
+    const nextAt = source.indexOf("@", index + (source[index] === "@" ? 1 : 0));
+    const chunk = source.slice(index, nextAt === -1 ? source.length : nextAt);
+    html += esc(chunk);
+    index += chunk.length;
+  }
+  return html;
+}
+function editorPlainText(editor) {
+  let text = "";
+  const walk = (node) => {
+    if (node.nodeType === 3) text += node.textContent;
+    else if (node.nodeName === "BR") text += "\n";
+    else if (node.dataset?.mentionChip) text += `@${node.dataset.mentionChip}`;
+    else {
+      const block = node !== editor && (node.nodeName === "DIV" || node.nodeName === "P");
+      if (block && text && !text.endsWith("\n")) text += "\n";
+      node.childNodes.forEach(walk);
+    }
+  };
+  walk(editor);
+  return text.replace(/\u00a0/g, " ");
+}
+function editorCaretOffset(editor) {
+  const selection = window.getSelection?.();
+  if (!selection?.rangeCount || !editor.contains(selection.anchorNode))
+    return editorPlainText(editor).length;
+  const range = selection.getRangeAt(0).cloneRange();
+  range.selectNodeContents(editor);
+  range.setEnd(selection.anchorNode, selection.anchorOffset);
+  return range.toString().replace(/\u00a0/g, " ").length;
+}
+function placeEditorCaret(editor, offset) {
+  const selection = window.getSelection?.();
+  if (!selection) return;
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  let remain = offset;
+  let node = walker.nextNode();
+  while (node) {
+    const length = node.textContent.length;
+    if (remain <= length) {
+      const chip = node.parentElement?.dataset?.mentionChip != null ? node.parentElement : null;
+      const range = document.createRange();
+      if (chip && remain === length) range.setStartAfter(chip);
+      else if (chip && remain === 0) range.setStartBefore(chip);
+      else range.setStart(node, remain);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+    remain -= length;
+    node = walker.nextNode();
+  }
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+function renderPromptEditor(text, caret) {
+  const editor = document.querySelector("#shotPromptEditor");
+  if (!editor || typeof editor.getAttribute !== "function") return;
+  if (editor.dataset.source !== text) {
+    editor.dataset.source = text;
+    editor.innerHTML = promptHtml(text);
+  }
+  if (typeof caret === "number") placeEditorCaret(editor, caret);
+}
+function syncPromptEditor(editor) {
+  const area = document.querySelector("#shotPrompt");
+  if (!area || !editor) return;
+  area.value = editorPlainText(editor);
+  area.selectionStart = editorCaretOffset(editor);
+  refreshMentionFromPrompt(area);
+  renderPromptEditor(area.value, area.selectionStart);
+}
+function mountPromptEditor() {
+  const area = document.querySelector("#shotPrompt");
+  const editor = document.querySelector("#shotPromptEditor");
+  if (!area || !editor || typeof editor.getAttribute !== "function") return;
+  renderPromptEditor(area.value, area.value.length);
+  editor.focus();
+}
+function applyMention(name) {
+  const area = document.querySelector("#shotPrompt");
+  if (!area || !mentionRange) return;
+  const insert = `@${name} `;
+  area.value =
+    area.value.slice(0, mentionRange.start) +
+    insert +
+    area.value.slice(mentionRange.end);
+  const pos = mentionRange.start + insert.length;
+  if (area.setSelectionRange) area.setSelectionRange(pos, pos);
+  paintMentionMenu(null);
+  renderPromptEditor(area.value, pos);
+  document.querySelector("#shotPromptEditor")?.focus?.();
+}
+function syncShotRefs(shot, prompt) {
+  const names = [
+    ...new Set(
+      Array.from(
+        prompt.matchAll(/@([^\s，。！？、；：,.!?:;]+)/g),
+        (match) => match[1],
+      ),
+    ),
+  ];
+  shot.refs = names;
+  shot.refKeys = names.map(
+    (name) => state.assets.find((asset) => asset.name === name)?.externalKey || "",
+  );
+}
+function readShotForm(existingId) {
+  const editor = document.querySelector("#shotPromptEditor");
+  const area = document.querySelector("#shotPrompt");
+  if (editor && typeof editor.getAttribute === "function") area.value = editorPlainText(editor);
+  const title = document.querySelector("#shotTitle").value.trim();
+  const prompt = area.value.trim();
+  const episode = Number(document.querySelector("#shotEpisode").value);
+  const number = Number(document.querySelector("#shotNumber").value);
+  const duration = Number(document.querySelector("#shotDuration").value);
+  if (!title || !prompt) {
+    toast("镜头名称和提示词不能为空");
+    return null;
+  }
+  if (!Number.isInteger(episode) || episode < 1) {
+    toast("集数必须是正整数");
+    return null;
+  }
+  if (!Number.isInteger(number) || number < 1) {
+    toast("镜头编号必须是正整数");
+    return null;
+  }
+  if (!Number.isInteger(duration) || duration < 1 || duration > 60) {
+    toast("时长必须是 1–60 的整数秒");
+    return null;
+  }
+  if (
+    state.shots.some(
+      (shot) =>
+        shot.id !== existingId &&
+        (shot.episode || 1) === episode &&
+        shot.number === number,
+    )
+  ) {
+    toast(`第 ${episode} 集镜头 ${number} 已存在`);
+    return null;
+  }
+  return { title, prompt, episode, number, duration };
+}
+function shotForm(shot) {
+  const episode = shot?.episode || 1;
+  return `<div class="shot-fields"><label for="shotEpisode">集数</label><input id="shotEpisode" type="number" min="1" value="${episode}"><label for="shotNumber">镜头编号</label><input id="shotNumber" type="number" min="1" value="${shot?.number || nextShotNumber(episode)}"><label for="shotDuration">时长（秒）</label><input id="shotDuration" type="number" min="1" max="60" value="${shot?.duration || 5}"></div><label for="shotTitle">镜头名称</label><input id="shotTitle" value="${esc(shot?.title || "")}" placeholder="例如：孙悟空入宫"><label for="shotPromptEditor">提示词</label><div class="mention-box"><textarea id="shotPrompt" hidden>${esc(shot?.prompt || "")}</textarea><div id="shotPromptEditor" class="prompt-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入 @ 选择资产，选中后会显示蓝框"></div><div id="mentionMenu" class="mention-menu" hidden><input id="mentionSearch" placeholder="搜索资产名称" autocomplete="off"><div id="mentionList"></div></div></div>`;
+}
 function shotsPage() {
-  return `<div class="heading"><h1>分镜脚本</h1>${btn("import-shots", "导入分镜脚本", "upload", "primary")}</div><div class="section-title"><h2>分镜列表 <small style="font-size:11px;margin-left:10px">${state.shots.length} 个分镜</small></h2><span class="muted">Seedance · ${state.settings.ratio}</span></div>${state.shots.some((s) => missing(s).length) ? `<div class="notice">${icon("info")} 部分引用未就绪，请先生成并锁定对应资产。</div>` : ""}<div class="shot-list">${state.shots
-    .map((s) => {
-      const m = missing(s);
-      const a = s.refs.map((_, index) => assetForReference(s, index)).find((asset) => asset?.image);
-      return `<article class="shot"><img class="shot-thumb" src="${esc(a?.image || "assets/alley.png")}" alt="分镜参考"><div><h3><span class="muted" style="font:11px monospace;margin-right:10px">${String(s.number).padStart(3, "0")}</span>${esc(s.title)}</h3><p>${esc(s.prompt)}</p>${s.refs.map((n) => `<span class="reference ${m.includes(n) ? "bad" : ""}">${m.includes(n) ? "!" : "↗"} @${esc(n)}</span>`).join("")}</div><div class="shot-meta"><span>${s.duration}s · ${state.settings.ratio}</span><span class="${m.length ? "error" : "success"}">${m.length ? `${m.length} 个引用待确认` : "✓ 资产已匹配"}</span><button data-edit-shot="${s.id}" class="ghost">编辑提示词</button></div></article>`;
-    })
-    .join("")}</div>`;
+  const allSelected = selectedShots.size === state.shots.length && state.shots.length;
+  const visible = state.shots.filter(shotMatchesStatus);
+  const rows = visible.map((s) => {
+    const m = missing(s);
+    const status = shotStatus(s);
+    const parts = shotStatusParts(s);
+    const tone = status === "pending" || status === "failed" ? "error" : "success";
+    const detail = parts.detail.split(" · ").filter(Boolean).map((line) => `<span>${esc(line)}</span>`).join("");
+    const video = latestShotVideo(s);
+    const a = s.refs.map((_, index) => assetForReference(s, index)).find((asset) => asset?.image);
+    const thumb = video
+      ? `<video class="shot-thumb" data-preview-video="${esc(video)}" src="${esc(video)}" muted preload="metadata" aria-label="预览视频"></video>`
+      : `<img class="shot-thumb" src="${esc(a?.image || "assets/alley.png")}" alt="分镜参考">`;
+    return `<article class="shot ${selectedShots.has(s.id) ? "selected" : ""}"><button class="select-box" data-select-shot="${s.id}" aria-label="选择分镜 ${s.number}">${selectedShots.has(s.id) ? icon("check") : ""}</button>${thumb}<div class="shot-body"><h3><span class="muted" style="font:11px monospace;margin-right:10px">${String(s.number).padStart(3, "0")}</span><span class="shot-title">${esc(s.title)}</span><span class="shot-status ${tone}"><strong>${tone === "success" ? "✓ " : ""}${esc(parts.title)}</strong>${detail}</span></h3><p>${esc(s.prompt)}</p>${s.refs.map((n) => `<span class="reference ${m.includes(n) ? "bad" : ""}">${m.includes(n) ? "!" : "↗"} @${esc(n)}</span>`).join("")}</div><div class="shot-meta"><span class="shot-spec">${s.duration}s · ${state.settings.ratio}</span>${video ? `<button data-preview-video="${esc(video)}">预览视频</button>` : ""}<button data-edit-shot="${s.id}" class="shot-edit">编辑提示词</button></div></article>`;
+  }).join("");
+  return `<div class="heading"><h1>分镜脚本</h1><div class="actions">${btn("select-all", allSelected ? "取消全选" : "全选", "check")}${btn("add-shot", "新增分镜", "plus")}${btn("delete-shots", "删除全部", "trash", "danger")}${btn("import-shots", "导入分镜脚本", "upload", "primary")}</div></div><div class="section-title"><h2>分镜列表 <small style="font-size:11px;margin-left:10px">${state.shots.length} 个分镜</small></h2><span class="muted">Seedance · ${state.settings.ratio}</span></div><div class="toolbar"><div class="tools"><select id="shotStatus" aria-label="分镜状态"><option value="all" ${shotStatusFilter === "all" ? "selected" : ""}>全部状态</option><option value="pending" ${shotStatusFilter === "pending" ? "selected" : ""}>待确认</option><option value="ready" ${shotStatusFilter === "ready" ? "selected" : ""}>已就绪</option><option value="queued" ${shotStatusFilter === "queued" ? "selected" : ""}>生成中</option><option value="done" ${shotStatusFilter === "done" ? "selected" : ""}>已生成</option><option value="failed" ${shotStatusFilter === "failed" ? "selected" : ""}>生成失败</option></select></div></div>${state.shots.some((s) => missing(s).length) ? `<div class="notice">${icon("info")} 部分引用未就绪，请先生成并锁定对应资产。</div>` : ""}<div class="shot-list">${rows || `<div class="empty">${state.shots.length ? "没有符合当前状态的分镜。" : "暂无分镜，可新增一条或导入脚本。"}</div>`}</div>`;
+}
+function jobQueueGroup(job) {
+  if (job.status === "done") return "done";
+  if (["error", "download_failed", "submit_unknown"].includes(job.status)) return "failed";
+  return "active";
+}
+function visibleJobs() {
+  return state.jobs
+    .map((job, index) => ({ job, index, time: job.createdAt ? Date.parse(job.createdAt) : index }))
+    .filter(({ job }) => (jobKindFilter === "all" || job.kind === jobKindFilter) && (jobQueueStatus === "all" || jobQueueGroup(job) === jobQueueStatus))
+    .sort((a, b) => jobSort === "oldest" ? a.time - b.time || a.index - b.index : b.time - a.time || b.index - a.index)
+    .map(({ job }) => job);
 }
 function jobsPage() {
   const done = state.jobs.filter((j) => j.status === "done").length;
@@ -336,12 +635,16 @@ function jobsPage() {
 jobsPage = function () {
   const done = state.jobs.filter((job) => job.status === "done").length;
   const pending = state.jobs.filter((job) => ["waiting", "running", "submitting", "remote_running", "download_failed", "submit_unknown", "error"].includes(job.status)).length;
-  const rows = state.jobs.map((job) => {
-    const status = job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.status === "submit_unknown" ? "提交待确认" : job.status === "download_failed" ? "下载失败" : job.status === "remote_running" ? "即梦生成中" : job.progress ? `处理中 ${job.progress}%` : "等待中";
+  const rows = visibleJobs().map((job) => {
+    const status = job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.status === "submit_unknown" ? "提交待确认" : job.status === "download_failed" ? "下载失败" : job.status === "remote_running" ? (job.queueNote ? `排队中 · ${job.queueNote}` : "即梦生成中") : job.progress ? `处理中 ${job.progress}%` : "等待中";
     const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${job.real ? " · 真实任务" : " · 演示任务"}${job.error ? " · " + esc(job.error) : ""}`;
-    return `<div class="job"><img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt=""><div class="job-name"><strong>${esc(job.title)}</strong><small>${detail}</small></div><div class="progress"><i style="width:${job.progress}%"></i></div><span class="job-status">${status}</span></div>`;
+    const media = job.video
+      ? `<video class="job-video" data-preview-video="${esc(job.video)}" src="${esc(job.video)}" muted preload="metadata" aria-label="预览视频"></video>`
+      : `<img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt="">`;
+    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small>${detail}</small></div><div class="progress"><i style="width:${job.progress}%"></i></div><span class="job-status">${status}</span>${job.video ? `<button data-preview-video="${esc(job.video)}">预览</button>` : ""}</div>`;
   }).join("");
-  return `<div class="heading"><h1>生成队列</h1>${timer ? btn("pause", "暂停队列", "jobs") : ""}</div><div class="notice">图片任务可使用已配置模型；即梦视频在真实生成验收完成前不会提交。</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${String(state.jobs.length).padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成</small><strong>${String(done).padStart(2, "0")}</strong></div><div class="panel stat"><small>失败 / 处理中</small><strong>${String(pending).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>产物保存在本地项目目录</small></div>${rows || '<div class="empty">暂无任务</div>'}</div>`;
+  const video = [...state.jobs].reverse().find((job) => job.video)?.video;
+  return `<div class="heading"><h1>生成队列</h1><div class="actions">${video ? btn("open-video-folder", "打开视频文件夹", "folder") : ""}${timer ? btn("pause", "暂停队列", "jobs") : ""}</div></div><div class="toolbar"><div class="tools"><select id="jobQueueStatus" aria-label="任务状态"><option value="all" ${jobQueueStatus === "all" ? "selected" : ""}>全部状态</option><option value="active" ${jobQueueStatus === "active" ? "selected" : ""}>进行中</option><option value="done" ${jobQueueStatus === "done" ? "selected" : ""}>已完成</option><option value="failed" ${jobQueueStatus === "failed" ? "selected" : ""}>失败</option></select><select id="jobKindFilter" aria-label="任务类型"><option value="all" ${jobKindFilter === "all" ? "selected" : ""}>全部类型</option><option value="asset" ${jobKindFilter === "asset" ? "selected" : ""}>资产图片</option><option value="shot" ${jobKindFilter === "shot" ? "selected" : ""}>分镜视频</option></select><select id="jobSort" aria-label="时间排序"><option value="newest" ${jobSort === "newest" ? "selected" : ""}>最新优先</option><option value="oldest" ${jobSort === "oldest" ? "selected" : ""}>最早优先</option></select></div></div><div class="notice">图片任务可使用已配置模型；即梦视频在真实生成验收完成前不会提交。</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${String(state.jobs.length).padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成</small><strong>${String(done).padStart(2, "0")}</strong></div><div class="panel stat"><small>失败 / 处理中</small><strong>${String(pending).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>产物保存在本地项目目录</small></div>${rows || `<div class="empty">${state.jobs.length ? "没有符合当前筛选的任务。" : "暂无任务"}</div>`}</div>`;
 };
 function settingsPage() {
   return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">待接入生成</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}" placeholder="例如：GPT-Image-2"><label for="imageBaseUrl">接口地址 <small>OpenAI 兼容</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://你的接口地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}" placeholder="gpt-image-2"><label for="imageApiKey">API Key <small>${imageKeySaved ? "已保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" placeholder="${window.desktop?.saveImageKey ? "输入 API Key" : "密钥请在桌面客户端配置"}" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦账号池 <small>${connections.accounts.length}</small></h2>${btn("add-account", "添加账号", "plus")}</div><p class="field-help">每个账号使用独立的即梦窗口，登录状态保存在本机。</p><div class="account-list">${connections.accounts.map((a) => `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(a.name)}</strong><small>${a.enabled ? esc(a.loginMessage || "等待即梦登录") : "已暂停"}${typeof a.totalCredit === "number" ? " · " + a.totalCredit + " 积分" : ""}</small></div><button data-open-account="${a.id}">打开即梦</button><button data-check-account="${a.id}">检查登录</button><button class="ghost" data-toggle-account="${a.id}">${a.enabled ? "暂停" : "启用"}</button></div>`).join("") || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy" aria-label="账号分配方式"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><div class="setting-row"><span>账号池并行上限</span><input id="poolConcurrency" aria-label="账号池并行上限" type="number" min="1" max="20" value="${connections.pool.concurrency}"></div><p class="field-help">登录后点击「检查登录」保存并验证；生成待联调。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>演示队列并行任务数</span><select id="concurrency">${[1, 2, 3].map((n) => `<option value="${n}" ${+state.settings.concurrency === n ? "selected" : ""}>${n}</option>`).join("")}</select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
@@ -442,9 +745,11 @@ function addAccountModal() {
 }
 function footer() {
   if (view === "assets")
-    return `<footer class="bottom-bar"><div class="bottom-left"><input type="checkbox" class="check-all" id="all" ${selected.size === state.assets.length ? "checked" : ""} aria-label="全选资产"><span>已选 <b>${selected.size}</b> 个资产</span></div><div class="actions">${btn("batch-lock", "锁定已选", "lock")}${btn("generate-assets", "批量生成图片", "play", "primary")}</div></footer>`;
-  if (view === "shots")
-    return `<footer class="bottom-bar"><div class="bottom-left"><b>${state.shots.filter((s) => !missing(s).length).length} 个分镜已就绪</b></div>${btn("generate-shots", "批量生成视频", "play", "primary")}</footer>`;
+    return `<footer class="bottom-bar"><div class="bottom-left"><input type="checkbox" class="check-all" id="all" ${selected.size && selected.size === state.assets.length ? "checked" : ""} aria-label="全选资产"><span>已选 <b>${selected.size}</b> 个资产</span></div><div class="actions">${btn("select-all", selected.size === state.assets.length && state.assets.length ? "取消全选" : "全选", "check")}${btn("batch-lock", "批量固定", "lock")}${btn("delete-assets", "删除", "trash", "danger")}${btn("generate-assets", "批量生成图片", "play", "primary")}</div></footer>`;
+  if (view === "shots") {
+    const allSelected = selectedShots.size === state.shots.length && state.shots.length;
+    return `<footer class="bottom-bar"><div class="bottom-left"><input type="checkbox" class="check-all" id="allShots" ${allSelected ? "checked" : ""} aria-label="全选分镜"><span>已选 <b>${selectedShots.size}</b> 个分镜</span></div><div class="actions">${btn("select-all", allSelected ? "取消全选" : "全选", "check")}${btn("generate-shots", "批量生成视频", "play", "primary")}</div></footer>`;
+  }
   return "";
 }
 function modal(title, body, actions = "") {
@@ -497,7 +802,7 @@ function importModal(kind) {
   parsedImport = null;
   modal(
     kind === "assets" ? "导入资产清单" : "导入分镜脚本",
-    `<p>粘贴 JSON 或选择文件，同名资产会跳过。</p><div class="actions">${btn("load-json", "选择本地 JSON", "folder")}${btn("copy-template", "复制 Codex 指令", "link", "ghost")}</div><textarea id="importText" spellcheck="false" placeholder="${esc(JSON.stringify(kind === "assets" ? assetTemplate : shotTemplate, null, 2))}"></textarea><div id="importResult"><small>导入前请检查内容。</small></div><div class="modal-actions"><span></span><div class="actions">${btn("validate-import", "检查内容", "check")}<button class="primary" id="confirmImport" data-action="confirm-import" disabled>确认导入</button></div></div>`,
+    `<p>${kind === "assets" ? "粘贴 JSON 或选择文件，同名资产会跳过。" : "粘贴 JSON 或选择文件。镜头编号按「集数 + number」与当前项目里已有分镜比对，撞号会阻止导入。"}</p><div class="actions">${btn("load-json", "选择本地 JSON", "folder")}${btn("copy-template", "复制 Codex 指令", "link", "ghost")}</div><textarea id="importText" spellcheck="false" placeholder="${esc(JSON.stringify(kind === "assets" ? assetTemplate : shotTemplate, null, 2))}"></textarea><div id="importResult"><small>导入前请检查内容。</small></div><div class="modal-actions"><span></span><div class="actions">${btn("validate-import", "检查内容", "check")}<button class="primary" id="confirmImport" data-action="confirm-import" disabled>确认导入</button></div></div>`,
   );
 }
 function validateImport() {
@@ -553,21 +858,30 @@ function validateImport() {
       parsedImport = rows.map((s, i) => {
         const episode = Number.isInteger(s.episode) && s.episode > 0 ? s.episode : 1;
         const externalKey = String(s.key || `ep${episode}-shot${s.number}`).trim();
-        if (
-          typeof s.prompt !== "string" ||
-          !s.prompt.trim() ||
-          typeof s.title !== "string" ||
-          !s.title.trim() ||
-          !Number.isInteger(s.number) ||
-          s.number < 1 ||
-          numbers.has(`${episode}:${s.number}`) ||
-          shotKeys.has(externalKey) ||
-          !Number.isInteger(s.duration) ||
-          s.duration < 1 ||
-          s.duration > 60
-        )
+        const slot = `${episode}:${s.number}`;
+        const existingShot = state.shots.find(
+          (shot) => `${shot.episode || 1}:${shot.number}` === slot,
+        );
+        const existingKey = state.shots.find((shot) => shot.externalKey === externalKey);
+        if (typeof s.title !== "string" || !s.title.trim())
+          throw Error(`第 ${i + 1} 条缺少 title`);
+        if (typeof s.prompt !== "string" || !s.prompt.trim())
+          throw Error(`第 ${i + 1} 条缺少 prompt`);
+        if (!Number.isInteger(s.number) || s.number < 1)
+          throw Error(`第 ${i + 1} 条的 number 必须是正整数`);
+        if (!Number.isInteger(s.duration) || s.duration < 1 || s.duration > 60)
+          throw Error(`第 ${i + 1} 条的 duration 必须是 1–60 的整数秒`);
+        if (numbers.has(slot))
           throw Error(
-            `第 ${i + 1} 条需要不重复的正整数 number、title、prompt 和 1–60 秒 duration`,
+            existingShot
+              ? `第 ${i + 1} 条的第 ${episode} 集镜头 ${s.number} 与当前项目里的「${existingShot.title}」编号重复。这份 JSON 内部可以没有重复，但项目里已经占用了这个编号。请换到空项目，或先删除已有分镜后再导入。`
+              : `第 ${i + 1} 条与本次导入里的第 ${episode} 集镜头 ${s.number} 编号重复`,
+          );
+        if (shotKeys.has(externalKey))
+          throw Error(
+            existingKey
+              ? `第 ${i + 1} 条的 key「${externalKey}」与当前项目里的「${existingKey.title}」重复`
+              : `第 ${i + 1} 条的 key「${externalKey}」在本次导入中重复`,
           );
         if (!/^[a-zA-Z0-9_-]{1,120}$/.test(externalKey)) throw Error(`第 ${i + 1} 条 key 格式不正确`);
         numbers.add(`${episode}:${s.number}`);
@@ -617,7 +931,7 @@ function validateImport() {
 async function runRealAssetGeneration(assets) {
   close();
   view = "jobs";
-  for (const asset of assets) {
+  const jobs = assets.map((asset) => {
     const job = {
       id: crypto.randomUUID(),
       sourceId: asset.id,
@@ -629,10 +943,14 @@ async function runRealAssetGeneration(assets) {
       progress: 5,
       status: "running",
       real: true,
+      createdAt: new Date().toISOString(),
     };
     state.jobs.push(job);
-    persist();
-    render();
+    return { asset, job };
+  });
+  persist();
+  render();
+  await Promise.all(jobs.map(async ({ asset, job }) => {
     try {
       const output = await window.desktop.generateImage({
         projectId: activeProject.id,
@@ -653,7 +971,7 @@ async function runRealAssetGeneration(assets) {
     }
     persist();
     render();
-  }
+  }));
   toast("生图任务处理完成，请确认图片后锁定资产");
 }
 let videoPollTimer = null;
@@ -668,7 +986,18 @@ async function pollRemoteVideos() {
         job.status = "done";
         job.progress = 100;
         job.video = result.urls[0];
-      } else if (result.kind === "failed" || result.kind === "blocked" || result.kind === "rejected") {
+        job.queueNote = "";
+      } else if (result.kind === "accepted") {
+        job.status = "remote_running";
+        job.queueNote = result.message || "";
+        job.error = "";
+      } else if (result.kind === "failed" || result.kind === "blocked") {
+        job.status = "error";
+        job.error = result.message;
+      } else if ((result.kind === "rejected" || result.kind === "unrecognized") && job.submitId) {
+        job.status = "remote_running";
+        job.lastQueryError = result.message;
+      } else if (result.kind === "rejected" || result.kind === "unrecognized") {
         job.status = "error";
         job.error = result.message;
       } else if (result.kind === "download_failed") {
@@ -690,12 +1019,13 @@ function ensureVideoPolling() {
 async function runRealVideoGeneration(shots, account, config) {
   close();
   view = "jobs";
-  for (const shot of shots) {
-    const references = shot.refs.map((name) => state.assets.find((asset) => asset.name === name));
-    const job = { id: crypto.randomUUID(), sourceId: shot.id, kind: "shot", title: `${String(shot.number).padStart(3, "0")}_${shot.title}`, prompt: shot.prompt, refs: references.map((asset) => ({ id: asset.id, name: asset.name, image: asset.image })), accountId: account.id, accountName: account.name, model: config.model, ratio: state.settings.ratio, duration: Math.max(4, Math.min(shot.duration, config.model === "seedance2.5" ? 30 : 15)), resolution: config.resolution, progress: 10, status: "submitting", real: true };
-    state.jobs.push(job);
-    persist();
-    render();
+  const jobs = stageRealShotJobs(shots, account, config);
+  persist();
+  render();
+  for (const job of jobs) {
+    if (job.status === "error") continue;
+    const shot = shots.find((item) => item.id === job.sourceId);
+    const references = shot.refs.map((name, index) => assetForReference(shot, index));
     try {
       const result = await window.desktop.submitJimengVideo({ accountId: account.id, jobId: job.id, prompt: shot.prompt, images: references.map((asset) => asset.image), referenceNames: references.map((asset) => asset.name), model: config.model, ratio: state.settings.ratio, duration: job.duration, resolution: config.resolution });
       if (result.kind === "accepted") {
@@ -718,6 +1048,31 @@ async function runRealVideoGeneration(shots, account, config) {
   ensureVideoPolling();
   await pollRemoteVideos();
 }
+function stageRealShotJobs(shots, account, config) {
+  return shots.map((shot) => {
+    const references = shot.refs.map((name, index) => assetForReference(shot, index));
+    const missingRef = references.some((asset) => !asset?.image);
+    const job = { id: crypto.randomUUID(), sourceId: shot.id, kind: "shot", title: `${String(shot.number).padStart(3, "0")}_${shot.title}`, prompt: shot.prompt, refs: references.filter(Boolean).map((asset) => ({ id: asset.id, name: asset.name, image: asset.image })), accountId: account.id, accountName: account.name, model: config.model, ratio: state.settings.ratio, duration: Math.max(4, Math.min(shot.duration, config.model === "seedance2.5" ? 30 : 15)), resolution: config.resolution, progress: missingRef ? 0 : 10, status: missingRef ? "error" : "submitting", error: missingRef ? "有引用还没有可用图片" : "", real: true, createdAt: new Date().toISOString() };
+    state.jobs.push(job);
+    return job;
+  });
+}
+function pendingAssetGeneration(assets) {
+  const inflight = new Set(
+    state.jobs
+      .filter((job) => job.kind === "asset" && ["waiting", "running"].includes(job.status))
+      .map((job) => job.sourceId),
+  );
+  const done = new Set(
+    state.jobs
+      .filter((job) => job.kind === "asset" && job.real && job.status === "done")
+      .map((job) => job.sourceId),
+  );
+  return {
+    ready: assets.filter((asset) => !done.has(asset.id) && !inflight.has(asset.id)),
+    skippedDone: assets.filter((asset) => done.has(asset.id)).length,
+  };
+}
 function generate(kind) {
   let rows;
   if (kind === "asset") {
@@ -727,20 +1082,28 @@ function generate(kind) {
       return;
     }
   } else {
-    rows = state.shots.filter((s) => !missing(s).length);
+    const chosen = state.shots.filter((shot) => selectedShots.has(shot.id));
+    if (!chosen.length) {
+      toast("请先勾选要生成的分镜");
+      return;
+    }
+    rows = chosen.filter((shot) => !missing(shot).length);
     if (!rows.length) {
-      toast("请先确认并锁定分镜引用的资产");
+      toast("勾选的分镜还有引用待确认");
       return;
     }
   }
-  const available = rows.filter(
-    (r) =>
-      !state.jobs.some(
-        (j) => j.sourceId === r.id && ["waiting", "running"].includes(j.status),
-      ),
-  );
+  const assetBatch = kind === "asset" ? pendingAssetGeneration(rows) : null;
+  const available = assetBatch
+    ? assetBatch.ready
+    : rows.filter(
+        (r) =>
+          !state.jobs.some(
+            (j) => j.sourceId === r.id && ["waiting", "running"].includes(j.status),
+          ),
+      );
   if (!available.length) {
-    toast("所选内容已经在队列中");
+    toast(assetBatch?.skippedDone ? `已成功生成 ${assetBatch.skippedDone} 个，不会重复提交` : "所选内容已经在队列中");
     return;
   }
   const realImage = kind === "asset" && window.desktop?.generateImage;
@@ -754,7 +1117,7 @@ function generate(kind) {
       toast("没有已授权且具备官方 CLI 生成权限的账号");
       return;
     }
-    modal("确认即梦视频任务", `<p>将提交 ${available.length} 个真实视频任务，产生的积分以即梦实际记录为准。</p><label>执行账号</label><select id="videoAccount">${accounts.map((account) => `<option value="${account.id}">${esc(account.name)}${typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : ""}</option>`).join("")}</select><label>模型</label><select id="videoModel"><option value="seedance2.0">Seedance 2.0</option><option value="seedance2.0fast">Seedance 2.0 Fast</option><option value="seedance2.0_vip">Seedance 2.0 VIP</option><option value="seedance2.5">Seedance 2.5</option></select><label>分辨率</label><select id="videoResolution"><option value="720p">720p</option></select><div class="notice">参考图按分镜资产顺序提交；关闭客户端后可按任务 ID 恢复查询，不会自动重复提交。</div><div class="modal-actions">${btn("close", "取消")}<button class="primary" id="startRealVideo">确认并提交</button></div>`);
+    modal("确认即梦视频任务", `<p>将提交 ${available.length} 个真实视频任务，产生的积分以即梦实际记录为准。</p><label>执行账号</label><select id="videoAccount">${accounts.map((account) => `<option value="${account.id}">${esc(account.name)}${typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : ""}</option>`).join("")}</select><label>模型</label><select id="videoModel"><option value="seedance2.0">Seedance 2.0</option><option value="seedance2.0fast">Seedance 2.0 Fast</option><option value="seedance2.0_vip">Seedance 2.0 VIP</option><option value="seedance2.0fast_vip">Seedance 2.0 Fast VIP</option><option value="seedance2.5">Seedance 2.5</option></select><label>分辨率</label><select id="videoResolution"><option value="720p">720p</option></select><div class="notice">参考图按分镜资产顺序提交；关闭客户端后可按任务 ID 恢复查询，不会自动重复提交。</div><div class="modal-actions">${btn("close", "取消")}<button class="primary" id="startRealVideo">确认并提交</button></div>`);
     document.querySelector("#startRealVideo").onclick = () => {
       const account = accounts.find((candidate) => candidate.id === document.querySelector("#videoAccount").value);
       runRealVideoGeneration(available, account, { model: document.querySelector("#videoModel").value, resolution: document.querySelector("#videoResolution").value });
@@ -763,7 +1126,7 @@ function generate(kind) {
   }
   modal(
     realImage ? "确认真实生图" : "开始一批演示任务",
-    `<p>将加入 ${available.length} 个${kind === "asset" ? "资产图片" : "分镜视频"}任务。</p><div class="notice">${realImage ? "将调用已配置的图片模型并可能产生费用；图片保存到本地，生成后仍需确认并锁定。" : kind === "asset" ? "浏览器预览使用演示进度，不调用真实模型。" : "即梦真实视频尚未通过权限与下载验收，当前不会提交或扣除积分。"}</div><div class="modal-actions">${btn("close", "取消")}<button class="primary" id="startDemo">${realImage ? "确认并开始" : "开始演示"}</button></div>`,
+    `<p>将加入 ${available.length} 个${kind === "asset" ? "资产图片" : "分镜视频"}任务。</p><div class="notice">${assetBatch?.skippedDone ? `已成功的 ${assetBatch.skippedDone} 个会跳过，不会再次生成。` : ""}${realImage ? "将调用已配置的图片模型并可能产生费用；图片保存到本地，生成后仍需确认并锁定。" : kind === "asset" ? "浏览器预览使用演示进度，不调用真实模型。" : "即梦真实视频尚未通过权限与下载验收，当前不会提交或扣除积分。"}</div><div class="modal-actions">${btn("close", "取消")}<button class="primary" id="startDemo">${realImage ? "确认并开始" : "开始演示"}</button></div>`,
   );
   document.querySelector("#startDemo").onclick = () => {
     if (realImage) {
@@ -791,6 +1154,7 @@ function generate(kind) {
         ratio: state.settings.ratio,
         progress: 0,
         status: "waiting",
+        createdAt: new Date().toISOString(),
         image:
           kind === "asset"
             ? r.type === "角色"
@@ -867,6 +1231,25 @@ async function exportProject() {
   toast("项目备份已导出");
 }
 document.addEventListener("click", async (e) => {
+  const preview = e.target.closest("[data-preview-video]");
+  if (preview?.dataset?.previewVideo) {
+    modal("预览视频", `<video class="preview-video" src="${esc(preview.dataset.previewVideo)}" controls autoplay></video>`);
+    return;
+  }
+  const shotPick = e.target.closest("[data-select-shot]");
+  if (shotPick?.dataset?.selectShot) {
+    const id = shotPick.dataset.selectShot;
+    selectedShots.has(id) ? selectedShots.delete(id) : selectedShots.add(id);
+    render();
+    return;
+  }
+  const picked = e.target.closest("[data-select]");
+  if (picked?.dataset?.select) {
+    const id = picked.dataset.select;
+    selected.has(id) ? selected.delete(id) : selected.add(id);
+    render();
+    return;
+  }
   const el = e.target.closest("button,[data-detail]");
   if (!el) return;
   if (el.dataset.view) {
@@ -876,12 +1259,6 @@ document.addEventListener("click", async (e) => {
   }
   if (el.dataset.filter) {
     filter = el.dataset.filter;
-    render();
-    return;
-  }
-  if (el.dataset.select) {
-    const id = el.dataset.select;
-    selected.has(id) ? selected.delete(id) : selected.add(id);
     render();
     return;
   }
@@ -1027,33 +1404,26 @@ document.addEventListener("click", async (e) => {
     input.click();
     return;
   }
+  if (el.dataset.mention) {
+    applyMention(el.dataset.mention);
+    return;
+  }
   if (el.dataset.editShot) {
     const s = state.shots.find((s) => s.id === el.dataset.editShot);
     modal(
-      "编辑分镜提示词",
-      `<label>镜头名称</label><input id="shotTitle" value="${esc(s.title)}"><label>提示词（@资产名 后用空格或标点分隔）</label><textarea id="shotPrompt">${esc(s.prompt)}</textarea><div class="modal-actions">${btn("close", "取消")}<button id="saveShot" class="primary">保存并匹配资产</button></div>`,
+      "编辑分镜",
+      `${shotForm(s)}<div class="modal-actions">${btn("close", "取消")}<button id="saveShot" class="primary">保存并匹配资产</button></div>`,
     );
     document.querySelector("#saveShot").onclick = () => {
-      const title = document.querySelector("#shotTitle").value.trim(),
-        prompt = document.querySelector("#shotPrompt").value.trim();
-      if (!title || !prompt) {
-        toast("镜头名称和提示词不能为空");
-        return;
-      }
-      s.title = title;
-      s.prompt = prompt;
-      s.refs = [
-        ...new Set(
-          Array.from(
-            s.prompt.matchAll(/@([^\s，。！？、；：,.!?:;]+)/g),
-            (m) => m[1],
-          ),
-        ),
-      ];
+      const form = readShotForm(s.id);
+      if (!form) return;
+      Object.assign(s, form);
+      syncShotRefs(s, form.prompt);
       persist();
       close();
       render();
     };
+    mountPromptEditor();
     return;
   }
   if (el.dataset.detail) {
@@ -1252,6 +1622,45 @@ document.addEventListener("click", async (e) => {
   if (action === "export") await exportProject();
   if (action === "import-assets") importModal("assets");
   if (action === "import-shots") importModal("shots");
+  if (action === "add-shot") {
+    modal(
+      "新增分镜",
+      `${shotForm()}${`<div class="modal-actions">${btn("close", "取消")}<button id="saveShot" class="primary">创建分镜</button></div>`}`,
+    );
+    document.querySelector("#saveShot").onclick = () => {
+      const form = readShotForm();
+      if (!form) return;
+      const shot = { id: crypto.randomUUID(), externalKey: "", refs: [], refKeys: [], ...form };
+      syncShotRefs(shot, form.prompt);
+      state.shots.push(shot);
+      state.shots.sort((a, b) => (a.episode || 1) - (b.episode || 1) || a.number - b.number);
+      persist();
+      close();
+      render();
+      toast("分镜已创建");
+    };
+    mountPromptEditor();
+    return;
+  }
+  if (action === "delete-shots") {
+    if (!state.shots.length) {
+      toast("没有可删除的分镜");
+      return;
+    }
+    modal(
+      "删除全部",
+      `<p>将删除当前项目的全部 ${state.shots.length} 条分镜。资产会保留，此操作不能撤销。</p><div class="modal-actions">${btn("close", "取消")}<button id="confirmDeleteShots" class="danger">删除全部</button></div>`,
+    );
+    document.querySelector("#confirmDeleteShots").onclick = () => {
+      state.shots = [];
+      selectedShots = new Set();
+      persist();
+      close();
+      render();
+      toast("分镜已全部删除");
+    };
+    return;
+  }
   if (action === "validate-import") validateImport();
   if (action === "confirm-import" && parsedImport) {
     const count = parsedImport.length;
@@ -1275,6 +1684,13 @@ document.addEventListener("click", async (e) => {
       modal("Codex 导入指令", `<textarea readonly>${esc(text)}</textarea>`);
     }
   }
+  if (action === "select-all") {
+    if (view === "shots")
+      selectedShots = selectedShots.size === state.shots.length ? new Set() : new Set(state.shots.map((shot) => shot.id));
+    else
+      selected = selected.size === state.assets.length ? new Set() : new Set(state.assets.map((asset) => asset.id));
+    render();
+  }
   if (action === "select-missing") {
     selected = new Set(state.assets.filter((a) => !a.image).map((a) => a.id));
     render();
@@ -1284,19 +1700,57 @@ document.addEventListener("click", async (e) => {
     render();
   }
   if (action === "batch-lock") {
-    let n = 0;
-    state.assets
-      .filter((a) => selected.has(a.id) && a.image && !a.locked)
-      .forEach((a) => {
-        a.locked = true;
-        n++;
-      });
+    const chosen = state.assets.filter((asset) => selected.has(asset.id) && !asset.locked);
+    let fixed = 0;
+    let missing = 0;
+    chosen.forEach((asset) => {
+      if (!asset.image) {
+        missing += 1;
+        return;
+      }
+      asset.locked = true;
+      fixed += 1;
+    });
     persist();
     render();
-    toast(n ? `已锁定 ${n} 个资产` : "请先选择已生成图片的资产");
+    toast(fixed ? `已固定 ${fixed} 个资产${missing ? `，${missing} 个还没有图片已跳过` : ""}` : "请先勾选已有图片的资产");
+  }
+  if (action === "delete-assets") {
+    const ids = [...selected];
+    if (!ids.length) {
+      toast("请先勾选要删除的资产");
+      return;
+    }
+    const names = state.assets.filter((asset) => selected.has(asset.id)).map((asset) => asset.name);
+    modal(
+      "删除资产",
+      `<p>将删除已勾选的 ${ids.length} 个资产：${esc(names.slice(0, 8).join("、"))}${names.length > 8 ? "…" : ""}。分镜里的对应引用会变成待确认，此操作不能撤销。</p><div class="modal-actions">${btn("close", "取消")}<button id="confirmDeleteAssets" class="danger">删除</button></div>`,
+    );
+    document.querySelector("#confirmDeleteAssets").onclick = () => {
+      const removed = new Set(ids);
+      state.assets = state.assets.filter((asset) => !removed.has(asset.id));
+      selected = new Set();
+      persist();
+      close();
+      render();
+      toast(`已删除 ${removed.size} 个资产`);
+    };
+    return;
   }
   if (action === "generate-assets") generate("asset");
   if (action === "generate-shots") generate("shot");
+  if (action === "open-video-folder") {
+    const video = [...state.jobs].reverse().find((job) => job.video)?.video;
+    if (!video || !window.desktop?.openVideoFolder) {
+      toast("还没有已下载的视频");
+      return;
+    }
+    try {
+      await window.desktop.openVideoFolder(video);
+    } catch (error) {
+      toast(String(error?.message || error).slice(0, 120));
+    }
+  }
   if (action === "pause") {
     clearInterval(timer);
     timer = null;
@@ -1340,6 +1794,38 @@ document.addEventListener("click", async (e) => {
     };
   }
 });
+document.addEventListener("keyup", (e) => {
+  if (e.target.id === "shotPrompt" && !e.key.startsWith("Arrow") && e.key !== "Enter")
+    refreshMentionFromPrompt(e.target);
+});
+document.addEventListener("compositionend", (e) => {
+  if (e.target.id === "shotPromptEditor") syncPromptEditor(e.target);
+});
+document.addEventListener("keydown", (e) => {
+  if (!["shotPrompt", "shotPromptEditor", "mentionSearch"].includes(e.target.id)) return;
+  const menu = document.querySelector("#mentionMenu");
+  if (!menu || menu.hidden || !menu.querySelectorAll) return;
+  if (e.key === "Escape") {
+    paintMentionMenu(null);
+    e.stopImmediatePropagation();
+    return;
+  }
+  const options = [...menu.querySelectorAll("[data-mention]")];
+  if (!options.length) return;
+  const current = options.findIndex((option) => option.classList.contains("active"));
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const next = e.key === "ArrowDown"
+      ? (current + 1) % options.length
+      : (current - 1 + options.length) % options.length;
+    options.forEach((option, index) => option.classList.toggle("active", index === next));
+    return;
+  }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    (options[current] || options[0]).click();
+  }
+});
 document.addEventListener("input", (e) => {
   if (e.target.id === "search") {
     const p = e.target.selectionStart;
@@ -1349,6 +1835,10 @@ document.addEventListener("input", (e) => {
     input.focus();
     input.setSelectionRange(p, p);
   }
+  if (e.target.id === "shotPrompt") refreshMentionFromPrompt(e.target);
+  if (e.target.id === "shotPromptEditor" && !e.isComposing) syncPromptEditor(e.target);
+  if (e.target.id === "mentionSearch" && mentionRange)
+    paintMentionMenu({ ...mentionRange, query: e.target.value });
   if (e.target.id === "importText") {
     parsedImport = null;
     document.querySelector("#confirmImport").disabled = true;
@@ -1365,6 +1855,20 @@ document.addEventListener("change", (e) => {
   }
   if (e.target.id === "statusFilter") {
     statusFilter = e.target.value;
+    render();
+  }
+  if (e.target.id === "shotStatus") {
+    shotStatusFilter = e.target.value;
+    render();
+  }
+  if (["jobQueueStatus", "jobKindFilter", "jobSort"].includes(e.target.id)) {
+    if (e.target.id === "jobQueueStatus") jobQueueStatus = e.target.value;
+    if (e.target.id === "jobKindFilter") jobKindFilter = e.target.value;
+    if (e.target.id === "jobSort") jobSort = e.target.value;
+    render();
+  }
+  if (e.target.id === "allShots") {
+    selectedShots = e.target.checked ? new Set(state.shots.map((shot) => shot.id)) : new Set();
     render();
   }
   if (e.target.id === "poolStrategy") {
@@ -1424,11 +1928,13 @@ if (window.desktop?.jimengRuntimeStatus) {
   }).catch(() => { jimengRuntime = { ok: false, message: "无法检查官方 CLI 运行环境" }; });
 }
 if (window.desktop?.loadWorkspace) {
+  const generationAtLoad = workspaceGeneration;
   Promise.all([
     window.desktop.loadWorkspace(),
     window.desktop.loadConnections(),
   ])
     .then(([savedWorkspace, savedConnections]) => {
+      if (workspaceGeneration !== generationAtLoad) return;
       if (savedWorkspace?.projects?.length) {
         workspace = savedWorkspace;
         activeProject =
@@ -1457,6 +1963,33 @@ if (window.desktop?.loadWorkspace) {
       } else {
         window.desktop.saveConnections(connections).catch(() => {});
       }
+      let resumed = false;
+      for (const project of workspace.projects) {
+        for (const job of project.data.jobs || []) {
+          if (job.kind === "asset" && job.real && ["waiting", "running"].includes(job.status)) {
+            job.status = "error";
+            job.error = "上次提交已中断，可重新生成";
+            job.progress = 0;
+            resumed = true;
+          }
+          if (job.kind === "shot" && job.real && job.status === "submitting" && !job.submitId) {
+            job.status = "error";
+            job.error = "上次提交已中断，没有拿到任务 ID，可重新提交";
+            job.progress = 0;
+            resumed = true;
+          }
+          if (job.submitId && job.status === "error" && job.error === "无法识别官方 CLI 返回结果") {
+            job.status = "remote_running";
+            job.error = "";
+            resumed = true;
+          }
+          if (job.kind === "shot" && job.status === "error" && job.error === "upload resource \\") {
+            job.error = "参考图上传失败；旧版本未保存完整原因，请重新提交该分镜";
+            resumed = true;
+          }
+        }
+      }
+      if (resumed) persist();
       render();
       if (workspace.projects.some((project) => project.data.jobs?.some((job) => job.real && ["remote_running", "download_failed"].includes(job.status)))) {
         ensureVideoPolling();
