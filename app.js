@@ -461,7 +461,7 @@ function detail(id) {
   const references = (a.references || []).map((reference, index) => `<div class="reference-image"><img src="${esc(reference.url)}" alt="参考图 ${index + 1}"><span>参考 ${index + 1}</span>${a.locked ? "" : `<button data-remove-reference="${reference.id}" data-asset-id="${a.id}" aria-label="删除参考图 ${index + 1}">${icon("close")}</button>`}</div>`).join("");
   modal(
     `${esc(a.name)} <span class="category">${a.type}</span>`,
-    `<div class="asset-detail-layout"><section class="asset-detail-media"><div class="detail-preview">${a.image ? `<img class="detail-image" src="${esc(a.image)}" alt="${esc(a.name)}">` : `<div class="detail-empty">${icon("image")}<span>尚未生成资产图片</span></div>`}</div>${versions ? `<div class="detail-section-head"><strong>图片版本</strong><small>${a.versions.length} 个</small></div><div class="asset-versions">${versions}</div>` : ""}<div class="detail-section-head"><strong>生成参考图</strong><small>${(a.references || []).length}/15</small></div><div class="reference-images">${references}${!a.locked && (a.references || []).length < 15 ? `<button class="reference-add" data-add-reference="${id}">${icon("upload")}<span>上传参考图</span></button>` : ""}</div><p class="detail-help">参考图仅在生成新图片时提交给模型，不会替换当前版本。</p></section><section class="asset-detail-form"><label>资产名称</label><input id="assetName" value="${esc(a.name)}" ${a.locked ? "disabled" : ""}><label>图片生成提示词</label><textarea id="assetPrompt" class="detail-prompt" ${a.locked ? "disabled" : ""}>${esc(a.prompt)}</textarea><small>${a.locked ? "已固定当前版本，解锁后可编辑。" : "固定后可用于分镜；新生成结果会作为独立版本保存。"}</small></section></div><div class="modal-actions asset-detail-actions"><div>${!a.locked ? `<button data-replace="${id}">${icon("upload")}上传成品版本</button>` : ""}</div><div class="actions"><button data-lock="${id}">${icon(a.locked ? "lock" : "check")}${a.locked ? "解锁编辑" : a.image ? "固定当前版本" : "保存提示词"}</button></div></div>`,
+    `<div class="asset-detail-layout"><section class="asset-detail-media"><div class="detail-preview">${a.image ? `<img class="detail-image" src="${esc(a.image)}" alt="${esc(a.name)}">` : `<div class="detail-empty">${icon("image")}<span>尚未生成资产图片</span></div>`}</div>${versions ? `<div class="detail-section-head"><strong>图片版本</strong><small>${a.versions.length} 个</small></div><div class="asset-versions">${versions}</div>` : ""}<div class="detail-section-head"><strong>生成参考图</strong><small>${(a.references || []).length}/15</small></div><div class="reference-images">${references}${!a.locked && (a.references || []).length < 15 ? `<button class="reference-add" data-add-reference="${id}">${icon("upload")}<span>上传参考图</span></button>` : ""}</div><p class="detail-help">参考图仅在生成新图片时提交给模型，不会替换当前版本。</p></section><section class="asset-detail-form"><label>资产名称</label><input id="assetName" value="${esc(a.name)}" ${a.locked ? "disabled" : ""}><label>图片生成提示词</label><textarea id="assetPrompt" class="detail-prompt" ${a.locked ? "disabled" : ""}>${esc(a.prompt)}</textarea><small>${a.locked ? "已固定当前版本，解锁后可编辑。" : "固定后可用于分镜；新生成结果会作为独立版本保存。"}</small></section></div><div class="modal-actions asset-detail-actions"><div>${!a.locked ? `<button data-replace="${id}">${icon("upload")}上传成品版本</button>` : ""}</div><div class="actions">${!a.locked ? `<button class="primary" data-generate-asset="${id}">${icon("play")}${(a.references || []).length ? `带 ${(a.references || []).length} 张参考图生成` : "生成图片"}</button>` : ""}<button data-lock="${id}">${icon(a.locked ? "lock" : "check")}${a.locked ? "解锁编辑" : a.image ? "固定当前版本" : "保存提示词"}</button></div></div>`,
   );
 }
 const assetTemplate = {
@@ -913,6 +913,33 @@ document.addEventListener("click", async (e) => {
     persist();
     detail(a.id);
     render();
+    return;
+  }
+  if (el.dataset.generateAsset) {
+    const asset = state.assets.find((item) => item.id === el.dataset.generateAsset);
+    if (!asset || asset.locked) return;
+    const name = document.querySelector("#assetName")?.value.trim();
+    const prompt = document.querySelector("#assetPrompt")?.value.trim();
+    if (!name || !prompt) {
+      toast("请填写资产名称和图片生成提示词");
+      return;
+    }
+    if (state.assets.some((item) => item.id !== asset.id && item.name === name)) {
+      toast("资产名称已存在");
+      return;
+    }
+    const old = asset.name;
+    asset.name = name;
+    asset.prompt = prompt;
+    state.shots.forEach((shot) => {
+      shot.refs = shot.refs.map((value) => (value === old ? name : value));
+      shot.prompt = shot.prompt.replace(
+        /@([^\s，。！？、；：,.!?:;]+)/g,
+        (token, value) => (value === old ? `@${name}` : token),
+      );
+    });
+    persist();
+    runRealAssetGeneration([asset]);
     return;
   }
   if (el.dataset.addReference) {
