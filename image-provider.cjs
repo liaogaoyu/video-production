@@ -44,6 +44,7 @@ function taskEndpoint(baseUrl, taskId) {
     /\/images\/generations\/?$/,
     `/tasks/${encodeURIComponent(taskId)}`,
   );
+  if (isApiMart(baseUrl)) url.searchParams.set("language", "zh");
   return url.href;
 }
 
@@ -53,23 +54,32 @@ function apiError(payload) {
   return String(error.message || error.detail || error.code || error).slice(0, 500);
 }
 
+function firstHttpUrl(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values.find((item) => typeof item === "string" && /^https?:\/\//i.test(item)) || "";
+}
+
 function imageItem(payload) {
+  const nested = payload?.data && !Array.isArray(payload.data) ? payload.data : null;
   const candidates = [
     payload?.data?.[0],
     payload?.result?.images?.[0],
-    payload?.data?.result?.images?.[0],
+    nested?.result?.images?.[0],
     payload?.output?.images?.[0],
   ];
   const value = candidates.find(Boolean);
   if (typeof value === "string") return { url: value };
-  if (value?.image_url && !value.url) return { ...value, url: value.image_url };
-  if (value?.b64 && !value.b64_json) return { ...value, b64_json: value.b64 };
-  return value;
+  const url = firstHttpUrl(value?.url) || firstHttpUrl(value?.image_url);
+  if (url) return { ...value, url };
+  if (value?.b64_json || value?.b64)
+    return { ...value, b64_json: value.b64_json || value.b64 };
+  return null;
 }
 
 function submittedTask(payload) {
-  const status = String(payload?.status || payload?.data?.status || "").toLowerCase();
-  const id = payload?.task_id || payload?.data?.task_id;
+  const record = Array.isArray(payload?.data) ? payload.data[0] : payload?.data || payload;
+  const status = String(record?.status || payload?.status || "").toLowerCase();
+  const id = record?.task_id || payload?.task_id;
   return id && ["submitted", "queued", "pending", "processing", "running"].includes(status)
     ? { id: String(id), status }
     : null;
@@ -79,6 +89,7 @@ async function generateImage({
   config,
   prompt,
   apiKey,
+  references = [],
   projectId,
   assetId,
   outputRoot,
@@ -89,6 +100,8 @@ async function generateImage({
   if (!config?.baseUrl || !config?.model || !prompt?.trim())
     throw new Error("生图配置或提示词不完整");
   if (!apiKey?.trim()) throw new Error("请先保存 API Key");
+  if (!Array.isArray(references) || references.length > 15)
+    throw new Error("参考图数量必须在 0–15 张之间");
   if (
     !/^[a-z0-9_-]{1,80}$/i.test(projectId) ||
     !/^[a-z0-9_-]{1,80}$/i.test(assetId)
@@ -109,6 +122,10 @@ async function generateImage({
         size: sizeForRatio(config.ratio),
         n: 1,
       };
+  if (references.length) {
+    if (!apiMart) throw new Error("当前参考图上传仅支持 APIMart Images 接口");
+    body.image_urls = references;
+  }
   const headers = {
     "content-type": "application/json",
     authorization: `Bearer ${apiKey}`,
@@ -169,15 +186,28 @@ async function generateImage({
     const downloaded = await fetchImpl(remote.href, { redirect: "follow" });
     if (!downloaded.ok) throw new Error(`图片下载失败：${downloaded.status}`);
     const contentType = downloaded.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/"))
+    const fromName = path.extname(new URL(remote.href).pathname).toLowerCase();
+    const named = [".png", ".jpg", ".jpeg", ".webp"].includes(fromName);
+    if (!contentType.startsWith("image/") && !named)
       throw new Error("模型返回的文件不是图片");
     extension = contentType.includes("jpeg")
       ? "jpg"
       : contentType.includes("webp")
         ? "webp"
-        : "png";
+        : contentType.includes("png")
+          ? "png"
+          : fromName === ".jpg" || fromName === ".jpeg"
+            ? "jpg"
+            : fromName === ".webp"
+              ? "webp"
+              : "png";
     bytes = Buffer.from(await downloaded.arrayBuffer());
-  } else throw new Error("生图接口没有返回图片数据");
+  } else {
+    const shape = payload && typeof payload === "object"
+      ? Object.keys(payload).slice(0, 8).join(", ")
+      : typeof payload;
+    throw new Error(`生图接口没有返回图片数据（响应字段：${shape || "空"}）`);
+  }
   if (!bytes.length || bytes.length > 50 * 1024 * 1024)
     throw new Error("图片文件为空或超过 50MB");
   const directory = path.join(outputRoot, projectId, "assets", assetId);

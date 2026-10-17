@@ -22,7 +22,7 @@ test("image endpoint and ratio mapping are deterministic", () => {
   assert.throws(() => resolutionForApiMart("720p"), /只支持/);
   assert.equal(
     taskEndpoint("https://api.apimart.ai/v1", "task 1"),
-    "https://api.apimart.ai/v1/tasks/task%201",
+    "https://api.apimart.ai/v1/tasks/task%201?language=zh",
   );
 });
 
@@ -100,6 +100,7 @@ test("APIMart uses ratio and resolution then polls its asynchronous task", async
     },
     prompt: "角色设定图",
     apiKey: "test-key",
+    references: ["data:image/png;base64,cmVm"],
     projectId: "project-1",
     assetId: "asset-1",
     outputRoot,
@@ -112,9 +113,72 @@ test("APIMart uses ratio and resolution then polls its asynchronous task", async
     size: "16:9",
     resolution: "2k",
     n: 1,
+    image_urls: ["data:image/png;base64,cmVm"],
   });
-  assert.equal(calls[1].url, "https://api.apimart.ai/v1/tasks/task-123");
+  assert.equal(calls[1].url, "https://api.apimart.ai/v1/tasks/task-123?language=zh");
   assert.equal(fs.readFileSync(result.path, "utf8"), "fake-webp");
+});
+
+test("APIMart envelope returns a task id then an image URL array", async () => {
+  const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), "storydock-apimart-envelope-"));
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    if (calls.length === 1)
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          data: [{ status: "submitted", task_id: "task_01ABC" }],
+        }),
+      };
+    if (calls.length === 2)
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          data: { id: "task_01ABC", status: "processing", progress: 10 },
+        }),
+      };
+    if (calls.length === 3)
+      return {
+        ok: true,
+        json: async () => ({
+          code: 200,
+          data: {
+            id: "task_01ABC",
+            status: "completed",
+            progress: 100,
+            result: {
+              images: [{ url: ["https://cdn.example.com/generated.png"] }],
+            },
+          },
+        }),
+      };
+    return {
+      ok: true,
+      headers: { get: () => "application/octet-stream" },
+      arrayBuffer: async () => Buffer.from("fake-png"),
+    };
+  };
+  const result = await generateImage({
+    config: {
+      baseUrl: "https://api.apimart.ai/v1",
+      model: "gpt-image-2",
+      ratio: "16:9",
+      resolution: "1k",
+    },
+    prompt: "一只橘猫",
+    apiKey: "test-key",
+    projectId: "project-1",
+    assetId: "asset-1",
+    outputRoot,
+    fetchImpl,
+    pollIntervalMs: 0,
+  });
+  assert.equal(calls[1], "https://api.apimart.ai/v1/tasks/task_01ABC?language=zh");
+  assert.equal(calls[3], "https://cdn.example.com/generated.png");
+  assert.equal(fs.readFileSync(result.path, "utf8"), "fake-png");
 });
 
 test("successful HTTP error payload keeps the provider message", async () => {
