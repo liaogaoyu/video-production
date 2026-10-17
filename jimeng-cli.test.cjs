@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createJimengCliPool } = require('./jimeng-cli.cjs');
+const { bindPromptReferences, createJimengCliPool } = require('./jimeng-cli.cjs');
 
 function setup(outputs) {
   const calls = [];
@@ -53,17 +53,36 @@ test('video submission stages ordered images and returns an accepted remote id',
   fs.writeFileSync(one, 'one');
   fs.writeFileSync(two, 'two');
   const { pool, calls } = setup([{ stdout: 'submit_id: remote-123\ngen_status: querying\n' }]);
-  const result = await pool.submitVideo('33333333-3333-3333-3333-333333333333', { jobId: 'job-1', prompt: '人物在场景中转身', images: [one, two], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' });
-  assert.deepEqual(result, { kind: 'accepted', submitId: 'remote-123', status: 'querying' });
+  const result = await pool.submitVideo('33333333-3333-3333-3333-333333333333', { jobId: 'job-1', prompt: '场景：@兜率宫·大殿内。@银童子 在场景中转身，再看向 @银童子。', images: [one, two], referenceNames: ['兜率宫·大殿内', '银童子'], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' });
+  assert.equal(result.kind, 'accepted');
+  assert.equal(result.submitId, 'remote-123');
+  assert.equal(result.status, 'querying');
   const command = calls[0].args;
   assert.ok(command.indexOf('/work/input/01.png') < command.indexOf('/work/input/02.jpg'));
   assert.equal(command.includes('--model_version'), true);
   assert.equal(command.includes('seedance2.0'), true);
+  const submittedPrompt = command[command.indexOf('--prompt') + 1];
+  assert.equal(submittedPrompt.includes('@兜率宫·大殿内'), false);
+  assert.equal(submittedPrompt.includes('@银童子'), false);
+  assert.match(submittedPrompt, /参考图1对应资产“兜率宫·大殿内”/);
+  assert.match(submittedPrompt, /参考图2对应资产“银童子”/);
+  assert.match(submittedPrompt, /场景：参考图1。参考图2 在场景中转身，再看向 参考图2。/);
+  assert.deepEqual(result.referenceBindings, [
+    { name: '兜率宫·大殿内', imageNumber: 1 },
+    { name: '银童子', imageNumber: 2 },
+  ]);
+});
+
+test('prompt binding keeps the CLI image order as the semantic reference order', () => {
+  assert.equal(
+    bindPromptReferences('@角色甲 拿起 @道具乙', ['角色甲', '道具乙']),
+    '参考图对应关系：参考图1对应资产“角色甲”；参考图2对应资产“道具乙”。\n参考图1 拿起 参考图2',
+  );
 });
 
 test('video preflight rejects invalid limits before starting Docker', async () => {
   const { pool, calls } = setup([]);
-  await assert.rejects(() => pool.submitVideo('44444444-4444-4444-4444-444444444444', { jobId: 'job-2', prompt: 'p', images: [], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' }), /参考图数量/);
+  await assert.rejects(() => pool.submitVideo('44444444-4444-4444-4444-444444444444', { jobId: 'job-2', prompt: 'p', images: [], referenceNames: [], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' }), /参考图数量/);
   assert.equal(calls.length, 0);
 });
 

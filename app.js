@@ -697,9 +697,11 @@ async function runRealVideoGeneration(shots, account, config) {
     persist();
     render();
     try {
-      const result = await window.desktop.submitJimengVideo({ accountId: account.id, jobId: job.id, prompt: shot.prompt, images: references.map((asset) => asset.image), model: config.model, ratio: state.settings.ratio, duration: job.duration, resolution: config.resolution });
+      const result = await window.desktop.submitJimengVideo({ accountId: account.id, jobId: job.id, prompt: shot.prompt, images: references.map((asset) => asset.image), referenceNames: references.map((asset) => asset.name), model: config.model, ratio: state.settings.ratio, duration: job.duration, resolution: config.resolution });
       if (result.kind === "accepted") {
         job.submitId = result.submitId;
+        job.submittedPrompt = result.submittedPrompt;
+        job.referenceBindings = result.referenceBindings;
         job.status = "remote_running";
         job.progress = 25;
       } else {

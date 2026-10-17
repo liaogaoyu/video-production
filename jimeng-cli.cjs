@@ -7,6 +7,22 @@ const { execFile } = require('node:child_process');
 
 const ACCOUNT_RE = /^[a-f0-9-]{36}$/;
 
+function bindPromptReferences(prompt, referenceNames) {
+  if (!Array.isArray(referenceNames) || !referenceNames.length) return prompt.trim();
+  const bindings = referenceNames.map((name, index) => ({
+    name: String(name).trim(),
+    label: `参考图${index + 1}`,
+  }));
+  let boundPrompt = prompt.trim();
+  for (const binding of bindings) {
+    boundPrompt = boundPrompt.split(`@${binding.name}`).join(binding.label);
+  }
+  const legend = bindings
+    .map((binding) => `${binding.label}对应资产“${binding.name}”`)
+    .join('；');
+  return `参考图对应关系：${legend}。\n${boundPrompt}`;
+}
+
 function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, image = 'lumenx-dreamina-eval:1.4.20', proxy = process.env.STORYDOCK_DREAMINA_PROXY || '' }) {
   const pending = new Map();
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -115,6 +131,9 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       const allowedResolutions = request.model === 'seedance2.5' ? ['480p', '720p', '1080p'] : request.model === 'seedance2.0_vip' ? ['720p', '1080p', '4k'] : ['720p'];
       if (!allowedResolutions.includes(request.resolution)) throw new Error('该模型不支持所选分辨率');
       if (!Array.isArray(request.images) || request.images.length < 1 || request.images.length > (request.model === 'seedance2.5' ? 30 : 9)) throw new Error('参考图数量不受支持');
+      if (!Array.isArray(request.referenceNames) || request.referenceNames.length !== request.images.length || request.referenceNames.some((name) => typeof name !== 'string' || !name.trim() || name.length > 120 || /[\r\n]/.test(name))) throw new Error('参考图名称与图片不匹配');
+      const submittedPrompt = bindPromptReferences(request.prompt, request.referenceNames);
+      if (submittedPrompt.length > 20000) throw new Error('绑定参考图后的提示词过长');
       const runRoot = path.join(accountDirectory(accountId), 'runs', request.jobId);
       const input = path.join(runRoot, 'input');
       await fsp.mkdir(input, { recursive: true, mode: 0o700 });
@@ -128,8 +147,12 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
         await fsp.copyFile(source, path.join(input, name));
         command.push('--image', `/work/input/${name}`);
       }
-      command.push('--prompt', request.prompt.trim(), '--duration', String(request.duration), '--ratio', request.ratio, '--video_resolution', request.resolution, '--model_version', request.model, '--poll', '0');
-      return taskResult(await run(accountId, command, [{ source: input, target: '/work/input', readonly: true }], 180000));
+      command.push('--prompt', submittedPrompt, '--duration', String(request.duration), '--ratio', request.ratio, '--video_resolution', request.resolution, '--model_version', request.model, '--poll', '0');
+      return {
+        ...taskResult(await run(accountId, command, [{ source: input, target: '/work/input', readonly: true }], 180000)),
+        submittedPrompt,
+        referenceBindings: request.referenceNames.map((name, index) => ({ name, imageNumber: index + 1 })),
+      };
     },
     async queryVideo(accountId, submitId, download = false) {
       validateAccount(accountId);
@@ -154,4 +177,4 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
   };
 }
 
-module.exports = { createJimengCliPool };
+module.exports = { bindPromptReferences, createJimengCliPool };

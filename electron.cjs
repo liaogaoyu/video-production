@@ -117,7 +117,7 @@ app.whenReady().then(() => {
   }
   ipcMain.handle("submit-jimeng-video", async (event, request) => {
     assertLocal(event);
-    if (!request || !Array.isArray(request.images)) throw new Error("视频任务格式不正确");
+    if (!request || !Array.isArray(request.images) || !Array.isArray(request.referenceNames) || request.referenceNames.length !== request.images.length) throw new Error("视频任务格式不正确");
     allowedCliAccount(request.accountId);
     const images = [];
     for (const value of request.images) images.push(await resolveProjectImage(value));
