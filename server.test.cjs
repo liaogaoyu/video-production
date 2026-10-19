@@ -117,6 +117,22 @@ function json(response) {
   return JSON.parse(response.body);
 }
 
+test("cancelled OAuth sessions cannot be revived by a late worker result", async () => {
+  const ctx = await start();
+  try {
+    const accounts = ctx.services.repos.accounts;
+    const account = accounts.createAccount({name:"测试账号"});
+    const first = accounts.createAuthSession(account.id);
+    accounts.markAuth(first.authSessionId,"starting");
+    const second = accounts.createAuthSession(account.id);
+    accounts.markAuth(first.authSessionId,"awaiting_user","late response");
+    assert.equal(accounts.getAuthSession(first.authSessionId).status,"cancelled");
+    accounts.saveAuthExchange(account.id,{authSessionId:first.authSessionId,authorizationUrl:"https://jimeng.jianying.com/old",expiresAt:new Date(Date.now()+60000).toISOString(),nonce:"old",ciphertext:"old"});
+    assert.equal(accounts.getAuthSession(second.authSessionId).status,"queued");
+    assert.equal(accounts.getAuthSession(second.authSessionId).authorizationUrl,"");
+  } finally { await ctx.close(); }
+});
+
 async function authPage(sessionResults) {
   const elements = new Map();
   let closed = false, toast = "", polls = 0;
