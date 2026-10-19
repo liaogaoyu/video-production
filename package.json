@@ -13,7 +13,8 @@
     "check": "node --check app.js && node --check web/api.js && node --check electron.cjs && node --check preload.cjs && node --check account-sessions.cjs && node --check database.cjs && node --check image-provider.cjs && node --check jimeng-cli.cjs && node --check media-store.cjs && node --check project-package.cjs && node --check server/api.cjs && node --check server/main.cjs && node --check worker/main.cjs && node --check worker/scheduler.cjs && node --check web/global.js && node --check server/dreamina-global.cjs && node --check worker/dreamina-global/runner.cjs",
     "test": "node --test workflow.test.cjs desktop.test.cjs account-sessions.test.cjs database.test.cjs image-provider.test.cjs jimeng-cli.test.cjs media-store.test.cjs project-package.test.cjs server.test.cjs dreamina-global.test.cjs",
     "build:mac": "electron-packager . 'LumenX 漫剧工作台' --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --ignore='(^|/)(dist|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'",
-    "build:win": "electron-packager . 'LumenX 漫剧工作台' --platform=win32 --arch=x64 --out=dist-windows --overwrite --prune=true --ignore='(^|/)(dist|dist-windows|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'"
+    "build:win": "electron-packager . 'LumenX 漫剧工作台' --platform=win32 --arch=x64 --out=dist-windows --overwrite --prune=true --ignore='(^|/)(dist|dist-windows|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'",
+    "local:start": "node scripts/start-local.cjs"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

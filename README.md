@@ -82,3 +82,11 @@ STORYDOCK_GLOBAL_PROXY=http://127.0.0.1:7890
 常规 `npm test` 不调用收费模型。当前已测试单账号真实 CLI 查询/下载、真实上传/引用/报价与队列归档；生成提交的限额、丢响应和恢复使用自动化测试覆盖，并已有前期真实 CLI 成功任务作协议依据。真正两个不同美区账号的隔离仍需要各自授权后验收。
 
 国际 CLI 1.0.3 的 `auth account` 只返回 userId、isVip、vipLevel，未公开剩余积分查询。国际账号区明确显示此限制并提供官网入口；生成报价为本次最高用量，不代表账号余额。
+
+### 本地后台启动
+
+```bash
+npm run local:start
+```
+
+同时启动 API 和 Worker，使用独立后台进程，启动命令结束后继续运行。重复运行会复用已经存活的服务。默认地址 http://127.0.0.1:4320/ 。PID 与日志保存在 `var/storydock/local-services/`（使用 `STORYDOCK_ROOT` 时位于其目录下）。这仅是本机开发启动方式，生产仍使用 systemd。
