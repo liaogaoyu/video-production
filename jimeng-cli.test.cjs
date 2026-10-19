@@ -171,3 +171,22 @@ test('first-use compliance failure is not shown as a raw API error', async () =>
   assert.equal(result.code, 'web_confirmation_required');
   assert.match(result.message, /首次使用确认/);
 });
+
+ test('keyring mount is readable without DAC capabilities and removed after execution', async () => {
+  let mountedPath;
+  const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'storydock-keyring-test-'));
+  const oldMask=process.umask(0o077);
+  try {
+    const {pool}=setup([], {runtimeDirectory:runtime,execFileImpl(file,args,options,callback){
+      const mount=args.find(value=>value.includes('target=/run/secrets/keyring_password'));
+      mountedPath=mount.match(/source=([^,]+)/)[1];
+      assert.equal(fs.statSync(mountedPath).mode & 0o777,0o444);
+      assert.equal(fs.statSync(path.dirname(mountedPath)).mode & 0o777,0o700);
+      assert.match(mount,/,readonly$/);
+      assert.ok(args.includes('--cap-drop=ALL'));
+      callback(null,'OAuth 登录成功。\ntotal_credit: 1\nuser_id: test-account\n','');
+    }});
+    await pool.inspect('11111111-1111-1111-1111-111111111111');
+    assert.equal(fs.existsSync(mountedPath),false);
+  } finally { process.umask(oldMask); fs.rmSync(runtime,{recursive:true,force:true}); }
+});

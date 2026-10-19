@@ -78,6 +78,9 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     const runtime = await fsp.mkdtemp(path.join(runtimeDirectory || os.tmpdir(), 'storydock-dreamina-'));
     const unlockFile = path.join(runtime, 'keyring-password');
     await fsp.writeFile(unlockFile, `${password}\n`, { mode: 0o600 });
+    // Container root has no DAC override and differs from the service UID.
+    // The host directory stays 0700; only this file is mounted, read-only.
+    await fsp.chmod(unlockFile, 0o444);
     const slug = accountId.replaceAll('-', '');
     const containerName = `storydock-dreamina-${slug.slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`;
     const args = ['run', '--rm', '--name', containerName, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--memory=768m', '--cpus=1', '--mount', `type=volume,source=storydock-dreamina-${slug},target=/root`, '--mount', `type=bind,source=${unlockFile},target=/run/secrets/keyring_password,readonly`];
