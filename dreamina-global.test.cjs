@@ -150,10 +150,13 @@ function fakeRunner() {
           submission: { state: "completed" },
         };
       if (group === "resource" && command === "download") {
-        fs.writeFileSync(value(args, "--output"), PNG);
+        const bytes = Buffer.from([
+          0, 0, 0, 16, 102, 116, 121, 112, 109, 112, 52, 50, 0, 0, 0, 0,
+        ]);
+        fs.writeFileSync(value(args, "--output"), bytes);
         data = {
-          size: PNG.length,
-          sha256: crypto.createHash("sha256").update(PNG).digest("hex"),
+          size: bytes.length,
+          sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
         };
       }
       return { data, requestId: "test-request" };
@@ -196,16 +199,24 @@ async function fixture(c) {
     type: "场景",
     prompt: "A palace",
   });
-  return { project, a, asset };
+  const shot = c.s.repos.content.createShot({
+    projectId: project.id,
+    title: "纯文分镜",
+    prompt: "A palace in clouds",
+    episode: 1,
+    number: 999,
+    duration: 4,
+  });
+  return { project, a, asset, shot };
 }
 async function prepare(c, f, overrides = {}) {
   const preview = c.s.global.createPreview(f.project.id, {
     accountId: f.a.id,
-    kind: "image",
-    sourceIds: [f.asset.id],
-    model: "gpt_image_2",
+    kind: "video",
+    sourceIds: [f.shot.id],
+    model: "seedance_2.0_mini",
     ratio: "16:9",
-    resolution: "1K",
+    resolution: "720p",
     ...overrides,
   });
   await c.s.global.tick();
@@ -272,7 +283,7 @@ test("preview never submits before approval, binds ceiling, and approval is idem
     await c.close();
   }
 });
-test("global image queue runs through normal scheduler and imports a generated asset version", async () => {
+test("global video queue runs through normal scheduler and archives a video", async () => {
   const c = await setup();
   try {
     const f = await fixture(c),
@@ -294,7 +305,11 @@ test("global image queue runs through normal scheduler and imports a generated a
     job = c.s.repos.jobs.getJob(job.id);
     assert.equal(job.status, "succeeded", job.errorMessage);
     assert.ok(job.mediaId);
-    assert.equal(c.s.repos.content.graph(f.project.id).versions.length, 1);
+    assert.equal(c.s.repos.content.graph(f.project.id).versions.length, 0);
+    assert.equal(
+      c.s.db.prepare("SELECT mime FROM media WHERE id=?").get(job.mediaId).mime,
+      "video/mp4",
+    );
     assert.equal(c.runner.calls.filter((c) => c.args[1] === "run").length, 1);
   } finally {
     await c.close();
@@ -489,6 +504,45 @@ test("global API routes expose no credentials and static script is CSP-compatibl
       200,
     );
     assert.ok(!JSON.stringify(JSON.parse(response.body)).includes("token"));
+  } finally {
+    await c.close();
+  }
+});
+test("international CLI is video-only: reject image model discovery and all asset generation requests", async () => {
+  const c = await setup();
+  try {
+    const f = await fixture(c);
+    await assert.rejects(
+      c.s.global.models(f.a.id, "image"),
+      (e) => e.code === "global_video_only",
+    );
+    assert.throws(
+      () =>
+        c.s.global.createPreview(f.project.id, {
+          accountId: f.a.id,
+          kind: "image",
+          sourceIds: [f.asset.id],
+          model: "gpt_image_2",
+        }),
+      (e) => e.code === "global_video_only",
+    );
+    const r = await c.app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${f.project.id}/global-previews`,
+      payload: {
+        accountId: f.a.id,
+        kind: "asset",
+        sourceIds: [f.asset.id],
+        model: "gpt_image_2",
+      },
+    });
+    assert.equal(r.statusCode, 400);
+    assert.equal(JSON.parse(r.body).error.code, "global_video_only");
+    assert.ok(
+      !c.runner.calls.some(
+        (call) => call.args[0] === "model" && call.args.includes("image"),
+      ),
+    );
   } finally {
     await c.close();
   }

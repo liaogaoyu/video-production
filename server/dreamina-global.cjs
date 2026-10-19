@@ -329,12 +329,19 @@ function createGlobalService(
   }
   async function models(id, type) {
     const a = account(id);
-    if (!["image", "video"].includes(type))
-      throw new ApiError(400, "invalid_type", "模型类型必须为 image/video");
+    if (type !== "video")
+      throw new ApiError(
+        400,
+        "global_video_only",
+        "Dreamina 国际 CLI 仅用于 Seedance 分镜视频",
+      );
     const result = await runner.call(
       a.profile,
       ["model", "list", "--type", type],
       30000,
+    );
+    result.data.items = result.data.items.filter((item) =>
+      item.model.startsWith("seedance_"),
     );
     db.prepare(
       "INSERT OR REPLACE INTO global_runtime(key,value_json) VALUES(?,?)",
@@ -348,12 +355,15 @@ function createGlobalService(
     const a = account(body.accountId);
     if (!a.enabled || !a.authorized)
       throw new ApiError(400, "global_auth_required", "请先授权并启用国际账号");
-    const kind =
-      body.kind === "asset" || body.kind === "image"
-        ? "image"
-        : body.kind === "shot" || body.kind === "video"
-          ? "video"
-          : null;
+    if (!["shot", "video"].includes(body.kind))
+      throw new ApiError(
+        400,
+        "global_video_only",
+        "Dreamina 国际 CLI 仅用于 Seedance 分镜视频",
+      );
+    if (!String(body.model || "").startsWith("seedance_"))
+      throw new ApiError(400, "global_video_only", "请选择 Seedance 视频模型");
+    const kind = "video";
     const ids = Array.isArray(body.sourceIds)
       ? [...new Set(body.sourceIds)]
       : [];
@@ -362,22 +372,15 @@ function createGlobalService(
     return ids.map((id) => {
       const source = db
         .prepare(
-          `SELECT * FROM ${kind === "image" ? "assets" : "shots"} WHERE id=? AND project_id=? AND deleted_at IS NULL`,
+          "SELECT * FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL",
         )
         .get(id, projectId);
       if (!source) throw new ApiError(404, "source_missing", "生成内容不存在");
-      let refs =
-        kind === "image"
-          ? db
-              .prepare(
-                "SELECT r.media_id,m.sha256 FROM asset_references r JOIN media m ON m.id=r.media_id WHERE r.asset_id=? ORDER BY r.position",
-              )
-              .all(id)
-          : db
-              .prepare(
-                "SELECT a.id AS asset_id,a.name,v.id AS version_id,v.media_id,m.sha256 FROM shot_references r JOIN assets a ON a.id=r.asset_id AND a.deleted_at IS NULL LEFT JOIN asset_versions v ON v.id=a.locked_version_id LEFT JOIN media m ON m.id=v.media_id WHERE r.shot_id=? ORDER BY r.position",
-              )
-              .all(id);
+      let refs = db
+        .prepare(
+          "SELECT a.id AS asset_id,a.name,v.id AS version_id,v.media_id,m.sha256 FROM shot_references r JOIN assets a ON a.id=r.asset_id AND a.deleted_at IS NULL LEFT JOIN asset_versions v ON v.id=a.locked_version_id LEFT JOIN media m ON m.id=v.media_id WHERE r.shot_id=? ORDER BY r.position",
+        )
+        .all(id);
       if (refs.some((r) => !r.media_id))
         throw new ApiError(
           400,
@@ -407,17 +410,10 @@ function createGlobalService(
         promptSubmitted: prompt,
         references: refs,
         model: String(body.model || ""),
-        mode:
-          kind === "image"
-            ? refs.length
-              ? "i2i"
-              : "t2i"
-            : refs.length
-              ? "m2v"
-              : "t2v",
+        mode: refs.length ? "m2v" : "t2v",
         ratio: body.ratio || "16:9",
-        resolution: body.resolution || (kind === "image" ? "1K" : "720p"),
-        ...(kind === "video" ? { duration: source.duration } : {}),
+        resolution: body.resolution || "720p",
+        duration: source.duration,
         count: 1,
       };
     });
@@ -693,6 +689,12 @@ function createGlobalService(
   function approve(id, body) {
     return transaction(db, () => {
       const p = rawPreview(id);
+      if (JSON.parse(p.input_json).some((item) => item.kind !== "video"))
+        throw new ApiError(
+          400,
+          "global_video_only",
+          "国际 CLI 仅用于分镜视频，旧生图报价不可提交",
+        );
       if (p.batch_id)
         return {
           batchId: p.batch_id,
@@ -798,6 +800,12 @@ function createGlobalService(
     }
     return {
       async prepare(job) {
+        if (job.kind !== "video")
+          throw new ApiError(
+            400,
+            "global_video_only",
+            "国际 CLI 仅用于分镜视频",
+          );
         const a = account(job.accountId);
         if (!a.enabled || !a.authorized)
           throw new ApiError(
