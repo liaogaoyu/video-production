@@ -432,22 +432,27 @@ function createAccountRepository(db, { secrets, record }) {
     return plaintext;
   }
   function nextAuthSession() {
-    return db.prepare("SELECT * FROM auth_sessions WHERE status IN ('queued','awaiting_user') ORDER BY created_at LIMIT 1").get() || null;
+    return db.prepare("SELECT * FROM auth_sessions WHERE status IN ('queued','awaiting_user') ORDER BY CASE WHEN status='queued' THEN 0 ELSE 1 END, updated_at, created_at LIMIT 1").get() || null;
   }
-  function saveAuthExchange(accountId, { authorizationUrl, expiresAt, nonce, ciphertext }) {
-    db.prepare("UPDATE auth_sessions SET status='awaiting_user', authorization_url=?, expires_at=?, device_nonce=?, device_ciphertext=?, updated_at=? WHERE account_id=? AND status IN ('queued','starting','awaiting_user')")
-      .run(authorizationUrl, expiresAt, nonce, ciphertext, iso(), accountId);
+  function saveAuthExchange(accountId, { authorizationUrl, expiresAt, nonce, ciphertext, authSessionId = null }) {
+    db.prepare("UPDATE auth_sessions SET status='awaiting_user', authorization_url=?, expires_at=?, device_nonce=?, device_ciphertext=?, updated_at=? WHERE account_id=? AND status IN ('queued','starting','awaiting_user') AND (? IS NULL OR id=?)")
+      .run(authorizationUrl, expiresAt, nonce, ciphertext, iso(), accountId, authSessionId, authSessionId);
   }
   function activeAuth(accountId) {
     return db.prepare("SELECT * FROM auth_sessions WHERE account_id=? AND status='awaiting_user' ORDER BY created_at DESC LIMIT 1").get() || null;
   }
+  function authExchange(id, accountId) {
+    return db.prepare("SELECT * FROM auth_sessions WHERE id=? AND account_id=? AND status='awaiting_user'").get(id, accountId) || null;
+  }
   function markAuth(id, status, message = "") {
-    db.prepare("UPDATE auth_sessions SET status=?, error_message=?, updated_at=? WHERE id=?").run(status, publicMessage(message), iso(), id);
+    const updated = db.prepare("UPDATE auth_sessions SET status=?, error_message=?, updated_at=? WHERE id=? AND status IN ('queued','starting','awaiting_user')").run(status, publicMessage(message), iso(), id);
+    if (!updated.changes) return false;
     const row = db.prepare("SELECT account_id FROM auth_sessions WHERE id=?").get(id);
     if (row) record("auth.updated", { accountId: row.account_id, authSessionId: id, status });
+    return true;
   }
-  function clearDeviceCode(accountId) {
-    db.prepare("UPDATE auth_sessions SET device_nonce=NULL, device_ciphertext=NULL, updated_at=? WHERE account_id=? AND status='awaiting_user'").run(iso(), accountId);
+  function clearDeviceCode(accountId, authSessionId = null) {
+    db.prepare("UPDATE auth_sessions SET device_nonce=NULL, device_ciphertext=NULL, updated_at=? WHERE account_id=? AND status IN ('awaiting_user','authorized') AND (? IS NULL OR id=?)").run(iso(), accountId, authSessionId, authSessionId);
   }
   function nextCheck() {
     return db.prepare("SELECT * FROM jimeng_accounts WHERE removed_at IS NULL AND check_requested_at IS NOT NULL ORDER BY check_requested_at LIMIT 1").get() || null;
@@ -517,7 +522,7 @@ function createAccountRepository(db, { secrets, record }) {
 
   return {
     listAccounts, createAccount, updateAccount, removeAccount, createAuthSession, getAuthSession, requestCheck, updatePool,
-    imageConnection, saveImageConnection, imageApiKey, ensureSecret, nextAuthSession, saveAuthExchange, activeAuth, markAuth,
+    imageConnection, saveImageConnection, imageApiKey, ensureSecret, nextAuthSession, saveAuthExchange, activeAuth, authExchange, markAuth,
     clearDeviceCode, nextCheck, applyCheck, tryLease, releaseLease, setRuntime, runtime, eventsAfter, createExport, nextExport,
     finishExport, getExport, pool,
   };

@@ -12,8 +12,16 @@ Environment=STORYDOCK_MASTER_KEY=/etc/storydock/master-key
 Environment=STORYDOCK_RUNTIME_DIR=/run/storydock
 Environment=HOST=127.0.0.1
 Environment=PORT=4320
+EnvironmentFile=-/etc/storydock/storydock.env
+RuntimeDirectory=storydock
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0077
+NoNewPrivileges=yes
+InaccessiblePaths=-/run/docker.sock
 ExecStart=/usr/bin/node server/main.cjs
 Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target

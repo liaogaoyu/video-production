@@ -1,3 +1,12 @@
+// randomUUID requires HTTPS; getRandomValues also works on HTTP deployments.
+function createId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 const paths = {
   grid: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
   film: "M4 3h16v18H4z M4 8h16 M4 16h16 M8 3v18 M16 3v18",
@@ -407,7 +416,7 @@ function art(a) {
 }
 function addAssetVersion(asset, output, source = "upload") {
   asset.versions ||= [];
-  const version = { id: crypto.randomUUID(), image: output.url || output, path: output.path, prompt: asset.prompt, source, createdAt: new Date().toISOString() };
+  const version = { id: createId(), image: output.url || output, path: output.path, prompt: asset.prompt, source, createdAt: new Date().toISOString() };
   asset.versions.push(version);
   asset.selectedVersionId = version.id;
   asset.image = version.image;
@@ -774,9 +783,9 @@ settingsPage = function () {
   const accounts = connections.accounts.map((account) => {
     const stateText = account.enabled ? account.cliMessage || "等待官方 CLI 授权" : "已暂停";
     const credit = typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : "";
-    return `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(account.name)}</strong><small>${esc(stateText)}${credit}</small></div><button data-open-account="${account.id}">网页</button><button data-auth-cli="${account.id}">CLI 授权</button><button data-verify-cli="${account.id}">${account.authPending ? "完成授权" : "检查"}</button><button class="ghost" data-toggle-account="${account.id}">${account.enabled ? "暂停" : "启用"}</button></div>`;
+    return `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(account.name)}</strong><small data-account-status="${esc(account.id)}">${esc(stateText)}${credit}</small></div><button data-open-account="${account.id}">网页</button><button data-auth-cli="${account.id}">CLI 授权</button><button data-verify-cli="${account.id}">${account.authPending ? "完成授权" : "检查"}</button><button class="ghost" data-toggle-account="${account.id}">${account.enabled ? "暂停" : "启用"}</button></div>`;
   }).join("");
-  return `<div class="heading"><h1>模型与账号</h1><span class="muted">${window.__STORYDOCK_SERVER__ ? "保存在服务器" : "仅保存在本机"}</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.__STORYDOCK_SERVER__ ? "服务器配置" : window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI / APIMart</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageResolution">输出分辨率 <small>APIMart</small></label><select id="imageResolution"><option value="1k" ${connections.image.resolution === "1k" ? "selected" : ""}>1K</option><option value="2k" ${connections.image.resolution === "2k" ? "selected" : ""}>2K</option><option value="4k" ${connections.image.resolution === "4k" ? "selected" : ""}>4K</option></select><label for="imageApiKey">API Key <small>${imageKeySaved ? (window.__STORYDOCK_SERVER__ ? "已加密保存在服务器，留空保留" : "已加密保存在本机，留空保留") : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey || window.__STORYDOCK_SERVER__ ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2><div class="actions">${window.__STORYDOCK_SERVER__ || !jimengRuntime?.canInstall ? "" : btn("install-jimeng-runtime", "安装 CLI 运行环境", "down", "primary")}${btn("add-account", "添加账号", "plus")}</div></div><p class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
+  return `<div class="heading"><h1>模型与账号</h1><span class="muted">${window.__STORYDOCK_SERVER__ ? "保存在服务器" : "仅保存在本机"}</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.__STORYDOCK_SERVER__ ? "服务器配置" : window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI / APIMart</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageResolution">输出分辨率 <small>APIMart</small></label><select id="imageResolution"><option value="1k" ${connections.image.resolution === "1k" ? "selected" : ""}>1K</option><option value="2k" ${connections.image.resolution === "2k" ? "selected" : ""}>2K</option><option value="4k" ${connections.image.resolution === "4k" ? "selected" : ""}>4K</option></select><label for="imageApiKey">API Key <small>${imageKeySaved ? (window.__STORYDOCK_SERVER__ ? "已加密保存在服务器，留空保留" : "已加密保存在本机，留空保留") : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey || window.__STORYDOCK_SERVER__ ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2><div class="actions">${window.__STORYDOCK_SERVER__ || !jimengRuntime?.canInstall ? "" : btn("install-jimeng-runtime", "安装 CLI 运行环境", "down", "primary")}${btn("add-account", "添加账号", "plus")}</div></div><p id="jimengRuntimeStatus" class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
 };
 const renderSettingsPage = settingsPage;
 settingsPage = () => renderSettingsPage().replace("导出 JSON", "导出完整项目包");
@@ -858,7 +867,7 @@ function addAccountModal() {
     }
     fresh.forEach((name) =>
       connections.accounts.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         name,
         enabled: true,
       }),
@@ -955,7 +964,7 @@ function validateImport() {
             `第 ${i + 1} 条需要 name、prompt，以及 type（角色/场景/道具）`,
           );
         const name = a.name.trim();
-        const externalKey = String(a.key || `asset-${crypto.randomUUID()}`).trim();
+        const externalKey = String(a.key || `asset-${createId()}`).trim();
         if (!/^[a-zA-Z0-9_-]{1,120}$/.test(externalKey)) throw Error(`第 ${i + 1} 条 key 只能包含字母、数字、横线和下划线`);
         if (names.has(name) || keys.has(externalKey)) {
           skipped++;
@@ -964,7 +973,7 @@ function validateImport() {
         names.add(name);
         keys.add(externalKey);
         fresh.push({
-          id: crypto.randomUUID(),
+          id: createId(),
           externalKey,
           name,
           type: typeMap[a.type],
@@ -1028,7 +1037,7 @@ function validateImport() {
         });
         for (const mention of mentions) if (!resolved.some((ref) => ref.name === mention)) resolved.push({ key: state.assets.find((asset) => asset.name === mention)?.externalKey || "", name: mention });
         return {
-          id: crypto.randomUUID(),
+          id: createId(),
           externalKey,
           episode,
           number: s.number,
@@ -1059,7 +1068,7 @@ async function runRealAssetGeneration(assets) {
   view = "jobs";
   const jobs = assets.map((asset) => {
     const job = {
-      id: crypto.randomUUID(),
+      id: createId(),
       sourceId: asset.id,
       kind: "asset",
       model: connections.image.model,
@@ -1178,7 +1187,7 @@ function stageRealShotJobs(shots, account, config) {
   return shots.map((shot) => {
     const references = shot.refs.map((name, index) => assetForReference(shot, index));
     const missingRef = references.some((asset) => !asset?.image);
-    const job = { id: crypto.randomUUID(), sourceId: shot.id, kind: "shot", title: `${String(shot.number).padStart(3, "0")}_${shot.title}`, prompt: shot.prompt, refs: references.filter(Boolean).map((asset) => ({ id: asset.id, name: asset.name, image: asset.image })), accountId: account.id, accountName: account.name, model: config.model, ratio: state.settings.ratio, duration: Math.max(4, Math.min(shot.duration, config.model === "seedance2.5" ? 30 : 15)), resolution: config.resolution, progress: missingRef ? 0 : 10, status: missingRef ? "error" : "submitting", error: missingRef ? "有引用还没有可用图片" : "", real: true, createdAt: new Date().toISOString() };
+    const job = { id: createId(), sourceId: shot.id, kind: "shot", title: `${String(shot.number).padStart(3, "0")}_${shot.title}`, prompt: shot.prompt, refs: references.filter(Boolean).map((asset) => ({ id: asset.id, name: asset.name, image: asset.image })), accountId: account.id, accountName: account.name, model: config.model, ratio: state.settings.ratio, duration: Math.max(4, Math.min(shot.duration, config.model === "seedance2.5" ? 30 : 15)), resolution: config.resolution, progress: missingRef ? 0 : 10, status: missingRef ? "error" : "submitting", error: missingRef ? "有引用还没有可用图片" : "", real: true, createdAt: new Date().toISOString() };
     state.jobs.push(job);
     return job;
   });
@@ -1265,7 +1274,7 @@ function generate(kind) {
     }
     available.forEach((r) =>
       state.jobs.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         sourceId: r.id,
         kind,
         model: kind === "asset" ? connections.image.model : "Seedance",
@@ -1476,7 +1485,7 @@ document.addEventListener("click", async (e) => {
         const result = await window.desktop.selectReferenceImages({ projectId: activeProject.id, assetId: asset.id });
         if (!result.canceled) {
           const existing = new Set((asset.references || []).map((item) => item.sha256));
-          asset.references = [...(asset.references || []), ...result.images.filter((item) => !existing.has(item.sha256)).map((item) => ({ id: crypto.randomUUID(), url: item.url, sha256: item.sha256 }))].slice(0, 15);
+          asset.references = [...(asset.references || []), ...result.images.filter((item) => !existing.has(item.sha256)).map((item) => ({ id: createId(), url: item.url, sha256: item.sha256 }))].slice(0, 15);
           persist();
           detail(asset.id);
           toast(`已添加 ${result.images.length} 张参考图`);
@@ -1496,7 +1505,7 @@ document.addEventListener("click", async (e) => {
         if (file.size > 2 * 1024 * 1024) return;
         const reader = new FileReader();
         reader.onload = () => {
-          asset.references = [...(asset.references || []), { id: crypto.randomUUID(), url: reader.result }];
+          asset.references = [...(asset.references || []), { id: createId(), url: reader.result }];
           persist();
           detail(asset.id);
         };
@@ -1835,7 +1844,7 @@ document.addEventListener("click", async (e) => {
       return;
     }
     const project = {
-      id: crypto.randomUUID(),
+      id: createId(),
       name,
       description: document.querySelector("#projectDescription").value.trim(),
       style: document.querySelector("#projectStyle").value.trim(),
@@ -1867,7 +1876,7 @@ document.addEventListener("click", async (e) => {
     document.querySelector("#saveShot").onclick = () => {
       const form = readShotForm();
       if (!form) return;
-      const shot = { id: crypto.randomUUID(), externalKey: "", refs: [], refKeys: [], ...form };
+      const shot = { id: createId(), externalKey: "", refs: [], refKeys: [], ...form };
       syncShotRefs(shot, form.prompt);
       state.shots.push(shot);
       state.shots.sort((a, b) => (a.episode || 1) - (b.episode || 1) || a.number - b.number);
@@ -2015,7 +2024,7 @@ document.addEventListener("click", async (e) => {
         return;
       }
       state.assets.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         name,
         prompt,
         type: document.querySelector("#newType").value,
@@ -2239,6 +2248,18 @@ if (window.__STORYDOCK_SERVER__ && window.storydockApi) {
   window.storydockApi.attach({
     read: () => ({ workspace, activeProject, state, connections }),
     generation: () => workspaceGeneration,
+    setAccounts(accounts) {
+      connections.accounts = accounts.map((account) => ({ ...account, remote: true }));
+      for (const account of connections.accounts) {
+        const label = document.querySelector(`[data-account-status="${account.id}"]`);
+        if (label) label.textContent = `${account.enabled ? account.cliMessage || "等待官方 CLI 授权" : "已暂停"}${typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : ""}`;
+      }
+    },
+    setRuntime(runtime) {
+      jimengRuntime = { ok: Boolean(runtime.cli?.available), canInstall: false, message: runtime.cli?.message || "正在检查服务器环境" };
+      const label = document.querySelector("#jimengRuntimeStatus");
+      if (label) label.textContent = jimengRuntime.message;
+    },
     replaceAll({ projects, image, accounts, runtime }) {
       workspace = { activeProjectId: projects[0]?.id || "", projects };
       activeProject = projects[0] || blankProject();

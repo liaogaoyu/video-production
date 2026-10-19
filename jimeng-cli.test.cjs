@@ -39,11 +39,37 @@ test('OAuth success and CLI membership permission are separate states', async ()
   assert.equal(result.ok, false);
 });
 
+test('superseding an authorization stops its CLI container', async () => {
+  let removed = false, finishRun;
+  const {pool} = setup([], {
+    sessionStore:{get:async()=>({deviceCode:'private',expiresAt:new Date(Date.now()+60000).toISOString()}),isActive:async()=>false},
+    execFileImpl(file,args,options,callback) {
+      if(args[0]==='run') finishRun=callback;
+      else if(args[0]==='rm') {removed=true;callback(null,'','');finishRun(Object.assign(new Error('cancelled'),{code:137}),'','');}
+    },
+  });
+  await pool.finishAuth('11111111-1111-1111-1111-111111111111');
+  assert.equal(removed,true);
+});
+
 test('runtime status uses the pinned image and invalid IDs never reach Docker', async () => {
   const { pool, calls } = setup([{ stdout: 'sha256:test' }]);
   assert.equal((await pool.runtimeStatus()).ok, true);
   assert.deepEqual(calls[0].args.slice(0, 3), ['image', 'inspect', 'lumenx-dreamina-eval:1.4.21']);
   await assert.rejects(() => pool.inspect('../escape'), /ID/);
+});
+
+test('JSON account identity matches text identity without losing large integer precision', async () => {
+  const identity = '9876543210123456789';
+  const {pool}=setup([
+    {stdout:`{"total_credit":120,"user_id":${identity},"user_name":"测试用户","vip_level":"vip"}`},
+    {stdout:`{"total_credit":120,"user_id":"${identity}"}`},
+    {stdout:`total_credit: 120\nuser_id: ${identity}\n`},
+  ]);
+  const account='11111111-1111-1111-1111-111111111111';
+  const results=await Promise.all([pool.inspect(account),pool.inspect(account),pool.inspect(account)]);
+  const expected=require('node:crypto').createHash('sha256').update(identity).digest('hex');
+  for(const result of results){assert.equal(result.identityHash,expected);assert.equal(JSON.stringify(result).includes(identity),false);}
 });
 
 test('auth reports missing Docker instead of a misleading authorization URL error', async () => {

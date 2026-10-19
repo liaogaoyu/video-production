@@ -10,6 +10,96 @@ const { createSecretStore } = require("./server/secret-store.cjs");
 const { findMentions } = require("./server/references.cjs");
 const { createScheduler } = require("./worker/scheduler.cjs");
 const { zipStore } = require("./server/zip.cjs");
+const { createRuntimeBootstrap } = require("./worker/runtime.cjs");
+const { handleAuthFailure } = require("./worker/auth.cjs");
+const { restoreDesktopWorkspace } = require("./server/desktop-migration.cjs");
+
+test("desktop migration preserves versions, references and videos without resubmitting", async () => {
+  const ctx = await start();
+  try {
+    const root = ctx.services.paths.root;
+    const one = path.join(root,"one.png"), two=path.join(root,"two.png"), video=path.join(root,"clip.mp4");
+    fs.writeFileSync(one,PNG);fs.writeFileSync(two,Buffer.concat([PNG,Buffer.from("version-two")]));
+    fs.writeFileSync(video,Buffer.from([0,0,0,16,102,116,121,112,109,112,52,50,0,0,0,0]));
+    const workspace={projects:[{id:"old-project",name:"旧项目",data:{settings:{ratio:"9:16"},assets:[{id:"old-asset",name:"角色",type:"角色",prompt:"prompt",image:one,locked:true,selectedVersionId:"v1",versions:[{id:"v1",image:one,prompt:"original"},{id:"v2",image:two}],references:[{url:two}]}],shots:[{id:"old-shot",number:1,title:"镜头",prompt:"@角色 转身",refs:["角色"]}],jobs:[{id:"old-job",sourceId:"old-shot",kind:"shot",status:"done",submitId:"remote-id",video},{id:"pending",sourceId:"old-shot",kind:"shot",status:"remote_running",submitId:"pending-id"}]}}]};
+    const restore=()=>restoreDesktopWorkspace({services:ctx.services,workspace,sourceKey:"test-source",allowedRoots:[root],staticRoot:__dirname});
+    const report=restore();assert.equal(report.missing.length,0);assert.equal(report.projects[0].videos,1);
+    const graph=ctx.services.repos.content.graph(report.projects[0].id);
+    assert.equal(graph.versions.length,2);assert.equal(graph.references.length,1);assert.equal(graph.shotRefs[0].asset_id,graph.assets[0].id);
+    const locked=graph.versions.find(v=>v.id===graph.assets[0].locked_version_id);assert.equal(locked.prompt,"original");
+    assert.equal(graph.jobs.find(j=>j.remote_task_id==="remote-id").status,"succeeded");
+    assert.equal(graph.jobs.find(j=>j.remote_task_id==="pending-id").status,"submit_unknown");
+    assert.equal(ctx.services.repos.jobs.claimJob("test-worker"),null);
+    assert.equal(restore().skipped.length,1);assert.equal(ctx.services.repos.content.listProjects().length,1);
+  } finally {await ctx.close();}
+});
+
+test("premature OAuth expiry recovers an already authorized CLI account", async () => {
+  const states = [];
+  let checked = false, cleared = false;
+  await handleAuthFailure({
+    session: {id:"session",account_id:"account",expires_at:new Date(Date.now()+60000).toISOString()},
+    error:new Error("授权已过期，请重新开始"),
+    pool:{inspect:async()=>({authorized:true,permission:"allowed",message:"已授权"})},
+    accounts:{applyCheck(){checked=true;},markAuth(id,status){states.push(status);},clearDeviceCode(){cleared=true;}},
+  });
+  assert.equal(checked,true);assert.equal(cleared,true);assert.deepEqual(states,["authorized"]);
+});
+
+test("a still valid OAuth exchange survives a transient expiry error", async () => {
+  const states = [];
+  await handleAuthFailure({session:{id:"s",account_id:"a",expires_at:new Date(Date.now()+60000).toISOString()},error:new Error("授权已过期"),pool:{inspect:async()=>({authorized:false})},accounts:{markAuth(id,status){states.push(status);}}});
+  assert.deepEqual(states,["awaiting_user"]);
+});
+
+test("worker installs missing CLI once while startup checks overlap", async () => {
+  const states = [];
+  let installed = false, installs = 0, release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const runtime = createRuntimeBootstrap({
+    pool: {
+      runtimeStatus: async () => ({ ok: installed, code: installed ? "ready" : "image_missing", image: "pinned", message: "status" }),
+      installRuntime: async () => { installs++; await gate; installed = true; },
+    },
+    report: (state) => states.push(state),
+  });
+  const pending = runtime.check();
+  await Promise.resolve();
+  assert.equal(states.at(-1).state, "installing");
+  assert.equal(runtime.isReady(), false);
+  assert.equal(runtime.check(), pending);
+  release();
+  await pending;
+  assert.equal(installs, 1);
+  assert.equal(runtime.isReady(), true);
+  assert.equal(states.at(-1).state, "ready");
+});
+
+test("worker reuses existing CLI and does not install when Docker is unavailable", async () => {
+  for (const status of [{ok:true,code:"ready"}, {ok:false,code:"docker_missing"}, {ok:false,code:"docker_stopped"}]) {
+    let installs = 0;
+    const runtime = createRuntimeBootstrap({pool:{ runtimeStatus: async()=>status, installRuntime:async()=>{ installs++; } }, report(){} });
+    await runtime.check();
+    assert.equal(installs,0);
+    assert.equal(runtime.isReady(),status.ok);
+  }
+});
+
+test("failed runtime installation backs off and retries", async () => {
+  let time = 0, attempts = 0;
+  const states = [];
+  const runtime = createRuntimeBootstrap({
+    pool: {runtimeStatus:async()=>({ok:false,code:"image_missing"}),installRuntime:async()=>{attempts++;throw new Error("network unavailable");}},
+    report:(state)=>states.push(state), now:()=>time, retryMs:1000,
+  });
+  await runtime.check();
+  await runtime.check();
+  assert.equal(attempts,1);
+  assert.equal(states.at(-1).state,"failed");
+  time = 1001;
+  await runtime.check();
+  assert.equal(attempts,2);
+});
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 
@@ -47,6 +137,72 @@ async function start() {
 function json(response) {
   return JSON.parse(response.body);
 }
+
+test("cancelled OAuth sessions cannot be revived by a late worker result", async () => {
+  const ctx = await start();
+  try {
+    const accounts = ctx.services.repos.accounts;
+    const account = accounts.createAccount({name:"测试账号"});
+    const first = accounts.createAuthSession(account.id);
+    accounts.markAuth(first.authSessionId,"starting");
+    const second = accounts.createAuthSession(account.id);
+    accounts.markAuth(first.authSessionId,"awaiting_user","late response");
+    assert.equal(accounts.getAuthSession(first.authSessionId).status,"cancelled");
+    accounts.saveAuthExchange(account.id,{authSessionId:first.authSessionId,authorizationUrl:"https://jimeng.jianying.com/old",expiresAt:new Date(Date.now()+60000).toISOString(),nonce:"old",ciphertext:"old"});
+    assert.equal(accounts.getAuthSession(second.authSessionId).status,"queued");
+    assert.equal(accounts.getAuthSession(second.authSessionId).authorizationUrl,"");
+  } finally { await ctx.close(); }
+});
+
+async function authPage(sessionResults) {
+  const elements = new Map();
+  let closed = false, toast = "", polls = 0;
+  const context = require("node:vm").createContext({
+    window: {}, sessionStorage:{getItem:()=>""},localStorage:{getItem:()=>null},
+    document:{querySelector:(key)=>elements.get(key)||null,createTextNode:(text)=>text,createElement:()=>({})},
+    setTimeout:(fn)=>{fn();return 1;},setInterval(){},clearTimeout(){},EventSource:class{},
+    fetch:async(url,options)=>{
+      let data={};
+      if(url.endsWith("/auth-sessions")) data={authSessionId:"session"};
+      else if(url.includes("/auth-sessions/")){data=sessionResults[Math.min(polls,sessionResults.length-1)];polls++;}
+      else if(url.endsWith("/projects")) data={projects:[]};
+      else if(url.endsWith("/jimeng/accounts"))data={accounts:[]};
+      else if(url.endsWith("/system/runtime"))data={cli:{}};
+      return {ok:true,status:200,text:async()=>JSON.stringify(data)};
+    },
+  });
+  require("node:vm").runInContext(fs.readFileSync(path.join(__dirname,"web/api.js"),"utf8"),context);
+  context.window.storydockApi.attach({
+    read:()=>({connections:{image:{},pool:{}}}),replaceAll(){},render(){},
+    modal(){for(const key of ["#authLink","#authStatus"])elements.set(key,{textContent:"",replaceChildren(){},append(){}});},
+    close(){closed=true;elements.clear();},toast(text){toast=text;},
+  });
+  await context.window.storydockApi.beginAuth({id:"account",name:"我的账号"});
+  return {elements,closed,toast,polls};
+}
+
+test("authorization waits past the old 40-poll limit and reports success",async()=>{
+  const page=await authPage([...Array.from({length:45},()=>({status:"awaiting_user"})),{status:"authorized"}]);
+  assert.equal(page.polls,46);assert.equal(page.closed,true);assert.match(page.toast,/授权完成/);
+});
+
+test("authorization errors remain visible inside the dialog",async()=>{
+  const page=await authPage([{status:"expired",message:"授权已过期，请重新开始"}]);
+  assert.equal(page.closed,false);assert.match(page.elements.get("#authStatus").textContent,/授权已过期/);
+  assert.equal(page.elements.get("#authLink").textContent,"本次授权已结束。");
+});
+
+test("browser server bootstrap uses external scripts allowed by CSP", async () => {
+  const ctx = await start();
+  try {
+    const page = await ctx.app.inject({ method: "GET", url: "/" });
+    assert.match(page.body, /script-src 'self'/);
+    assert.doesNotMatch(page.body, /<script>window\.__STORYDOCK_SERVER__/);
+    assert.ok(page.body.indexOf('src="web/api.js"') < page.body.indexOf('src="app.js"'));
+    const script = await ctx.app.inject({ method: "GET", url: "/web/api.js" });
+    assert.match(script.body, /window\.__STORYDOCK_SERVER__ = true/);
+  } finally { await ctx.close(); }
+});
 
 test("secret store binds ciphertext to account and purpose", () => {
   const store = createSecretStore(crypto.randomBytes(32));
@@ -91,7 +247,7 @@ test("two browsers share projects and a stale revision returns 409", async () =>
   assert.equal(json(await ctx.app.inject({ method: "GET", url: "/api/v1/projects" })).projects.length, 0);
   const page = await ctx.app.inject({ method: "GET", url: "/" });
   assert.equal(page.statusCode, 200);
-  assert.match(page.body, /__STORYDOCK_SERVER__/);
+  assert.match(page.body, /src="web\/api.js"/);
   await ctx.close();
 });
 

@@ -85,8 +85,19 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     if (proxy) args.push('--env', `HTTP_PROXY=${proxy}`, '--env', `HTTPS_PROXY=${proxy}`);
     args.push(image, ...command);
     let result;
+    let checkingCancellation = false;
+    const cancellation = command[0] === 'login' && sessionStore?.isActive ? setInterval(async () => {
+      if (checkingCancellation) return;
+      checkingCancellation = true;
+      try {
+        if (!(await sessionStore.isActive(accountId))) await execute('docker', ['rm', '-f', containerName], { timeout: 20000 });
+      } catch { /* The normal execution timeout remains the fallback. */ }
+      finally { checkingCancellation = false; }
+    }, 1000) : null;
+    cancellation?.unref();
     try { result = await execute('docker', args, { timeout }); }
     finally {
+      if (cancellation) clearInterval(cancellation);
       if (result?.timedOut) await execute('docker', ['rm', '-f', containerName], { timeout: 20000 });
       await fsp.rm(runtime, { recursive: true, force: true });
     }
@@ -98,7 +109,9 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
   function publicResult(result) {
     const output = `${result.stdout}\n${result.stderr}`;
     const creditMatch = output.match(/"total_credit"\s*:\s*(\d+(?:\.\d+)?)|total_credit:\s*(\d+(?:\.\d+)?)/);
-    const identity = output.match(/user_id:\s*([^\s]+)/)?.[1];
+    // Read the original digits: JSON.parse would round numeric IDs above 2^53.
+    const jsonIdentity = output.match(/"user_id"\s*:\s*(?:"([a-zA-Z0-9_-]+)"|(\d+)(?=\s*[,}]))/);
+    const identity = jsonIdentity?.[1] || jsonIdentity?.[2] || output.match(/^\s*user_id:\s*([a-zA-Z0-9_-]+)\s*$/m)?.[1];
     return {
       ok: result.code === 0,
       authorized: /OAuth 登录成功|当前登录账户信息|"total_credit"/.test(output),

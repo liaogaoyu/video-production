@@ -193,7 +193,7 @@ async function createHttpApp(services) {
       api: "ok",
       worker: alive ? "ok" : "down",
       sqliteWritable,
-      cli: cli ? { available: Boolean(cli.available), version: cli.version || "", message: cli.message || "" } : { available: false, version: "", message: "后台还没有报告 CLI 状态" },
+      cli: cli ? { available: Boolean(cli.available), state: cli.state || "", version: cli.version || "", message: cli.message || "" } : { available: false, version: "", message: "后台还没有报告 CLI 状态" },
       disk,
     };
   });
@@ -340,7 +340,7 @@ async function createHttpApp(services) {
     const root = path.resolve(paths.staticRoot);
     if (relative === "index.html") {
       const html = fs.readFileSync(path.join(root, "index.html"), "utf8")
-        .replace("<script src=\"app.js\"></script>", "<script>window.__STORYDOCK_SERVER__=true;</script><script src=\"web/api.js\"></script><script src=\"app.js\"></script>");
+        .replace("<script src=\"app.js\"></script>", "<script src=\"web/api.js\"></script><script src=\"app.js\"></script>");
       return reply.type("text/html; charset=utf-8").send(html);
     }
     const allowed = STATIC.has(relative) || relative.startsWith("assets/");

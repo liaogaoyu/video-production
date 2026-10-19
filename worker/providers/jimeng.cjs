@@ -8,6 +8,7 @@ function createJimengProvider({ repos, pool, media, db, owner }) {
     });
   }
   async function withLease(accountId, purpose, work) {
+    if (!repos.accounts.runtime("cli")?.available) return { outcome: "retry", message: "即梦 CLI 运行环境正在准备，请稍候" };
     const locked = repos.accounts.tryLease(accountId, owner, purpose, 240000);
     if (!locked) return { outcome: "retry", message: "账号正在执行其他 CLI 操作" };
     try { return await work(); }

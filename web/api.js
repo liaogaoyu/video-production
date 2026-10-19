@@ -1,5 +1,5 @@
 (function () {
-  if (!window.__STORYDOCK_SERVER__) return;
+  window.__STORYDOCK_SERVER__ = true;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   const memory = { ready: false, shadow: new Map(), projectIds: new Set(), assetIds: new Map(), shotIds: new Map(), chain: Promise.resolve(), seq: 0, hooks: null };
   function token() {
@@ -253,6 +253,8 @@
       load().catch((error) => hooks.toast(error.message || "无法连接服务器"));
       setInterval(() => {
         if (!memory.ready) return;
+        request("GET", "/api/v1/system/runtime").then((status) => hooks.setRuntime(status)).catch(() => {});
+        request("GET", "/api/v1/jimeng/accounts").then((status) => hooks.setAccounts(status.accounts)).catch(() => {});
         const current = hooks.read().activeProject;
         if (current?.id) reloadJobs(current.id).catch(() => {});
       }, 4000);
@@ -327,10 +329,24 @@
     },
     async beginAuth(account) {
       const created = await request("POST", `/api/v1/jimeng/accounts/${account.id}/auth-sessions`);
-      memory.hooks.modal("授权即梦账号", `<p>本次授权别名：<strong>${esc(account.name)}</strong>。请在即梦官方页登录这个账号。如果浏览器还留着其他即梦账号，请先切换，或换一个浏览器配置文件。服务器不会复制浏览器 Cookie。</p><p id="authLink">正在向服务器申请授权地址…</p><div class="modal-actions"><button data-action="close">关闭</button></div>`);
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        const session = await request("GET", `/api/v1/jimeng/auth-sessions/${created.authSessionId}`);
+      memory.hooks.modal("授权即梦账号", `<p>本次授权别名：<strong>${esc(account.name)}</strong>。请在即梦官方页登录这个账号。如果浏览器还留着其他即梦账号，请先切换，或换一个浏览器配置文件。服务器不会复制浏览器 Cookie。</p><p id="authLink">正在向服务器申请授权地址…</p><p id="authStatus" role="status">正在准备授权…</p><div class="modal-actions"><button data-action="close">关闭</button></div>`);
+      let deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        if (!document.querySelector("#authStatus")) return;
+        let session;
+        try {
+          session = await request("GET", `/api/v1/jimeng/auth-sessions/${created.authSessionId}`);
+        } catch {
+          const status = document.querySelector("#authStatus");
+          if (status) status.textContent = "与服务器连接中断，正在重试授权检查…";
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          continue;
+        }
         const link = document.querySelector("#authLink");
+        const status = document.querySelector("#authStatus");
+        if (!status) return;
+        if (session.expiresAt && Number.isFinite(Date.parse(session.expiresAt))) deadline = Date.parse(session.expiresAt);
+        status.textContent = session.status === "awaiting_user" ? "请在即梦页面完成授权；完成后这里会自动更新。" : "服务器正在准备授权，请稍候…";
         if (link && session.authorizationUrl?.startsWith("https://jimeng.jianying.com/")) {
           link.replaceChildren(document.createTextNode("在新标签页打开："));
           const anchor = document.createElement("a");
@@ -346,12 +362,16 @@
           await load();
           return;
         }
-        if (session.status === "failed" || session.status === "expired") {
-          memory.hooks.toast(session.message || "授权没有完成");
+        if (["failed", "expired", "cancelled"].includes(session.status)) {
+          status.textContent = session.message || (session.status === "expired" ? "授权已过期，请关闭后重新授权。" : "授权未完成，请关闭后重试。");
+          if (link) link.textContent = "本次授权已结束。";
+          await load();
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
+      const status = document.querySelector("#authStatus");
+      if (status) status.textContent = "等待授权超时，请关闭后检查账号状态，或重新授权。";
     },
     async checkAccount(accountId) {
       await request("POST", `/api/v1/jimeng/accounts/${accountId}/check`);

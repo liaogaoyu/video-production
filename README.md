@@ -33,7 +33,7 @@ macOS Apple Silicon 构建：`npm run build:mac`。产物位于 `dist/LumenX 漫
 
 生图需要用户提供可用的 OpenAI Images 协议服务、模型名和 API Key。保存配置不等于接口验证成功。
 
-即梦需要 Docker Desktop、`lumenx-dreamina-eval:1.4.21` 镜像、用户完成官方 OAuth，以及账号具备官方 CLI 生成权限。缺少镜像时可在“模型与账号”页面一键从即梦官方下载并构建 Windows x64 可用的隔离运行环境。可选代理通过 `STORYDOCK_DREAMINA_PROXY` 启动环境变量设置，不写入镜像或项目导出。
+即梦需要运行中的 Docker（Linux 服务器使用 Docker Engine，本机可用 Docker Desktop）、用户完成官方 OAuth，以及账号具备官方 CLI 生成权限。B/S Worker 首次启动时自动下载通过 SHA-256 校验的固定版本官方 CLI，构建 `lumenx-dreamina-eval:1.4.21` 镜像；已有镜像直接复用，失败会退避重试。页面显示安装状态，安装不阻塞项目管理和生图。`STORYDOCK_AUTO_INSTALL_CLI=0` 可关闭自动安装；设置 `STORYDOCK_CLI_IMAGE` 使用预装自定义镜像时也不自动构建。客户端仍可在“模型与账号”页面一键安装运行环境。可选代理通过 `STORYDOCK_DREAMINA_PROXY` 启动环境变量设置，不写入镜像或项目导出。
 
 ## 验证边界
 
@@ -44,3 +44,16 @@ macOS Apple Silicon 构建：`npm run build:mac`。产物位于 `dist/LumenX 漫
 当前真实即梦账号返回“仅限会员用户使用”，因此没有提交真实付费视频任务。两个不同真实 CLI 账号、真实多图视频结果和自动下载仍需有权限账号完成最终验收；客户端会阻止无权限账号提交。网页登录 Cookie 的第三方积分检查仅保留为研究代码，不用于生产视频提交。
 
 详细设计与验证账本位于 `docs/agents/deliverables/storydock-design/`。
+
+## 从旧客户端恢复项目
+
+本机迁移工具会复制项目、全部图片版本、参考图、分镜引用和历史视频。账号凭据和模型密钥不会迁移；历史任务全部暂停，避免重新提交。重复运行会跳过同一来源已经恢复的项目。
+
+```sh
+# 先预览，不修改数据库
+node scripts/restore-desktop.cjs --source '/旧客户端数据目录'
+# 停止 API 和 Worker 后应用。工具先为来源和服务端数据库建立一致性备份。
+node scripts/restore-desktop.cjs --source '/旧客户端数据目录' --apply
+```
+
+来源目录必须包含 `storydock.sqlite`。macOS 打包版通常在 `~/Library/Application Support/LumenX 漫剧工作台`。迁移报告和备份写入服务端数据目录下 `backups/desktop-migration-<时间>/`，旧客户端文件保持不变。迁移结果与文件校验通过后再启动 API、Worker。运行时数据库和媒体不提交 Git。
