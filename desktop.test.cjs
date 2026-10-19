@@ -51,6 +51,7 @@ async function setup() {
     dialog: {},
     safeStorage: {
       isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => "test-keyring",
       encryptString: (k) => Buffer.from("encrypted:" + k),
     },
   };
