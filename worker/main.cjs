@@ -21,6 +21,9 @@ function createWorker(services = openServices()) {
       },
     },
     sessionStore: {
+      async isActive() {
+        return ["queued", "starting", "awaiting_user"].includes(services.repos.accounts.getAuthSession(currentAuthSessionId).status);
+      },
       async put(accountId, record) {
         const sealed = services.secrets.seal(record.deviceCode, { accountId, purpose: "auth-device-code" });
         services.repos.accounts.saveAuthExchange(accountId, {

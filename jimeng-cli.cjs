@@ -85,8 +85,19 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     if (proxy) args.push('--env', `HTTP_PROXY=${proxy}`, '--env', `HTTPS_PROXY=${proxy}`);
     args.push(image, ...command);
     let result;
+    let checkingCancellation = false;
+    const cancellation = command[0] === 'login' && sessionStore?.isActive ? setInterval(async () => {
+      if (checkingCancellation) return;
+      checkingCancellation = true;
+      try {
+        if (!(await sessionStore.isActive(accountId))) await execute('docker', ['rm', '-f', containerName], { timeout: 20000 });
+      } catch { /* The normal execution timeout remains the fallback. */ }
+      finally { checkingCancellation = false; }
+    }, 1000) : null;
+    cancellation?.unref();
     try { result = await execute('docker', args, { timeout }); }
     finally {
+      if (cancellation) clearInterval(cancellation);
       if (result?.timedOut) await execute('docker', ['rm', '-f', containerName], { timeout: 20000 });
       await fsp.rm(runtime, { recursive: true, force: true });
     }

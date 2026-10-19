@@ -39,6 +39,19 @@ test('OAuth success and CLI membership permission are separate states', async ()
   assert.equal(result.ok, false);
 });
 
+test('superseding an authorization stops its CLI container', async () => {
+  let removed = false, finishRun;
+  const {pool} = setup([], {
+    sessionStore:{get:async()=>({deviceCode:'private',expiresAt:new Date(Date.now()+60000).toISOString()}),isActive:async()=>false},
+    execFileImpl(file,args,options,callback) {
+      if(args[0]==='run') finishRun=callback;
+      else if(args[0]==='rm') {removed=true;callback(null,'','');finishRun(Object.assign(new Error('cancelled'),{code:137}),'','');}
+    },
+  });
+  await pool.finishAuth('11111111-1111-1111-1111-111111111111');
+  assert.equal(removed,true);
+});
+
 test('runtime status uses the pinned image and invalid IDs never reach Docker', async () => {
   const { pool, calls } = setup([{ stdout: 'sha256:test' }]);
   assert.equal((await pool.runtimeStatus()).ok, true);
