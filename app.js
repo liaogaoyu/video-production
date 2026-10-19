@@ -24,6 +24,7 @@ const paths = {
   arrow: "M4 12h16 M14 6l6 6-6 6",
   image: "M3 3h18v18H3z M3 17l6-6 4 4 3-3 5 5 M15 7h.01",
   shield: "M12 2l9 4v6c0 5-9 10-9 10S3 17 3 12V6z M8 12l3 3 5-6",
+  edit: "M4 20h4L19 9l-4-4L4 16z M13 7l4 4",
 };
 const icon = (n) =>
   `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[n] || paths.grid}"/></svg>`;
@@ -281,13 +282,72 @@ function switchProject(id) {
   persist();
   render();
 }
+function editProjectModal(id) {
+  const project = workspace.projects.find((item) => item.id === id);
+  if (!project) return;
+  modal(
+    "编辑项目",
+    `<div class="project-edit-form"><label for="editProjectName">项目名称 <span class="required">*</span></label><input id="editProjectName" maxlength="80" value="${esc(project.name)}"><label for="editProjectDescription">项目简介 <small>选填</small></label><textarea id="editProjectDescription" maxlength="500">${esc(project.description || "")}</textarea><div class="project-edit-grid"><div><label for="editProjectRatio">视频画幅</label><select id="editProjectRatio"><option value="16:9" ${project.data.settings.ratio === "16:9" ? "selected" : ""}>16:9 横屏</option><option value="9:16" ${project.data.settings.ratio === "9:16" ? "selected" : ""}>9:16 竖屏</option><option value="1:1" ${project.data.settings.ratio === "1:1" ? "selected" : ""}>1:1 方形</option></select></div><div><label for="editProjectStyle">风格备注 <small>选填</small></label><input id="editProjectStyle" maxlength="120" value="${esc(project.style || "")}" placeholder="例如：半写实国漫、民国悬疑"></div></div></div><div class="modal-actions"><button data-action="close">取消</button><button id="saveProject" class="primary">保存修改</button></div>`,
+  );
+  document.querySelector("#saveProject").onclick = () => {
+    const name = document.querySelector("#editProjectName").value.trim();
+    if (!name) {
+      toast("请输入项目名称");
+      document.querySelector("#editProjectName").focus();
+      return;
+    }
+    project.name = name;
+    project.description = document.querySelector("#editProjectDescription").value.trim();
+    project.style = document.querySelector("#editProjectStyle").value.trim();
+    project.data.settings.ratio = document.querySelector("#editProjectRatio").value;
+    project.updatedAt = new Date().toISOString();
+    persist();
+    close();
+    render();
+    toast("项目已更新");
+  };
+}
+function deleteProjectModal(id) {
+  const project = workspace.projects.find((item) => item.id === id);
+  if (!project) return;
+  if (workspace.projects.length === 1) {
+    toast("至少保留一个项目");
+    return;
+  }
+  modal(
+    "删除项目",
+    `<div class="delete-project-message"><div class="delete-project-icon">${icon("trash")}</div><div><strong>确认删除“${esc(project.name)}”？</strong><p>项目中的 ${project.data.assets.length} 个资产、${project.data.shots.length} 个分镜和任务记录将从列表移除。已下载到本机的媒体文件会保留。</p></div></div><div class="modal-actions"><button data-action="close">取消</button><button id="confirmDeleteProject" class="danger">删除项目</button></div>`,
+  );
+  document.querySelector("#confirmDeleteProject").onclick = () => {
+    const deletingActive = activeProject.id === id;
+    workspace.projects = workspace.projects.filter((item) => item.id !== id);
+    if (deletingActive) {
+      activeProject = workspace.projects[0];
+      state = activeProject.data;
+      selected = new Set();
+      selectedShots = new Set();
+      query = "";
+      filter = "全部资产";
+      statusFilter = "all";
+      shotStatusFilter = "all";
+      jobQueueStatus = "all";
+      jobKindFilter = "all";
+      jobSort = "newest";
+    }
+    view = "projects";
+    persist();
+    close();
+    render();
+    toast("项目已删除");
+  };
+}
 function projectsPage() {
   return `<div class="heading"><h1>我的项目 <small>${workspace.projects.length}</small></h1><div class="actions">${window.desktop?.importProject ? btn("import-project", "恢复项目", "upload") : ""}${btn("new-project", "创建项目", "plus", "primary")}</div></div><div class="project-grid">${workspace.projects
     .map((p) => {
       const image =
         p.data.assets.find((a) => a.image && a.type === "场景")?.image ||
         p.data.assets.find((a) => a.image)?.image;
-      return `<button class="project-card" data-open-project="${p.id}"><div class="project-art">${image ? `<img src="${esc(image)}" alt="${esc(p.name)}封面">` : `<div class="new-project-art">${icon("film")}</div>`}<span class="pill">${esc(p.data.settings.ratio)}</span></div><div class="project-card-body"><div class="card-title"><strong>${esc(p.name)}</strong>${icon("chev")}</div>${p.description ? `<p>${esc(p.description)}</p>` : ""}<div class="card-footer"><span>${p.data.assets.length} 个资产 · ${p.data.shots.length} 个分镜</span></div></div></button>`;
+      return `<article class="project-card"><button class="project-card-open" data-open-project="${esc(p.id)}"><div class="project-art">${image ? `<img src="${esc(image)}" alt="${esc(p.name)}封面">` : `<div class="new-project-art">${icon("film")}</div>`}<span class="pill">${esc(p.data.settings.ratio)}</span></div><div class="project-card-body"><div class="card-title"><strong>${esc(p.name)}</strong>${icon("chev")}</div>${p.description ? `<p>${esc(p.description)}</p>` : ""}<div class="card-footer"><span>${p.data.assets.length} 个资产 · ${p.data.shots.length} 个分镜</span></div></div></button><div class="project-card-actions"><button data-edit-project="${esc(p.id)}">${icon("edit")}编辑</button><button class="danger-text" data-delete-project="${esc(p.id)}">${icon("trash")}删除</button></div></article>`;
     })
     .join("")}</div>`;
 }
@@ -1554,6 +1614,14 @@ document.addEventListener("click", async (e) => {
     account.enabled = !account.enabled;
     persistConnections();
     render();
+    return;
+  }
+  if (el.dataset.editProject) {
+    editProjectModal(el.dataset.editProject);
+    return;
+  }
+  if (el.dataset.deleteProject) {
+    deleteProjectModal(el.dataset.deleteProject);
     return;
   }
   const action = el.dataset.action;
