@@ -1,0 +1,18 @@
+[Unit]
+Description=Storydock worker
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=storydock-worker
+Group=storydock-worker
+SupplementaryGroups=docker
+WorkingDirectory=/opt/storydock
+Environment=STORYDOCK_ROOT=/srv/storydock
+Environment=STORYDOCK_MASTER_KEY=/etc/storydock/master-key
+Environment=STORYDOCK_RUNTIME_DIR=/run/storydock
+ExecStart=/usr/bin/node worker/main.cjs
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

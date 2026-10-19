@@ -9,15 +9,22 @@ const ACCOUNT_RE = /^[a-f0-9-]{36}$/;
 const OFFICIAL_LINUX_AMD64_URL = 'https://lf3-static.bytednsdoc.com/obj/eden-cn/psj_hupthlyk/ljhwZthlaukjlkulzlp/dreamina_cli_beta/dreamina_cli_linux_amd64';
 const OFFICIAL_LINUX_AMD64_SHA256 = '0a5fdc262ab44669e7db4ce67e6543ece6daf405804aca3d1d17d1345c146f69';
 
+function escapeRegExp(value) {
+  return String(value).replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+}
+
 function bindPromptReferences(prompt, referenceNames) {
-  if (!Array.isArray(referenceNames) || !referenceNames.length) return prompt.trim();
+  if (!Array.isArray(referenceNames) || !referenceNames.length) return String(prompt || '').trim();
   const bindings = referenceNames.map((name, index) => ({
     name: String(name).trim(),
     label: `参考图${index + 1}`,
   }));
-  let boundPrompt = prompt.trim();
-  for (const binding of bindings) {
-    boundPrompt = boundPrompt.split(`@${binding.name}`).join(binding.label);
+  let boundPrompt = String(prompt || '').trim();
+  const ordered = [...bindings].sort((left, right) => right.name.length - left.name.length || left.name.localeCompare(right.name));
+  for (const binding of ordered) {
+    if (!binding.name) continue;
+    const pattern = new RegExp(`@${escapeRegExp(binding.name)}(?=$|[\\s，。！？、；：,.!?:;])`, 'g');
+    boundPrompt = boundPrompt.replace(pattern, binding.label);
   }
   const legend = bindings
     .map((binding) => `${binding.label}对应资产“${binding.name}”`)
@@ -25,7 +32,7 @@ function bindPromptReferences(prompt, referenceNames) {
   return `参考图对应关系：${legend}。\n${boundPrompt}`;
 }
 
-function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, fetchImpl = globalThis.fetch, image = 'lumenx-dreamina-eval:1.4.21', proxy = process.env.STORYDOCK_DREAMINA_PROXY || '' }) {
+function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, fetchImpl = globalThis.fetch, image = 'lumenx-dreamina-eval:1.4.21', proxy = process.env.STORYDOCK_DREAMINA_PROXY || '', secretStore = null, sessionStore = null, runtimeDirectory = '', allowInstall = true }) {
   const pending = new Map();
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (proxy) {
@@ -41,7 +48,8 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     return path.join(directory, accountId);
   }
   async function ensureSecret(accountId) {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密存储不可用');
+    if (secretStore) return secretStore.ensureKeyringPassword(accountId);
+    if (!safeStorage?.isEncryptionAvailable()) throw new Error('系统加密存储不可用');
     const folder = accountDirectory(accountId);
     await fsp.mkdir(folder, { recursive: true, mode: 0o700 });
     const encryptedPath = path.join(folder, 'keyring-password.enc');
@@ -54,29 +62,35 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     }
   }
   function execute(file, args, options = {}) {
-    return new Promise((resolve) => execFileImpl(file, args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024, ...options }, (error, stdout = '', stderr = '') => resolve({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr), errorMessage: String(error?.message || '') })));
+    return new Promise((resolve) => execFileImpl(file, args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024, ...options }, (error, stdout = '', stderr = '') => resolve({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr), errorMessage: String(error?.message || ''), timedOut: Boolean(error?.killed) })));
   }
   function runtimeFailure(result) {
     const output = `${result.errorMessage}\n${result.stdout}\n${result.stderr}`;
     if (result.code === 'ENOENT' || /spawn docker ENOENT|docker.*not (?:found|recognized)/i.test(output)) return { code: 'docker_missing', canInstall: false, message: 'Docker Desktop 未安装，请安装并启动后重试' };
     if (/cannot connect to the docker daemon|docker daemon is not running|dockerDesktopLinuxEngine|open \\.\/pipe\/docker/i.test(output)) return { code: 'docker_stopped', canInstall: false, message: 'Docker Desktop 未启动，请启动后重试' };
-    if (/no such image|unable to find image|pull access denied|manifest unknown/i.test(output)) return { code: 'image_missing', canInstall: true, message: '即梦 CLI 运行环境未安装，请点击“安装 CLI 运行环境”' };
-    if (/platform .* does not match|exec format error/i.test(output)) return { code: 'architecture_mismatch', canInstall: true, message: '即梦 CLI 运行环境架构不兼容，请重新安装运行环境' };
+    if (/no such image|unable to find image|pull access denied|manifest unknown/i.test(output)) return { code: 'image_missing', canInstall: allowInstall, message: allowInstall ? '即梦 CLI 运行环境未安装，请点击“安装 CLI 运行环境”' : '服务器尚未安装固定版本的即梦 CLI 镜像' };
+    if (/platform .* does not match|exec format error/i.test(output)) return { code: 'architecture_mismatch', canInstall: allowInstall, message: allowInstall ? '即梦 CLI 运行环境架构不兼容，请重新安装运行环境' : '服务器上的即梦 CLI 镜像架构不兼容' };
     const detail = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).find((line) => !/device_code|keyring_password/i.test(line));
     return { code: 'runtime_error', canInstall: false, message: detail ? `即梦 CLI 启动失败：${detail.slice(0, 180)}` : '即梦 CLI 启动失败，请检查 Docker Desktop' };
   }
   async function run(accountId, command, mounts = [], timeout = 120000) {
     const password = await ensureSecret(accountId);
-    const runtime = await fsp.mkdtemp(path.join(os.tmpdir(), 'storydock-dreamina-'));
+    const runtime = await fsp.mkdtemp(path.join(runtimeDirectory || os.tmpdir(), 'storydock-dreamina-'));
     const unlockFile = path.join(runtime, 'keyring-password');
     await fsp.writeFile(unlockFile, `${password}\n`, { mode: 0o600 });
     const slug = accountId.replaceAll('-', '');
-    const args = ['run', '--rm', '--name', `storydock-dreamina-${slug.slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--memory=768m', '--cpus=1', '--mount', `type=volume,source=storydock-dreamina-${slug},target=/root`, '--mount', `type=bind,source=${unlockFile},target=/run/secrets/keyring_password,readonly`];
+    const containerName = `storydock-dreamina-${slug.slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`;
+    const args = ['run', '--rm', '--name', containerName, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--memory=768m', '--cpus=1', '--mount', `type=volume,source=storydock-dreamina-${slug},target=/root`, '--mount', `type=bind,source=${unlockFile},target=/run/secrets/keyring_password,readonly`];
     for (const mount of mounts) args.push('--mount', `type=bind,source=${mount.source},target=${mount.target}${mount.readonly ? ',readonly' : ''}`);
     if (proxy) args.push('--env', `HTTP_PROXY=${proxy}`, '--env', `HTTPS_PROXY=${proxy}`);
     args.push(image, ...command);
-    try { return await execute('docker', args, { timeout }); }
-    finally { await fsp.rm(runtime, { recursive: true, force: true }); }
+    let result;
+    try { result = await execute('docker', args, { timeout }); }
+    finally {
+      if (result?.timedOut) await execute('docker', ['rm', '-f', containerName], { timeout: 20000 });
+      await fsp.rm(runtime, { recursive: true, force: true });
+    }
+    return result;
   }
   function match(output, name) {
     return output.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1]?.trim();
@@ -160,16 +174,23 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
         if (result.code !== 0) throw new Error(runtimeFailure(result).message);
         throw new Error('官方 CLI 没有返回有效授权地址，请更新 CLI 运行环境');
       }
-      pending.set(accountId, { deviceCode, expiresAt: Date.now() + 10 * 60 * 1000 });
-      return { authorizationUrl, expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() };
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      if (sessionStore) await sessionStore.put(accountId, { deviceCode, authorizationUrl, expiresAt });
+      else pending.set(accountId, { deviceCode, expiresAt: Date.parse(expiresAt) });
+      return { authorizationUrl, expiresAt };
     },
     async finishAuth(accountId) {
       validateAccount(accountId);
-      const auth = pending.get(accountId);
-      if (!auth || auth.expiresAt < Date.now()) throw new Error('授权已过期，请重新开始');
+      const stored = sessionStore ? await sessionStore.get(accountId) : null;
+      const auth = stored || pending.get(accountId);
+      const expiresAt = stored ? Date.parse(stored.expiresAt) : auth?.expiresAt;
+      if (!auth?.deviceCode || !expiresAt || expiresAt < Date.now()) throw new Error('授权已过期，请重新开始');
       const result = await run(accountId, ['login', 'checklogin', `--device_code=${auth.deviceCode}`, '--poll=20']);
       const parsed = publicResult(result);
-      if (parsed.authorized) pending.delete(accountId);
+      if (parsed.authorized) {
+        if (sessionStore) await sessionStore.clear(accountId);
+        else pending.delete(accountId);
+      }
       return parsed;
     },
     async inspect(accountId) {
@@ -186,7 +207,7 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       if (!allowedResolutions.includes(request.resolution)) throw new Error('该模型不支持所选分辨率');
       if (!Array.isArray(request.images) || request.images.length < 1 || request.images.length > (request.model === 'seedance2.5' ? 30 : 9)) throw new Error('参考图数量不受支持');
       if (!Array.isArray(request.referenceNames) || request.referenceNames.length !== request.images.length || request.referenceNames.some((name) => typeof name !== 'string' || !name.trim() || name.length > 120 || /[\r\n]/.test(name))) throw new Error('参考图名称与图片不匹配');
-      const submittedPrompt = bindPromptReferences(request.prompt, request.referenceNames);
+      const submittedPrompt = request.promptAlreadyBound ? request.prompt.trim() : bindPromptReferences(request.prompt, request.referenceNames);
       if (submittedPrompt.length > 20000) throw new Error('绑定参考图后的提示词过长');
       const runRoot = path.join(accountDirectory(accountId), 'runs', request.jobId);
       const input = path.join(runRoot, 'input');
