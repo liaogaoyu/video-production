@@ -1,3 +1,12 @@
+// randomUUID requires HTTPS; getRandomValues also works on HTTP deployments.
+function createId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 const paths = {
   grid: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
   film: "M4 3h16v18H4z M4 8h16 M4 16h16 M8 3v18 M16 3v18",
@@ -407,7 +416,7 @@ function art(a) {
 }
 function addAssetVersion(asset, output, source = "upload") {
   asset.versions ||= [];
-  const version = { id: crypto.randomUUID(), image: output.url || output, path: output.path, prompt: asset.prompt, source, createdAt: new Date().toISOString() };
+  const version = { id: createId(), image: output.url || output, path: output.path, prompt: asset.prompt, source, createdAt: new Date().toISOString() };
   asset.versions.push(version);
   asset.selectedVersionId = version.id;
   asset.image = version.image;
@@ -858,7 +867,7 @@ function addAccountModal() {
     }
     fresh.forEach((name) =>
       connections.accounts.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         name,
         enabled: true,
       }),
@@ -955,7 +964,7 @@ function validateImport() {
             `第 ${i + 1} 条需要 name、prompt，以及 type（角色/场景/道具）`,
           );
         const name = a.name.trim();
-        const externalKey = String(a.key || `asset-${crypto.randomUUID()}`).trim();
+        const externalKey = String(a.key || `asset-${createId()}`).trim();
         if (!/^[a-zA-Z0-9_-]{1,120}$/.test(externalKey)) throw Error(`第 ${i + 1} 条 key 只能包含字母、数字、横线和下划线`);
         if (names.has(name) || keys.has(externalKey)) {
           skipped++;
@@ -964,7 +973,7 @@ function validateImport() {
         names.add(name);
         keys.add(externalKey);
         fresh.push({
-          id: crypto.randomUUID(),
+          id: createId(),
           externalKey,
           name,
           type: typeMap[a.type],
@@ -1028,7 +1037,7 @@ function validateImport() {
         });
         for (const mention of mentions) if (!resolved.some((ref) => ref.name === mention)) resolved.push({ key: state.assets.find((asset) => asset.name === mention)?.externalKey || "", name: mention });
         return {
-          id: crypto.randomUUID(),
+          id: createId(),
           externalKey,
           episode,
           number: s.number,
@@ -1059,7 +1068,7 @@ async function runRealAssetGeneration(assets) {
   view = "jobs";
   const jobs = assets.map((asset) => {
     const job = {
-      id: crypto.randomUUID(),
+      id: createId(),
       sourceId: asset.id,
       kind: "asset",
       model: connections.image.model,
@@ -1178,7 +1187,7 @@ function stageRealShotJobs(shots, account, config) {
   return shots.map((shot) => {
     const references = shot.refs.map((name, index) => assetForReference(shot, index));
     const missingRef = references.some((asset) => !asset?.image);
-    const job = { id: crypto.randomUUID(), sourceId: shot.id, kind: "shot", title: `${String(shot.number).padStart(3, "0")}_${shot.title}`, prompt: shot.prompt, refs: references.filter(Boolean).map((asset) => ({ id: asset.id, name: asset.name, image: asset.image })), accountId: account.id, accountName: account.name, model: config.model, ratio: state.settings.ratio, duration: Math.max(4, Math.min(shot.duration, config.model === "seedance2.5" ? 30 : 15)), resolution: config.resolution, progress: missingRef ? 0 : 10, status: missingRef ? "error" : "submitting", error: missingRef ? "有引用还没有可用图片" : "", real: true, createdAt: new Date().toISOString() };
+    const job = { id: createId(), sourceId: shot.id, kind: "shot", title: `${String(shot.number).padStart(3, "0")}_${shot.title}`, prompt: shot.prompt, refs: references.filter(Boolean).map((asset) => ({ id: asset.id, name: asset.name, image: asset.image })), accountId: account.id, accountName: account.name, model: config.model, ratio: state.settings.ratio, duration: Math.max(4, Math.min(shot.duration, config.model === "seedance2.5" ? 30 : 15)), resolution: config.resolution, progress: missingRef ? 0 : 10, status: missingRef ? "error" : "submitting", error: missingRef ? "有引用还没有可用图片" : "", real: true, createdAt: new Date().toISOString() };
     state.jobs.push(job);
     return job;
   });
@@ -1265,7 +1274,7 @@ function generate(kind) {
     }
     available.forEach((r) =>
       state.jobs.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         sourceId: r.id,
         kind,
         model: kind === "asset" ? connections.image.model : "Seedance",
@@ -1476,7 +1485,7 @@ document.addEventListener("click", async (e) => {
         const result = await window.desktop.selectReferenceImages({ projectId: activeProject.id, assetId: asset.id });
         if (!result.canceled) {
           const existing = new Set((asset.references || []).map((item) => item.sha256));
-          asset.references = [...(asset.references || []), ...result.images.filter((item) => !existing.has(item.sha256)).map((item) => ({ id: crypto.randomUUID(), url: item.url, sha256: item.sha256 }))].slice(0, 15);
+          asset.references = [...(asset.references || []), ...result.images.filter((item) => !existing.has(item.sha256)).map((item) => ({ id: createId(), url: item.url, sha256: item.sha256 }))].slice(0, 15);
           persist();
           detail(asset.id);
           toast(`已添加 ${result.images.length} 张参考图`);
@@ -1496,7 +1505,7 @@ document.addEventListener("click", async (e) => {
         if (file.size > 2 * 1024 * 1024) return;
         const reader = new FileReader();
         reader.onload = () => {
-          asset.references = [...(asset.references || []), { id: crypto.randomUUID(), url: reader.result }];
+          asset.references = [...(asset.references || []), { id: createId(), url: reader.result }];
           persist();
           detail(asset.id);
         };
@@ -1835,7 +1844,7 @@ document.addEventListener("click", async (e) => {
       return;
     }
     const project = {
-      id: crypto.randomUUID(),
+      id: createId(),
       name,
       description: document.querySelector("#projectDescription").value.trim(),
       style: document.querySelector("#projectStyle").value.trim(),
@@ -1867,7 +1876,7 @@ document.addEventListener("click", async (e) => {
     document.querySelector("#saveShot").onclick = () => {
       const form = readShotForm();
       if (!form) return;
-      const shot = { id: crypto.randomUUID(), externalKey: "", refs: [], refKeys: [], ...form };
+      const shot = { id: createId(), externalKey: "", refs: [], refKeys: [], ...form };
       syncShotRefs(shot, form.prompt);
       state.shots.push(shot);
       state.shots.sort((a, b) => (a.episode || 1) - (b.episode || 1) || a.number - b.number);
@@ -2015,7 +2024,7 @@ document.addEventListener("click", async (e) => {
         return;
       }
       state.assets.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         name,
         prompt,
         type: document.querySelector("#newType").value,
