@@ -8,7 +8,9 @@
   async function request(method, url, options = {}) {
     const headers = { ...(token() ? { authorization: `Bearer ${token()}` } : {}), ...(options.headers || {}) };
     if (options.body) headers["content-type"] = "application/json";
-    const response = await fetch(url, { method, headers, body: options.form || (options.body ? JSON.stringify(options.body) : undefined) });
+    let response;
+    try { response = await fetch(url, { method, headers, body: options.form || (options.body ? JSON.stringify(options.body) : undefined) }); }
+    catch { throw new Error("无法连接应用服务，请确认服务已启动后重试"); }
     const text = await response.text();
     let payload = {};
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }

@@ -20,7 +20,8 @@
   const get = (id) => document.querySelector("#" + id);
   async function request(method, url, body) {
     const token = sessionStorage.getItem("storydock-access");
-    const r = await fetch("/api/v1/" + url, {
+    let r;
+    try { r = await fetch("/api/v1/" + url, {
       method,
       headers: {
         ...(token ? { authorization: "Bearer " + token } : {}),
@@ -28,6 +29,7 @@
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+    } catch { throw Error("无法连接应用服务，请确认服务已启动后重试"); }
     const d = await r.json();
     if (!r.ok) throw Error(d.error?.message || "请求失败");
     return d;

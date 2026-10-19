@@ -98,3 +98,13 @@ test('Dreamina default channel applies to storyboard videos only, never asset im
  await x.ctx.window.storydockApi.confirmAndSubmit({kind:'shot',rows:[{id:'shot',refs:[]}],project});
  assert.equal(globalCalls,1);
 });
+
+test('international account check explains a disconnected application service',async()=>{
+ const x=setup();let message='';
+ x.ctx.sessionStorage={getItem:()=>''};x.ctx.fetch=async()=>{throw new TypeError('Failed to fetch');};
+ x.run(fs.readFileSync(__dirname+'/web/global.js','utf8'));
+ x.ctx.window.storydockGlobal.attach({toast:text=>{message=text;}});
+ const button={dataset:{global:'check',id:'test-account'},disabled:false};
+ await x.handlers.click({target:{closest:()=>button}});
+ assert.match(message,/无法连接应用服务/);assert.equal(button.disabled,false);assert.ok(!message.includes('Failed to fetch'));
+});
