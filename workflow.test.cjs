@@ -55,3 +55,32 @@ test('HTTP deployments can add accounts and image versions without randomUUID',(
   x.run("addAssetVersion(state.assets[0],'file:///http.png','upload')");
   assert.equal(x.run('state.assets[0].image'),'file:///http.png');
 });
+
+test('HTTP batch confirmation submits image and video jobs with unique idempotency keys',async()=>{
+  const webcrypto=require('node:crypto').webcrypto;
+  const x=setup({getRandomValues:bytes=>webcrypto.getRandomValues(bytes)});
+  const requests=[];
+  x.ctx.sessionStorage={getItem:()=>''};
+  x.ctx.EventSource=class{};
+  x.ctx.fetch=async(url,options)=>{
+    if(url==='/api/v1/projects') return new Promise(()=>{});
+    requests.push({url,...options});
+    return {ok:true,status:200,text:async()=>JSON.stringify({jobs:[]})};
+  };
+  x.run(fs.readFileSync(__dirname+'/web/api.js','utf8'));
+  // Only success notification is expected; failures must leave the dialog open.
+  let closed=0;
+  x.ctx.window.storydockApi.attach({modal(){},close(){closed++;},mergeJobs(){},setView(){},toast(message){assert.match(message,/任务已交给服务器/);}});
+  const project={id:'project',data:{assets:[],settings:{ratio:'16:9'}}};
+  for(const kind of ['asset','shot']) {
+    await x.ctx.window.storydockApi.confirmAndSubmit({kind,rows:[{id:'source',title:'test',refs:[]}],project});
+    x.document.querySelector('#videoModel').value='seedance2.0';
+    x.document.querySelector('#videoResolution').value='720p';
+    await x.document.querySelector('#startServerBatch').onclick();
+  }
+  const submitted=requests.filter(r=>r.method==='POST');
+  assert.equal(closed,2);
+  assert.deepEqual(submitted.map(r=>JSON.parse(r.body).kind),['image','video']);
+  assert.notEqual(submitted[0].headers['idempotency-key'],submitted[1].headers['idempotency-key']);
+  for(const r of submitted) assert.match(r.headers['idempotency-key'],/^[0-9a-f-]{36}$/);
+});

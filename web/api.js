@@ -308,7 +308,7 @@
         button.disabled = true;
         try {
           await request("POST", `/api/v1/projects/${project.id}/jobs/batch`, {
-            headers: { "idempotency-key": crypto.randomUUID() },
+            headers: { "idempotency-key": createId() },
             body: {
               kind: kind === "asset" ? "image" : "video",
               sourceIds: rows.map((row) => row.id),
