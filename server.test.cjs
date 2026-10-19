@@ -12,6 +12,27 @@ const { createScheduler } = require("./worker/scheduler.cjs");
 const { zipStore } = require("./server/zip.cjs");
 const { createRuntimeBootstrap } = require("./worker/runtime.cjs");
 const { handleAuthFailure } = require("./worker/auth.cjs");
+const { restoreDesktopWorkspace } = require("./server/desktop-migration.cjs");
+
+test("desktop migration preserves versions, references and videos without resubmitting", async () => {
+  const ctx = await start();
+  try {
+    const root = ctx.services.paths.root;
+    const one = path.join(root,"one.png"), two=path.join(root,"two.png"), video=path.join(root,"clip.mp4");
+    fs.writeFileSync(one,PNG);fs.writeFileSync(two,Buffer.concat([PNG,Buffer.from("version-two")]));
+    fs.writeFileSync(video,Buffer.from([0,0,0,16,102,116,121,112,109,112,52,50,0,0,0,0]));
+    const workspace={projects:[{id:"old-project",name:"旧项目",data:{settings:{ratio:"9:16"},assets:[{id:"old-asset",name:"角色",type:"角色",prompt:"prompt",image:one,locked:true,selectedVersionId:"v1",versions:[{id:"v1",image:one,prompt:"original"},{id:"v2",image:two}],references:[{url:two}]}],shots:[{id:"old-shot",number:1,title:"镜头",prompt:"@角色 转身",refs:["角色"]}],jobs:[{id:"old-job",sourceId:"old-shot",kind:"shot",status:"done",submitId:"remote-id",video},{id:"pending",sourceId:"old-shot",kind:"shot",status:"remote_running",submitId:"pending-id"}]}}]};
+    const restore=()=>restoreDesktopWorkspace({services:ctx.services,workspace,sourceKey:"test-source",allowedRoots:[root],staticRoot:__dirname});
+    const report=restore();assert.equal(report.missing.length,0);assert.equal(report.projects[0].videos,1);
+    const graph=ctx.services.repos.content.graph(report.projects[0].id);
+    assert.equal(graph.versions.length,2);assert.equal(graph.references.length,1);assert.equal(graph.shotRefs[0].asset_id,graph.assets[0].id);
+    const locked=graph.versions.find(v=>v.id===graph.assets[0].locked_version_id);assert.equal(locked.prompt,"original");
+    assert.equal(graph.jobs.find(j=>j.remote_task_id==="remote-id").status,"succeeded");
+    assert.equal(graph.jobs.find(j=>j.remote_task_id==="pending-id").status,"submit_unknown");
+    assert.equal(ctx.services.repos.jobs.claimJob("test-worker"),null);
+    assert.equal(restore().skipped.length,1);assert.equal(ctx.services.repos.content.listProjects().length,1);
+  } finally {await ctx.close();}
+});
 
 test("premature OAuth expiry recovers an already authorized CLI account", async () => {
   const states = [];
