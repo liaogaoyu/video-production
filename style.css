@@ -329,3 +329,6 @@ button.danger { color: #bc534a; }
 .global-quote-items { max-height: 260px; overflow:auto; border-block:1px solid var(--line); }
 #globalConfigError, #globalApprovalError, #globalAddError { color:#b42318; }
 @media(max-width:700px) { .global-settings .account-row {align-items:flex-start;flex-direction:column;} }
+
+.global-official-link { color: var(--accent); padding: 9px 5px; text-decoration: none; }
+.global-official-link:hover { text-decoration: underline; }

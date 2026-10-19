@@ -40,7 +40,7 @@
       ? accounts
           .map(
             (a) =>
-              `<div class="account-row"><div><strong>${esc(a.name)}</strong><p class="field-help">${a.enabled ? (a.authorized ? "已授权 · " + (a.identityConfirmed ? "身份已确认" : "身份待确认") + (a.isVip ? " · 会员" : "") : "待授权") : "已暂停"}${a.error ? " · " + esc(a.error) : ""}</p></div><div class="account-actions"><button data-global="auth" data-id="${a.id}">授权</button><button data-global="check" data-id="${a.id}">检查</button><button data-global="toggle" data-id="${a.id}">${a.enabled ? "暂停" : "启用"}</button></div></div>`,
+              `<div class="account-row"><div><strong>${esc(a.name)}</strong><p class="field-help">${a.enabled ? (a.authorized ? "已授权 · " + (a.identityConfirmed ? "身份已确认" : "身份待确认") + (a.isVip ? " · 会员" : "") : "待授权") : "已暂停"}${a.error ? " · " + esc(a.error) : ""}</p><p class="field-help">剩余积分：CLI 暂不提供 · 可在官网查看</p></div><div class="account-actions"><a class="global-official-link" href="https://dreamina.capcut.com/" target="_blank" rel="noopener noreferrer">官网</a><button data-global="auth" data-id="${a.id}">授权</button><button data-global="check" data-id="${a.id}">检查</button><button data-global="toggle" data-id="${a.id}">${a.enabled ? "暂停" : "启用"}</button></div></div>`,
           )
           .join("")
       : '<p class="field-help">暂无国际账号</p>';
