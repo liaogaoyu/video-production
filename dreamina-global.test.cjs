@@ -149,6 +149,7 @@ function fakeRunner() {
           ],
           submission: { state: "completed" },
         };
+      if (group === "resource" && command === "get") data = {creditsAmount: 20};
       if (group === "resource" && command === "download") {
         const bytes = Buffer.from([
           0, 0, 0, 16, 102, 116, 121, 112, 109, 112, 52, 50, 0, 0, 0, 0,
@@ -559,4 +560,27 @@ test("already logged in authorization reuses official state without a challenge"
     await c.s.global.tick();
     assert.equal(c.s.global.getAuth(session.authSessionId).status, 'authorized');
   } finally { await c.close(); }
+});
+
+test('official task credit preauthorization persists after download and is presented separately from quotes', async()=>{
+ const c=await setup();try{
+  const f=await fixture(c),p=await prepare(c,f),b=c.s.global.approve(p.id,{inputHash:p.inputHash,ceiling:20});
+  const scheduler=createScheduler({repos:c.s.repos,db:c.s.db,media:c.s.media,owner:'test',providers:{dreamina_global_canvas:c.s.global.provider()}});
+  await scheduler.tick();c.s.db.prepare('UPDATE jobs SET next_run_at=NULL WHERE id=?').run(b.jobIds[0]);await scheduler.tick();await scheduler.tick();
+  const job=c.s.repos.jobs.getJob(b.jobIds[0]);assert.equal(job.status,'succeeded');
+  assert.equal(JSON.parse(job.resultJson).creditAmount,20);
+  const {presentJob}=require('./server/present.cjs');
+  assert.equal(presentJob(job).creditAmount,20);
+  assert.equal(presentJob({...job,resultJson:'{}'}).creditAmount,null);
+  assert.equal(presentJob({...job,resultJson:JSON.stringify({creditAmount:0,creditKind:'preauthorized'})}).creditAmount,0);
+ }finally{await c.close();}
+});
+test('credit lookup failure does not prevent completed video download',async()=>{
+ const c=await setup();try{
+  const original=c.runner.call.bind(c.runner);c.runner.call=async(profile,args)=>{if(args[0]==='resource'&&args[1]==='get')throw Error('offline');return original(profile,args);};
+  const f=await fixture(c),p=await prepare(c,f),b=c.s.global.approve(p.id,{inputHash:p.inputHash,ceiling:20});
+  const scheduler=createScheduler({repos:c.s.repos,db:c.s.db,media:c.s.media,owner:'test',providers:{dreamina_global_canvas:c.s.global.provider()}});
+  await scheduler.tick();c.s.db.prepare('UPDATE jobs SET next_run_at=NULL WHERE id=?').run(b.jobIds[0]);await scheduler.tick();await scheduler.tick();
+  const job=c.s.repos.jobs.getJob(b.jobIds[0]);assert.equal(job.status,'succeeded');assert.equal(JSON.parse(job.resultJson).creditAmount,undefined);
+ }finally{await c.close();}
 });

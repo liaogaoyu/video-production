@@ -944,7 +944,13 @@ function createGlobalService(
               db.prepare(
                 "UPDATE global_runs SET resource_id=? WHERE job_id=?",
               ).run(r.resourceId, job.id);
-              return { outcome: "download", remoteTaskId: run.submit_id };
+              let accounting;
+              try {
+                const resource = (await runner.call(a.profile, ["resource", "get", r.resourceId, "--project-id", run.canvas_id], 30000)).data;
+                if (typeof resource.creditsAmount === "number" && Number.isFinite(resource.creditsAmount) && resource.creditsAmount >= 0)
+                  accounting = {creditAmount: resource.creditsAmount, creditKind: "preauthorized"};
+              } catch { /* Optional accounting must never prevent downloading completed media. */ }
+              return { outcome: "download", remoteTaskId: run.submit_id, accounting };
             }
             if (d.state === "failed" || d.state === "canceled")
               return { outcome: "failed", message: "国际生成任务失败或取消" };

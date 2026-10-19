@@ -10,6 +10,9 @@ function backoff(attempt) {
 
 function createScheduler({ repos, providers, owner = "worker", db, media }) {
   function settle(job, result) {
+    if (result.accounting) job = repos.jobs.commitJob(job, {
+      result_json: JSON.stringify({...JSON.parse(job.resultJson || "{}"), ...result.accounting}),
+    });
     if (result.outcome === "remote") {
       return repos.jobs.commitJob(job, {
         status: "remote_running",

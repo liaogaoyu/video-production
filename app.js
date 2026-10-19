@@ -756,7 +756,8 @@ jobsPage = function () {
   const pending = state.jobs.filter((job) => ["waiting", "running", "submitting", "remote_running", "download_failed", "submit_unknown", "error", "queued", "preparing", "downloading", "failed", "auth_expired"].includes(job.status)).length;
   const rows = visibleJobs().map((job) => {
     const status = window.__STORYDOCK_SERVER__ ? serverJobLabel(job) : job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.status === "submit_unknown" ? "提交待确认" : job.status === "download_failed" ? "下载失败" : job.status === "remote_running" ? (job.queueNote ? `排队中 · ${job.queueNote}` : "即梦生成中") : job.progress ? `处理中 ${job.progress}%` : "等待中";
-    const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${window.__STORYDOCK_SERVER__ ? "" : job.real ? " · 真实任务" : " · 演示任务"}${job.error ? " · " + esc(job.error) : ""}`;
+    const credit = job.creditKind === "preauthorized" && typeof job.creditAmount === "number" ? ` · 积分预占 ${job.creditAmount}` : "";
+    const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${window.__STORYDOCK_SERVER__ ? "" : job.real ? " · 真实任务" : " · 演示任务"}${credit}${job.error ? " · " + esc(job.error) : ""}`;
     const media = job.video
       ? `<video class="job-video" data-preview-video="${esc(job.video)}" src="${esc(job.video)}" muted preload="metadata" aria-label="预览视频"></video>`
       : `<img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt="">`;
@@ -764,7 +765,7 @@ jobsPage = function () {
     const retry = window.__STORYDOCK_SERVER__ && ["failed", "error", "download_failed", "submit_unknown", "auth_expired"].includes(job.status)
       ? `<button data-retry-job="${esc(job.id)}" data-retry-confirm="${job.status === "submit_unknown" ? "1" : ""}">重试</button>`
       : "";
-    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small>${detail}</small></div>${progress}<span class="job-status">${status}</span>${retry}${job.video ? `<button data-preview-video="${esc(job.video)}">预览</button>` : ""}</div>`;
+    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small title="积分预占为官方任务记录，最终净扣费以官方账单为准">${detail}</small></div>${progress}<span class="job-status">${status}</span>${retry}${job.video ? `<button data-preview-video="${esc(job.video)}">预览</button>` : ""}</div>`;
   }).join("");
   const video = [...state.jobs].reverse().find((job) => job.video)?.video;
   const batchId = window.__STORYDOCK_SERVER__ ? state.jobs.find((job) => job.batchId && ["queued", "preparing"].includes(job.status))?.batchId : "";
