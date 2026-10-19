@@ -221,14 +221,14 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       if (!models.has(request.model) || !ratios.has(request.ratio) || !Number.isInteger(request.duration) || request.duration < 4 || request.duration > (request.model === 'seedance2.5' ? 30 : 15)) throw new Error('视频模型、画幅或时长不受支持');
       const allowedResolutions = request.model === 'seedance2.5' ? ['480p', '720p', '1080p'] : request.model === 'seedance2.0_vip' ? ['720p', '1080p', '4k'] : ['720p'];
       if (!allowedResolutions.includes(request.resolution)) throw new Error('该模型不支持所选分辨率');
-      if (!Array.isArray(request.images) || request.images.length < 1 || request.images.length > (request.model === 'seedance2.5' ? 30 : 9)) throw new Error('参考图数量不受支持');
+      if (!Array.isArray(request.images) || request.images.length > (request.model === 'seedance2.5' ? 30 : 9)) throw new Error('参考图数量不受支持');
       if (!Array.isArray(request.referenceNames) || request.referenceNames.length !== request.images.length || request.referenceNames.some((name) => typeof name !== 'string' || !name.trim() || name.length > 120 || /[\r\n]/.test(name))) throw new Error('参考图名称与图片不匹配');
       const submittedPrompt = request.promptAlreadyBound ? request.prompt.trim() : bindPromptReferences(request.prompt, request.referenceNames);
       if (submittedPrompt.length > 20000) throw new Error('绑定参考图后的提示词过长');
       const runRoot = path.join(accountDirectory(accountId), 'runs', request.jobId);
       const input = path.join(runRoot, 'input');
       await fsp.mkdir(input, { recursive: true, mode: 0o700 });
-      const command = ['multimodal2video'];
+      const command = [request.images.length ? 'multimodal2video' : 'text2video'];
       for (const [index, source] of request.images.entries()) {
         const extension = path.extname(source).toLowerCase();
         if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) throw new Error('参考图格式不正确');
@@ -240,7 +240,7 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       }
       command.push('--prompt', submittedPrompt, '--duration', String(request.duration), '--ratio', request.ratio, '--video_resolution', request.resolution, '--model_version', request.model, '--poll', '0');
       return {
-        ...taskResult(await run(accountId, command, [{ source: input, target: '/work/input', readonly: true }], 180000)),
+        ...taskResult(await run(accountId, command, request.images.length ? [{ source: input, target: '/work/input', readonly: true }] : [], 180000)),
         submittedPrompt,
         referenceBindings: request.referenceNames.map((name, index) => ({ name, imageNumber: index + 1 })),
       };

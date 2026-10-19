@@ -100,7 +100,6 @@ function createJobRepository(db, { record }) {
       LEFT JOIN asset_versions v ON v.id=a.locked_version_id
       WHERE sr.shot_id=? ORDER BY sr.position
     `).all(shot.id);
-    if (!refs.length) throw new ApiError(400, "reference_not_ready", `分镜“${shot.title}”没有可用的参考图`);
     const missing = refs.filter((item) => !item.media_id);
     if (missing.length) throw new ApiError(400, "reference_not_ready", `分镜“${shot.title}”的资产“${missing[0].name}”还没有固定图片`);
     const names = refs.map((item) => item.name);

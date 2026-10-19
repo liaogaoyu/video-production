@@ -413,3 +413,18 @@ test("old project packages report missing files and do not resubmit remote jobs"
   assert.equal(job.remote_task_id, "remote-123");
   await ctx.close();
 });
+
+test('text-only shots enqueue without references while referenced assets still need fixed images',async()=>{
+ const ctx=await start();
+ try {
+  const project=json(await ctx.app.inject({method:'POST',url:'/api/v1/projects',payload:{name:'纯文生视频'}})).project;
+  const asset=json(await ctx.app.inject({method:'POST',url:`/api/v1/projects/${project.id}/assets`,payload:{name:'宫廷',type:'场景',prompt:'宫廷'}}));
+  for(const [prompt,expected] of [['云海中的宫廷，镜头缓慢推进。',202],['@宫廷 镜头推进。',400]]){
+   const shot=json(await ctx.app.inject({method:'POST',url:`/api/v1/projects/${project.id}/shots`,payload:{title:'场景',prompt,episode:1,number:expected,duration:5}}));
+   const response=await ctx.app.inject({method:'POST',url:`/api/v1/projects/${project.id}/jobs/batch`,headers:{'idempotency-key':crypto.randomUUID()},payload:{kind:'video',sourceIds:[shot.id],model:'seedance2.0',ratio:'16:9',resolution:'720p'}});
+   assert.equal(response.statusCode,expected,response.body);
+   if(expected===202){const job=ctx.services.repos.jobs.getJob(json(response).jobIds[0]);assert.deepEqual(JSON.parse(job.inputSnapshot).references,[]);}
+   else assert.equal(json(response).error.code,'reference_not_ready');
+  }
+ } finally {await ctx.close();}
+});

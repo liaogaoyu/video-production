@@ -126,7 +126,7 @@ test('prompt binding keeps the CLI image order as the semantic reference order',
 
 test('video preflight rejects invalid limits before starting Docker', async () => {
   const { pool, calls } = setup([]);
-  await assert.rejects(() => pool.submitVideo('44444444-4444-4444-4444-444444444444', { jobId: 'job-2', prompt: 'p', images: [], referenceNames: [], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' }), /参考图数量/);
+  await assert.rejects(() => pool.submitVideo('44444444-4444-4444-4444-444444444444', { jobId: 'job-2', prompt: 'p', images: Array(10).fill('too-many.png'), referenceNames: Array(10).fill('asset'), model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' }), /参考图数量/);
   assert.equal(calls.length, 0);
 });
 
@@ -189,4 +189,14 @@ test('first-use compliance failure is not shown as a raw API error', async () =>
     await pool.inspect('11111111-1111-1111-1111-111111111111');
     assert.equal(fs.existsSync(mountedPath),false);
   } finally { process.umask(oldMask); fs.rmSync(runtime,{recursive:true,force:true}); }
+});
+
+test('video without references uses official text2video instead of multimodal mode',async()=>{
+ const {pool,calls}=setup([{stdout:'submit_id: remote-text-123\ngen_status: querying\n'}]);
+ const result=await pool.submitVideo('33333333-3333-3333-3333-333333333333',{jobId:'text-only',prompt:'云海中的宫廷，镜头缓慢推进。',images:[],referenceNames:[],model:'seedance2.0',ratio:'16:9',duration:5,resolution:'720p'});
+ assert.equal(result.kind,'accepted');
+ assert.ok(calls[0].args.includes('text2video'));
+ assert.ok(!calls[0].args.includes('multimodal2video'));
+ assert.ok(!calls[0].args.includes('--image'));
+ assert.equal(result.submittedPrompt,'云海中的宫廷，镜头缓慢推进。');
 });
