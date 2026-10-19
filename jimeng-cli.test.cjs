@@ -5,11 +5,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { bindPromptReferences, createJimengCliPool } = require('./jimeng-cli.cjs');
 
-function setup(outputs) {
+function setup(outputs, options = {}) {
   const calls = [];
   const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(`enc:${value}`), decryptString: value => value.toString().slice(4) };
-  const execFileImpl = (file, args, options, callback) => { calls.push({ file, args }); const next = outputs.shift() || { stdout: '', stderr: '', code: 0 }; const error = next.code ? Object.assign(new Error('exit'), { code: next.code }) : null; callback(error, next.stdout, next.stderr); };
-  const pool = createJimengCliPool({ directory: fs.mkdtempSync(path.join(os.tmpdir(), 'storydock-cli-')), safeStorage, execFileImpl });
+  const execFileImpl = (file, args, execOptions, callback) => { calls.push({ file, args }); const next = outputs.shift() || { stdout: '', stderr: '', code: 0 }; const error = next.code ? Object.assign(new Error(next.errorMessage || 'exit'), { code: next.code }) : null; callback(error, next.stdout, next.stderr); };
+  const pool = createJimengCliPool({ directory: fs.mkdtempSync(path.join(os.tmpdir(), 'storydock-cli-')), safeStorage, execFileImpl, ...options });
   return { pool, calls };
 }
 
@@ -42,8 +42,18 @@ test('OAuth success and CLI membership permission are separate states', async ()
 test('runtime status uses the pinned image and invalid IDs never reach Docker', async () => {
   const { pool, calls } = setup([{ stdout: 'sha256:test' }]);
   assert.equal((await pool.runtimeStatus()).ok, true);
-  assert.deepEqual(calls[0].args.slice(0, 3), ['image', 'inspect', 'lumenx-dreamina-eval:1.4.20']);
+  assert.deepEqual(calls[0].args.slice(0, 3), ['image', 'inspect', 'lumenx-dreamina-eval:1.4.21']);
   await assert.rejects(() => pool.inspect('../escape'), /ID/);
+});
+
+test('auth reports missing Docker instead of a misleading authorization URL error', async () => {
+  const { pool } = setup([{ code: 'ENOENT', errorMessage: 'spawn docker ENOENT' }]);
+  await assert.rejects(() => pool.beginAuth('77777777-7777-7777-7777-777777777777'), /Docker Desktop 未安装/);
+});
+
+test('auth tells the user to install the CLI runtime when the image is missing', async () => {
+  const { pool } = setup([{ code: 125, stderr: 'Unable to find image locally\ndocker: pull access denied for lumenx-dreamina-eval' }]);
+  await assert.rejects(() => pool.beginAuth('88888888-8888-8888-8888-888888888888'), /安装.*CLI 运行环境/);
 });
 
 test('video submission stages ordered images and returns an accepted remote id', async () => {

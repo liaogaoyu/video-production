@@ -55,6 +55,7 @@ app.whenReady().then(() => {
   const jimengCli = createJimengCliPool({
     directory: path.join(app.getPath("userData"), "storydock-jimeng-cli"),
     safeStorage,
+    fetchImpl: net.fetch,
   });
   function validAccount(account) {
     return !!account && /^[a-f0-9-]{36}$/.test(account.id) && typeof account.name === "string" && account.name.length <= 60;
@@ -95,6 +96,7 @@ app.whenReady().then(() => {
     return { ok: true };
   }
   ipcMain.handle("jimeng-runtime-status", (event) => { assertLocal(event); return jimengCli.runtimeStatus(); });
+  ipcMain.handle("install-jimeng-runtime", (event) => { assertLocal(event); return jimengCli.installRuntime(); });
   ipcMain.handle("begin-jimeng-cli-auth", async (event, account) => {
     assertLocal(event);
     if (!validAccount(account)) throw new Error("账号格式不正确");

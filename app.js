@@ -715,7 +715,7 @@ settingsPage = function () {
     const credit = typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : "";
     return `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(account.name)}</strong><small>${esc(stateText)}${credit}</small></div><button data-open-account="${account.id}">网页</button><button data-auth-cli="${account.id}">CLI 授权</button><button data-verify-cli="${account.id}">${account.authPending ? "完成授权" : "检查"}</button><button class="ghost" data-toggle-account="${account.id}">${account.enabled ? "暂停" : "启用"}</button></div>`;
   }).join("");
-  return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI / APIMart</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageResolution">输出分辨率 <small>APIMart</small></label><select id="imageResolution"><option value="1k" ${connections.image.resolution === "1k" ? "selected" : ""}>1K</option><option value="2k" ${connections.image.resolution === "2k" ? "selected" : ""}>2K</option><option value="4k" ${connections.image.resolution === "4k" ? "selected" : ""}>4K</option></select><label for="imageApiKey">API Key <small>${imageKeySaved ? "已加密保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2>${btn("add-account", "添加账号", "plus")}</div><p class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
+  return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI / APIMart</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageResolution">输出分辨率 <small>APIMart</small></label><select id="imageResolution"><option value="1k" ${connections.image.resolution === "1k" ? "selected" : ""}>1K</option><option value="2k" ${connections.image.resolution === "2k" ? "selected" : ""}>2K</option><option value="4k" ${connections.image.resolution === "4k" ? "selected" : ""}>4K</option></select><label for="imageApiKey">API Key <small>${imageKeySaved ? "已加密保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2><div class="actions">${jimengRuntime?.canInstall ? btn("install-jimeng-runtime", "安装 CLI 运行环境", "down", "primary") : ""}${btn("add-account", "添加账号", "plus")}</div></div><p class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
 };
 const renderSettingsPage = settingsPage;
 settingsPage = () => renderSettingsPage().replace("导出 JSON", "导出完整项目包");
@@ -1625,6 +1625,24 @@ document.addEventListener("click", async (e) => {
     return;
   }
   const action = el.dataset.action;
+  if (action === "install-jimeng-runtime") {
+    if (!window.desktop?.installJimengRuntime) {
+      toast("请更新桌面客户端");
+      return;
+    }
+    jimengRuntime = { ok: false, canInstall: false, message: "正在下载并安装官方 CLI 运行环境，请保持 Docker Desktop 运行…" };
+    render();
+    try {
+      jimengRuntime = await window.desktop.installJimengRuntime();
+      render();
+      toast("官方 CLI 运行环境已安装，可以开始授权");
+    } catch (error) {
+      jimengRuntime = { ok: false, canInstall: true, message: String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error:\s*/, "").slice(0, 220) };
+      render();
+      toast(jimengRuntime.message);
+    }
+    return;
+  }
   if (action === "save-image-model") {
     await saveImageModel();
     return;
