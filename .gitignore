@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-windows/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+*.sqlite
+*.sqlite3
+*.enc
+*.pem
+*.key
+output/
