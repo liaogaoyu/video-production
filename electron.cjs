@@ -6,6 +6,7 @@ const {
   safeStorage,
   session,
   shell,
+  net,
 } = require("electron");
 const path = require("node:path");
 const { pathToFileURL, fileURLToPath } = require("node:url");
@@ -194,6 +195,7 @@ app.whenReady().then(() => {
       projectId: request.projectId,
       assetId: request.assetId,
       outputRoot: path.join(app.getPath("userData"), "projects"),
+      fetchImpl: net.fetch,
     });
   });
   ipcMain.handle("select-asset-image", async (event, request) => {

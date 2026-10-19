@@ -54,6 +54,38 @@ function apiError(payload) {
   return String(error.message || error.detail || error.code || error).slice(0, 500);
 }
 
+function networkErrorMessage(label, url, error) {
+  const details = [
+    error?.cause?.code,
+    error?.cause?.message,
+    error?.code,
+    error?.message,
+  ].filter(Boolean).join(" ");
+  const matched = details.match(/\b(?:net::)?(ERR_[A-Z0-9_]+|UND_ERR_[A-Z0-9_]+|E[A-Z0-9_]+)\b/i);
+  const code = matched?.[1]?.toUpperCase() || "";
+  const hostname = new URL(url).hostname;
+  let hint = `请检查网络、系统代理和防火墙是否允许访问 ${hostname}`;
+  if (["ENOTFOUND", "EAI_AGAIN", "ERR_NAME_NOT_RESOLVED"].includes(code))
+    hint = `DNS 无法解析 ${hostname}`;
+  else if (["ECONNREFUSED", "ERR_CONNECTION_REFUSED"].includes(code))
+    hint = `${hostname} 拒绝连接`;
+  else if (["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "ERR_TIMED_OUT"].includes(code))
+    hint = `连接 ${hostname} 超时`;
+  else if (code.includes("CERT") || code.includes("SSL"))
+    hint = `${hostname} 的 HTTPS 证书校验失败`;
+  else if (code.includes("PROXY") || code.includes("TUNNEL"))
+    hint = "系统代理连接失败，请检查 Windows 代理设置";
+  return `${label}连接失败${code ? `（${code}）` : ""}：${hint}`;
+}
+
+async function fetchOrThrow(fetchImpl, url, options, label) {
+  try {
+    return await fetchImpl(url, options);
+  } catch (error) {
+    throw new Error(networkErrorMessage(label, url, error), { cause: error });
+  }
+}
+
 function firstHttpUrl(value) {
   const values = Array.isArray(value) ? value : [value];
   return values.find((item) => typeof item === "string" && /^https?:\/\//i.test(item)) || "";
@@ -130,11 +162,12 @@ async function generateImage({
     "content-type": "application/json",
     authorization: `Bearer ${apiKey}`,
   };
-  const response = await fetchImpl(endpointFor(config.baseUrl), {
+  const endpoint = endpointFor(config.baseUrl);
+  const response = await fetchOrThrow(fetchImpl, endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
-  });
+  }, "生图接口");
   if (!response.ok) {
     const text = (await response.text())
       .slice(0, 500)
@@ -151,10 +184,11 @@ async function generateImage({
     let completed = false;
     for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
       if (pollIntervalMs) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      const polled = await fetchImpl(taskEndpoint(config.baseUrl, task.id), {
+      const pollUrl = taskEndpoint(config.baseUrl, task.id);
+      const polled = await fetchOrThrow(fetchImpl, pollUrl, {
         method: "GET",
         headers: { authorization: headers.authorization },
-      });
+      }, "生图任务查询");
       if (!polled.ok) throw new Error(`生图任务查询失败：${polled.status}`);
       payload = await polled.json();
       const taskError = apiError(payload);
@@ -183,7 +217,7 @@ async function generateImage({
       )
     )
       throw new Error("图片结果地址不安全");
-    const downloaded = await fetchImpl(remote.href, { redirect: "follow" });
+    const downloaded = await fetchOrThrow(fetchImpl, remote.href, { redirect: "follow" }, "图片下载");
     if (!downloaded.ok) throw new Error(`图片下载失败：${downloaded.status}`);
     const contentType = downloaded.headers.get("content-type") || "";
     const fromName = path.extname(new URL(remote.href).pathname).toLowerCase();

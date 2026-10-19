@@ -40,6 +40,7 @@ async function setup() {
   };
   const electron = {
     session,
+    net: { fetch: async () => { throw new Error("unexpected network call"); } },
     app: {
       whenReady: () => Promise.resolve(),
       getPath: () => userData,
