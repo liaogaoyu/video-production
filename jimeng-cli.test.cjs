@@ -83,6 +83,14 @@ test('video submission stages ordered images and returns an accepted remote id',
   ]);
 });
 
+test('overlapping asset names bind the longer token', () => {
+  const bound = bindPromptReferences('@少年·外勤装 看向 @少年', ['少年', '少年·外勤装']);
+  assert.match(bound, /参考图1对应资产“少年”/);
+  assert.match(bound, /参考图2对应资产“少年·外勤装”/);
+  assert.match(bound, /参考图2 看向 参考图1/);
+  assert.equal(bound.includes('@'), false);
+});
+
 test('prompt binding keeps the CLI image order as the semantic reference order', () => {
   assert.equal(
     bindPromptReferences('@角色甲 拿起 @道具乙', ['角色甲', '道具乙']),

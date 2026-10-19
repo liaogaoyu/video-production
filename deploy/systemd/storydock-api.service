@@ -1,0 +1,19 @@
+[Unit]
+Description=Storydock API
+After=network.target
+
+[Service]
+Type=simple
+User=storydock
+Group=storydock
+WorkingDirectory=/opt/storydock
+Environment=STORYDOCK_ROOT=/srv/storydock
+Environment=STORYDOCK_MASTER_KEY=/etc/storydock/master-key
+Environment=STORYDOCK_RUNTIME_DIR=/run/storydock
+Environment=HOST=127.0.0.1
+Environment=PORT=4320
+ExecStart=/usr/bin/node server/main.cjs
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -153,11 +153,23 @@ let state = {
   settings: { concurrency: 2, ratio: "16:9" },
   ...saved,
 };
+function blankProject() {
+  return {
+    id: "",
+    name: "未选择项目",
+    description: "",
+    style: "",
+    createdAt: new Date().toISOString(),
+    data: { assets: [], shots: [], jobs: [], settings: { concurrency: 2, ratio: "16:9" } },
+  };
+}
 let workspace;
 try {
   workspace = JSON.parse(localStorage.getItem("storydock-projects-v1"));
 } catch {}
-if (
+if (window.__STORYDOCK_SERVER__) {
+  workspace = { activeProjectId: "", projects: [] };
+} else if (
   !workspace ||
   !Array.isArray(workspace.projects) ||
   !workspace.projects.length
@@ -178,7 +190,8 @@ if (
 }
 let activeProject =
   workspace.projects.find((p) => p.id === workspace.activeProjectId) ||
-  workspace.projects[0];
+  workspace.projects[0] ||
+  blankProject();
 state = activeProject.data;
 let localConnections;
 try {
@@ -202,6 +215,10 @@ let connections = {
 let imageKeySaved = false;
 let jimengRuntime = null;
 function persistConnections() {
+  if (window.__STORYDOCK_SERVER__) {
+    window.storydockApi?.onConnections();
+    return;
+  }
   localStorage.setItem("storydock-connections-v1", JSON.stringify(connections));
   window.desktop
     ?.saveConnections?.(connections)
@@ -224,6 +241,10 @@ let view = "projects",
 let workspaceGeneration = 0;
 const persist = () => {
   workspaceGeneration += 1;
+  if (window.__STORYDOCK_SERVER__) {
+    window.storydockApi?.onPersist();
+    return;
+  }
   try {
     activeProject.data = state;
     workspace.activeProjectId = activeProject.id;
@@ -260,7 +281,7 @@ function render() {
         "",
       )}</nav><div class="sidebar-bottom nav"><button aria-label="模型与账号" data-view="settings" class="${view === "settings" ? "active" : ""}">${icon("settings")}<span>模型与账号</span></button></div></aside><main class="main"><header class="topbar"><div class="crumb">我的项目 <span>/</span><b>${view === "projects" ? "项目列表" : view === "create" ? "创建项目" : esc(activeProject.name)}</b></div><div class="topright"><span class="pill demo">演示模式</span>${btn("export", "导出项目", "down", "ghost")}</div></header><div class="content">${view === "projects" ? projectsPage() : view === "create" ? createPage() : view === "assets" ? assetsPage() : view === "shots" ? shotsPage() : view === "jobs" ? jobsPage() : settingsPage()}</div>${footer()}</main></div>`;
   const mode = document.querySelector(".pill.demo");
-  if (mode) mode.textContent = window.desktop ? "本地模式" : "浏览器演示";
+  if (mode) mode.textContent = window.__STORYDOCK_SERVER__ ? "服务器" : window.desktop ? "本地模式" : "浏览器演示";
 }
 function switchProject(id) {
   if (timer) {
@@ -310,18 +331,24 @@ function editProjectModal(id) {
 function deleteProjectModal(id) {
   const project = workspace.projects.find((item) => item.id === id);
   if (!project) return;
-  if (workspace.projects.length === 1) {
+  if (workspace.projects.length === 1 && !window.__STORYDOCK_SERVER__) {
     toast("至少保留一个项目");
     return;
   }
   modal(
     "删除项目",
-    `<div class="delete-project-message"><div class="delete-project-icon">${icon("trash")}</div><div><strong>确认删除“${esc(project.name)}”？</strong><p>项目中的 ${project.data.assets.length} 个资产、${project.data.shots.length} 个分镜和任务记录将从列表移除。已下载到本机的媒体文件会保留。</p></div></div><div class="modal-actions"><button data-action="close">取消</button><button id="confirmDeleteProject" class="danger">删除项目</button></div>`,
+    `<div class="delete-project-message"><div class="delete-project-icon">${icon("trash")}</div><div><strong>确认删除“${esc(project.name)}”？</strong><p>${window.__STORYDOCK_SERVER__ ? `项目会从列表隐藏，媒体不会立刻物理删除。${(project.data.jobs || []).filter((job) => ["submitting", "remote_running", "downloading", "submit_unknown"].includes(job.status)).length ? "已提交的远端任务会继续查询归档，尚未提交的任务会停止。" : "当前没有正在运行的远端任务。"}` : `项目中的 ${project.data.assets.length} 个资产、${project.data.shots.length} 个分镜和任务记录将从列表移除。已下载到本机的媒体文件会保留。`}</p></div></div><div class="modal-actions"><button data-action="close">取消</button><button id="confirmDeleteProject" class="danger">删除项目</button></div>`,
   );
   document.querySelector("#confirmDeleteProject").onclick = () => {
     const deletingActive = activeProject.id === id;
     workspace.projects = workspace.projects.filter((item) => item.id !== id);
-    if (deletingActive) {
+    if (!workspace.projects.length) {
+      activeProject = blankProject();
+      state = activeProject.data;
+      workspace.activeProjectId = "";
+      selected = new Set();
+      selectedShots = new Set();
+    } else if (deletingActive) {
       activeProject = workspace.projects[0];
       state = activeProject.data;
       selected = new Set();
@@ -342,7 +369,11 @@ function deleteProjectModal(id) {
   };
 }
 function projectsPage() {
-  return `<div class="heading"><h1>我的项目 <small>${workspace.projects.length}</small></h1><div class="actions">${window.desktop?.importProject ? btn("import-project", "恢复项目", "upload") : ""}${btn("new-project", "创建项目", "plus", "primary")}</div></div><div class="project-grid">${workspace.projects
+  const importButton = window.desktop?.importProject || window.__STORYDOCK_SERVER__ ? btn("import-project", "恢复项目", "upload") : "";
+  if (!workspace.projects.length) {
+    return `<div class="heading"><h1>我的项目 <small>0</small></h1><div class="actions">${importButton}${btn("new-project", "创建项目", "plus", "primary")}</div></div><div class="empty empty-library">${icon("folder")}<h2>还没有项目</h2><p>创建一个项目后即可导入资产和分镜。</p>${btn("new-project", "创建项目", "plus", "primary")}</div>`;
+  }
+  return `<div class="heading"><h1>我的项目 <small>${workspace.projects.length}</small></h1><div class="actions">${importButton}${btn("new-project", "创建项目", "plus", "primary")}</div></div><div class="project-grid">${workspace.projects
     .map((p) => {
       const image =
         p.data.assets.find((a) => a.image && a.type === "场景")?.image ||
@@ -404,9 +435,9 @@ function latestShotJob(shot) {
 }
 function shotStatus(shot) {
   const job = latestShotJob(shot);
-  if (job?.status === "done") return "done";
-  if (["error", "download_failed", "submit_unknown"].includes(job?.status)) return "failed";
-  if (["waiting", "running", "submitting", "remote_running"].includes(job?.status)) return "queued";
+  if (job?.status === "done" || job?.status === "succeeded") return "done";
+  if (["error", "download_failed", "submit_unknown", "failed", "auth_expired"].includes(job?.status)) return "failed";
+  if (["waiting", "running", "submitting", "remote_running", "queued", "preparing", "downloading"].includes(job?.status)) return "queued";
   return missing(shot).length ? "pending" : "ready";
 }
 function shotStatusParts(shot) {
@@ -676,9 +707,28 @@ function shotsPage() {
   }).join("");
   return `<div class="heading"><h1>分镜脚本</h1><div class="actions">${btn("select-all", allSelected ? "取消全选" : "全选", "check")}${btn("add-shot", "新增分镜", "plus")}${btn("delete-shots", "删除全部", "trash", "danger")}${btn("import-shots", "导入分镜脚本", "upload", "primary")}</div></div><div class="section-title"><h2>分镜列表 <small style="font-size:11px;margin-left:10px">${state.shots.length} 个分镜</small></h2><span class="muted">Seedance · ${state.settings.ratio}</span></div><div class="toolbar"><div class="tools"><select id="shotStatus" aria-label="分镜状态"><option value="all" ${shotStatusFilter === "all" ? "selected" : ""}>全部状态</option><option value="pending" ${shotStatusFilter === "pending" ? "selected" : ""}>待确认</option><option value="ready" ${shotStatusFilter === "ready" ? "selected" : ""}>已就绪</option><option value="queued" ${shotStatusFilter === "queued" ? "selected" : ""}>生成中</option><option value="done" ${shotStatusFilter === "done" ? "selected" : ""}>已生成</option><option value="failed" ${shotStatusFilter === "failed" ? "selected" : ""}>生成失败</option></select></div></div>${state.shots.some((s) => missing(s).length) ? `<div class="notice">${icon("info")} 部分引用未就绪，请先生成并锁定对应资产。</div>` : ""}<div class="shot-list">${rows || `<div class="empty">${state.shots.length ? "没有符合当前状态的分镜。" : "暂无分镜，可新增一条或导入脚本。"}</div>`}</div>`;
 }
+function serverJobLabel(job) {
+  const labels = {
+    queued: "待分配",
+    waiting: "待分配",
+    preparing: "准备参考图",
+    submitting: "提交中",
+    submit_unknown: "提交待确认",
+    remote_running: job.kind === "shot" || job.kind === "video" ? "即梦排队/生成中" : "生成中",
+    downloading: "下载中",
+    succeeded: "已完成",
+    done: "已完成",
+    failed: "失败",
+    error: "失败",
+    download_failed: "失败",
+    auth_expired: "授权失效",
+  };
+  const text = labels[job.status] || "处理中";
+  return job.status === "remote_running" && job.queueNote ? `${text} · ${job.queueNote}` : text;
+}
 function jobQueueGroup(job) {
-  if (job.status === "done") return "done";
-  if (["error", "download_failed", "submit_unknown"].includes(job.status)) return "failed";
+  if (job.status === "done" || job.status === "succeeded") return "done";
+  if (["error", "download_failed", "submit_unknown", "failed", "auth_expired"].includes(job.status)) return "failed";
   return "active";
 }
 function visibleJobs() {
@@ -693,18 +743,29 @@ function jobsPage() {
   return `<div class="heading"><h1>生成队列</h1>${btn(timer ? "pause" : "resume", timer ? "暂停队列" : "继续演示", timer ? "jobs" : "play")}</div><div class="notice">演示队列，未连接模型，不产生真实视频。</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${state.jobs.length.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成演示</small><strong>${done.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>排队 / 进行中</small><strong>${String(state.jobs.length - done).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>本地输出命名：001_分镜名.mp4</small></div>${state.jobs.map((j) => `<div class="job"><img class="job-icon" src="${esc(j.image || "assets/alley.png")}" alt=""><div class="job-name"><strong>${esc(j.title)}</strong><small>${j.kind === "asset" ? esc(j.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"} · 演示任务</small></div><div class="progress"><i style="width:${j.progress}%"></i></div><span class="job-status">${j.status === "done" ? "✓ 演示完成" : j.progress ? `模拟生成 ${j.progress}%` : "等待中"}</span></div>`).join("") || '<div class="empty">暂无任务</div>'}</div>`;
 }
 jobsPage = function () {
-  const done = state.jobs.filter((job) => job.status === "done").length;
-  const pending = state.jobs.filter((job) => ["waiting", "running", "submitting", "remote_running", "download_failed", "submit_unknown", "error"].includes(job.status)).length;
+  const done = state.jobs.filter((job) => job.status === "done" || job.status === "succeeded").length;
+  const pending = state.jobs.filter((job) => ["waiting", "running", "submitting", "remote_running", "download_failed", "submit_unknown", "error", "queued", "preparing", "downloading", "failed", "auth_expired"].includes(job.status)).length;
   const rows = visibleJobs().map((job) => {
-    const status = job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.status === "submit_unknown" ? "提交待确认" : job.status === "download_failed" ? "下载失败" : job.status === "remote_running" ? (job.queueNote ? `排队中 · ${job.queueNote}` : "即梦生成中") : job.progress ? `处理中 ${job.progress}%` : "等待中";
-    const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${job.real ? " · 真实任务" : " · 演示任务"}${job.error ? " · " + esc(job.error) : ""}`;
+    const status = window.__STORYDOCK_SERVER__ ? serverJobLabel(job) : job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.status === "submit_unknown" ? "提交待确认" : job.status === "download_failed" ? "下载失败" : job.status === "remote_running" ? (job.queueNote ? `排队中 · ${job.queueNote}` : "即梦生成中") : job.progress ? `处理中 ${job.progress}%` : "等待中";
+    const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${window.__STORYDOCK_SERVER__ ? "" : job.real ? " · 真实任务" : " · 演示任务"}${job.error ? " · " + esc(job.error) : ""}`;
     const media = job.video
       ? `<video class="job-video" data-preview-video="${esc(job.video)}" src="${esc(job.video)}" muted preload="metadata" aria-label="预览视频"></video>`
       : `<img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt="">`;
-    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small>${detail}</small></div><div class="progress"><i style="width:${job.progress}%"></i></div><span class="job-status">${status}</span>${job.video ? `<button data-preview-video="${esc(job.video)}">预览</button>` : ""}</div>`;
+    const progress = window.__STORYDOCK_SERVER__ ? "" : `<div class="progress"><i style="width:${job.progress || 0}%"></i></div>`;
+    const retry = window.__STORYDOCK_SERVER__ && ["failed", "error", "download_failed", "submit_unknown", "auth_expired"].includes(job.status)
+      ? `<button data-retry-job="${esc(job.id)}" data-retry-confirm="${job.status === "submit_unknown" ? "1" : ""}">重试</button>`
+      : "";
+    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small>${detail}</small></div>${progress}<span class="job-status">${status}</span>${retry}${job.video ? `<button data-preview-video="${esc(job.video)}">预览</button>` : ""}</div>`;
   }).join("");
   const video = [...state.jobs].reverse().find((job) => job.video)?.video;
-  return `<div class="heading"><h1>生成队列</h1><div class="actions">${video ? btn("open-video-folder", "打开视频文件夹", "folder") : ""}${timer ? btn("pause", "暂停队列", "jobs") : ""}</div></div><div class="toolbar"><div class="tools"><select id="jobQueueStatus" aria-label="任务状态"><option value="all" ${jobQueueStatus === "all" ? "selected" : ""}>全部状态</option><option value="active" ${jobQueueStatus === "active" ? "selected" : ""}>进行中</option><option value="done" ${jobQueueStatus === "done" ? "selected" : ""}>已完成</option><option value="failed" ${jobQueueStatus === "failed" ? "selected" : ""}>失败</option></select><select id="jobKindFilter" aria-label="任务类型"><option value="all" ${jobKindFilter === "all" ? "selected" : ""}>全部类型</option><option value="asset" ${jobKindFilter === "asset" ? "selected" : ""}>资产图片</option><option value="shot" ${jobKindFilter === "shot" ? "selected" : ""}>分镜视频</option></select><select id="jobSort" aria-label="时间排序"><option value="newest" ${jobSort === "newest" ? "selected" : ""}>最新优先</option><option value="oldest" ${jobSort === "oldest" ? "selected" : ""}>最早优先</option></select></div></div><div class="notice">图片任务可使用已配置模型；即梦视频在真实生成验收完成前不会提交。</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${String(state.jobs.length).padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成</small><strong>${String(done).padStart(2, "0")}</strong></div><div class="panel stat"><small>失败 / 处理中</small><strong>${String(pending).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>产物保存在本地项目目录</small></div>${rows || `<div class="empty">${state.jobs.length ? "没有符合当前筛选的任务。" : "暂无任务"}</div>`}</div>`;
+  const batchId = window.__STORYDOCK_SERVER__ ? state.jobs.find((job) => job.batchId && ["queued", "preparing"].includes(job.status))?.batchId : "";
+  const queueActions = window.__STORYDOCK_SERVER__
+    ? (batchId ? `<button data-pause-batch="${esc(batchId)}">暂停未提交</button>` : "")
+    : `${video && window.desktop?.openVideoFolder ? btn("open-video-folder", "打开视频文件夹", "folder") : ""}${timer ? btn("pause", "暂停队列", "jobs") : ""}`;
+  const notice = window.__STORYDOCK_SERVER__
+    ? "任务在服务器执行。关闭页面后仍会继续。暂停只影响尚未提交的任务。"
+    : "图片任务可使用已配置模型；即梦视频在真实生成验收完成前不会提交。";
+  return `<div class="heading"><h1>生成队列</h1><div class="actions">${queueActions}</div></div><div class="toolbar"><div class="tools"><select id="jobQueueStatus" aria-label="任务状态"><option value="all" ${jobQueueStatus === "all" ? "selected" : ""}>全部状态</option><option value="active" ${jobQueueStatus === "active" ? "selected" : ""}>进行中</option><option value="done" ${jobQueueStatus === "done" ? "selected" : ""}>已完成</option><option value="failed" ${jobQueueStatus === "failed" ? "selected" : ""}>失败</option></select><select id="jobKindFilter" aria-label="任务类型"><option value="all" ${jobKindFilter === "all" ? "selected" : ""}>全部类型</option><option value="asset" ${jobKindFilter === "asset" ? "selected" : ""}>资产图片</option><option value="shot" ${jobKindFilter === "shot" ? "selected" : ""}>分镜视频</option></select><select id="jobSort" aria-label="时间排序"><option value="newest" ${jobSort === "newest" ? "selected" : ""}>最新优先</option><option value="oldest" ${jobSort === "oldest" ? "selected" : ""}>最早优先</option></select></div></div><div class="notice">${notice}</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${String(state.jobs.length).padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成</small><strong>${String(done).padStart(2, "0")}</strong></div><div class="panel stat"><small>失败 / 处理中</small><strong>${String(pending).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>${window.__STORYDOCK_SERVER__ ? "视频保存在服务器，可直接预览和下载" : "产物保存在本地项目目录"}</small></div>${rows || `<div class="empty">${state.jobs.length ? "没有符合当前筛选的任务。" : "暂无任务"}</div>`}</div>`;
 };
 function settingsPage() {
   return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">待接入生成</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}" placeholder="例如：GPT-Image-2"><label for="imageBaseUrl">接口地址 <small>OpenAI 兼容</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://你的接口地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}" placeholder="gpt-image-2"><label for="imageApiKey">API Key <small>${imageKeySaved ? "已保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" placeholder="${window.desktop?.saveImageKey ? "输入 API Key" : "密钥请在桌面客户端配置"}" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦账号池 <small>${connections.accounts.length}</small></h2>${btn("add-account", "添加账号", "plus")}</div><p class="field-help">每个账号使用独立的即梦窗口，登录状态保存在本机。</p><div class="account-list">${connections.accounts.map((a) => `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(a.name)}</strong><small>${a.enabled ? esc(a.loginMessage || "等待即梦登录") : "已暂停"}${typeof a.totalCredit === "number" ? " · " + a.totalCredit + " 积分" : ""}</small></div><button data-open-account="${a.id}">打开即梦</button><button data-check-account="${a.id}">检查登录</button><button class="ghost" data-toggle-account="${a.id}">${a.enabled ? "暂停" : "启用"}</button></div>`).join("") || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy" aria-label="账号分配方式"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><div class="setting-row"><span>账号池并行上限</span><input id="poolConcurrency" aria-label="账号池并行上限" type="number" min="1" max="20" value="${connections.pool.concurrency}"></div><p class="field-help">登录后点击「检查登录」保存并验证；生成待联调。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>演示队列并行任务数</span><select id="concurrency">${[1, 2, 3].map((n) => `<option value="${n}" ${+state.settings.concurrency === n ? "selected" : ""}>${n}</option>`).join("")}</select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
@@ -715,7 +776,7 @@ settingsPage = function () {
     const credit = typeof account.totalCredit === "number" ? ` · ${account.totalCredit} 积分` : "";
     return `<div class="account-row"><div class="account-avatar">${icon("image")}</div><div class="account-info"><strong>${esc(account.name)}</strong><small>${esc(stateText)}${credit}</small></div><button data-open-account="${account.id}">网页</button><button data-auth-cli="${account.id}">CLI 授权</button><button data-verify-cli="${account.id}">${account.authPending ? "完成授权" : "检查"}</button><button class="ghost" data-toggle-account="${account.id}">${account.enabled ? "暂停" : "启用"}</button></div>`;
   }).join("");
-  return `<div class="heading"><h1>模型与账号</h1><span class="muted">仅保存在本机</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI / APIMart</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageResolution">输出分辨率 <small>APIMart</small></label><select id="imageResolution"><option value="1k" ${connections.image.resolution === "1k" ? "selected" : ""}>1K</option><option value="2k" ${connections.image.resolution === "2k" ? "selected" : ""}>2K</option><option value="4k" ${connections.image.resolution === "4k" ? "selected" : ""}>4K</option></select><label for="imageApiKey">API Key <small>${imageKeySaved ? "已加密保存在本机，留空保留" : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2><div class="actions">${jimengRuntime?.canInstall ? btn("install-jimeng-runtime", "安装 CLI 运行环境", "down", "primary") : ""}${btn("add-account", "添加账号", "plus")}</div></div><p class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
+  return `<div class="heading"><h1>模型与账号</h1><span class="muted">${window.__STORYDOCK_SERVER__ ? "保存在服务器" : "仅保存在本机"}</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.__STORYDOCK_SERVER__ ? "服务器配置" : window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI / APIMart</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageResolution">输出分辨率 <small>APIMart</small></label><select id="imageResolution"><option value="1k" ${connections.image.resolution === "1k" ? "selected" : ""}>1K</option><option value="2k" ${connections.image.resolution === "2k" ? "selected" : ""}>2K</option><option value="4k" ${connections.image.resolution === "4k" ? "selected" : ""}>4K</option></select><label for="imageApiKey">API Key <small>${imageKeySaved ? (window.__STORYDOCK_SERVER__ ? "已加密保存在服务器，留空保留" : "已加密保存在本机，留空保留") : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey || window.__STORYDOCK_SERVER__ ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2><div class="actions">${window.__STORYDOCK_SERVER__ || !jimengRuntime?.canInstall ? "" : btn("install-jimeng-runtime", "安装 CLI 运行环境", "down", "primary")}${btn("add-account", "添加账号", "plus")}</div></div><p class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
 };
 const renderSettingsPage = settingsPage;
 settingsPage = () => renderSettingsPage().replace("导出 JSON", "导出完整项目包");
@@ -745,6 +806,11 @@ async function saveImageModel() {
     return;
   }
   try {
+    if (window.__STORYDOCK_SERVER__) {
+      await window.storydockApi.saveImageModel({ name, baseUrl, model, resolution, apiKey, revision: connections.image.revision });
+      connections.image = { ...connections.image, name, baseUrl, model, resolution };
+      return;
+    }
     if (apiKey) {
       if (!window.desktop?.saveImageKey) {
         toast("请在桌面客户端保存密钥");
@@ -1166,6 +1232,10 @@ function generate(kind) {
     toast(assetBatch?.skippedDone ? `已成功生成 ${assetBatch.skippedDone} 个，不会重复提交` : "所选内容已经在队列中");
     return;
   }
+  if (window.__STORYDOCK_SERVER__) {
+    window.storydockApi.confirmAndSubmit({ kind, rows: available, project: activeProject });
+    return;
+  }
   const realImage = kind === "asset" && window.desktop?.generateImage;
   if (realImage && !connections.image.baseUrl) {
     toast("请先在模型与账号中填写生图接口");
@@ -1382,6 +1452,25 @@ document.addEventListener("click", async (e) => {
   if (el.dataset.addReference) {
     const asset = state.assets.find((item) => item.id === el.dataset.addReference);
     if (!asset || asset.locked) return;
+    if (window.__STORYDOCK_SERVER__) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.multiple = true;
+      input.accept = "image/png,image/jpeg,image/webp";
+      input.onchange = async () => {
+        try {
+          for (const file of input.files) await window.storydockApi.uploadReference(asset.id, file);
+          await window.storydockApi.reloadProject(activeProject.id);
+          detail(asset.id);
+          render();
+          toast("参考图已上传到服务器");
+        } catch (error) {
+          toast(String(error?.message || error).slice(0, 180));
+        }
+      };
+      input.click();
+      return;
+    }
     if (window.desktop?.selectReferenceImages) {
       try {
         const result = await window.desktop.selectReferenceImages({ projectId: activeProject.id, assetId: asset.id });
@@ -1427,6 +1516,26 @@ document.addEventListener("click", async (e) => {
   }
   if (el.dataset.replace) {
     const id = el.dataset.replace;
+    if (window.__STORYDOCK_SERVER__) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/png,image/jpeg,image/webp";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+          await window.storydockApi.uploadVersion(id, file);
+          await window.storydockApi.reloadProject(activeProject.id);
+          detail(id);
+          render();
+          toast("图片已保存到服务器");
+        } catch (error) {
+          toast(String(error?.message || error).slice(0, 180));
+        }
+      };
+      input.click();
+      return;
+    }
     if (window.desktop?.selectAssetImage) {
       try {
         const result = await window.desktop.selectAssetImage({ projectId: activeProject.id, assetId: id });
@@ -1524,6 +1633,11 @@ document.addEventListener("click", async (e) => {
   }
   if (el.dataset.authCli) {
     const account = connections.accounts.find((a) => a.id === el.dataset.authCli);
+    if (window.__STORYDOCK_SERVER__) {
+      try { await window.storydockApi.beginAuth(account); }
+      catch (error) { toast(String(error?.message || error).slice(0, 180)); }
+      return;
+    }
     if (!window.desktop?.beginJimengCliAuth) {
       toast("请在桌面客户端使用官方 CLI 授权");
       return;
@@ -1545,6 +1659,11 @@ document.addEventListener("click", async (e) => {
   }
   if (el.dataset.verifyCli) {
     const account = connections.accounts.find((a) => a.id === el.dataset.verifyCli);
+    if (window.__STORYDOCK_SERVER__) {
+      try { await window.storydockApi.checkAccount(account.id); }
+      catch (error) { toast(String(error?.message || error).slice(0, 180)); }
+      return;
+    }
     if (!window.desktop?.checkJimengCli) {
       toast("请在桌面客户端检查官方 CLI");
       return;
@@ -1651,7 +1770,39 @@ document.addEventListener("click", async (e) => {
     addAccountModal();
     return;
   }
+  if (el.dataset.retryJob) {
+    const confirmRetry = el.dataset.retryConfirm === "1";
+    const run = async () => {
+      try { await window.storydockApi.retryJob(el.dataset.retryJob, confirmRetry); toast(confirmRetry ? "已按确认重新提交" : "已按失败阶段重试"); }
+      catch (error) { toast(String(error?.message || error).slice(0, 180)); }
+    };
+    if (confirmRetry) {
+      modal("重新提交", `<p>上次提交没有确认是否被即梦接收。请先核对官方记录，确认后才会重新提交，不能自动重发。</p><div class="modal-actions">${btn("close", "取消")}<button class="primary" id="confirmRetry">确认重新提交</button></div>`);
+      document.querySelector("#confirmRetry").onclick = () => { close(); run(); };
+      return;
+    }
+    await run();
+    return;
+  }
+  if (el.dataset.pauseBatch) {
+    try { await window.storydockApi.pauseBatch(el.dataset.pauseBatch); }
+    catch (error) { toast(String(error?.message || error).slice(0, 180)); }
+    return;
+  }
   if (action === "import-project") {
+    if (window.__STORYDOCK_SERVER__) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".zip,application/zip";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try { await window.storydockApi.importPackage(file); }
+        catch (error) { toast(String(error?.message || error).slice(0, 180)); }
+      };
+      input.click();
+      return;
+    }
     try {
       const result = await window.desktop.importProject();
       if (!result.canceled) {
@@ -2083,4 +2234,43 @@ if (window.desktop?.loadWorkspace) {
       }
     })
     .catch(() => toast("SQLite 数据库读取失败，当前使用浏览器备份"));
+}
+if (window.__STORYDOCK_SERVER__ && window.storydockApi) {
+  window.storydockApi.attach({
+    read: () => ({ workspace, activeProject, state, connections }),
+    generation: () => workspaceGeneration,
+    replaceAll({ projects, image, accounts, runtime }) {
+      workspace = { activeProjectId: projects[0]?.id || "", projects };
+      activeProject = projects[0] || blankProject();
+      state = activeProject.data;
+      if (image) {
+        connections.image = { name: "GPT-Image-2", baseUrl: "", model: "gpt-image-2", resolution: "1k", ...image };
+        imageKeySaved = Boolean(image.apiKeySaved);
+      }
+      connections.accounts = (accounts.accounts || []).map((account) => ({ ...account, remote: true }));
+      if (accounts.pool) connections.pool = { strategy: accounts.pool.strategy || "round-robin", concurrency: accounts.pool.remoteTaskLimit || 1 };
+      jimengRuntime = { ok: Boolean(runtime.cli?.available), canInstall: false, message: runtime.cli?.message || "正在检查服务器环境" };
+    },
+    replaceProject(project) {
+      const index = workspace.projects.findIndex((item) => item.id === project.id);
+      if (index >= 0) workspace.projects[index] = project;
+      else workspace.projects.unshift(project);
+      if (!activeProject.id || activeProject.id === project.id) {
+        activeProject = project;
+        state = project.data;
+        workspace.activeProjectId = project.id;
+      }
+    },
+    mergeJobs(projectId, jobs) {
+      const project = workspace.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      project.data.jobs = jobs;
+      if (activeProject.id === projectId) state.jobs = jobs;
+      const overlay = document.querySelector("#overlay");
+      if ((view === "jobs" || view === "shots") && !overlay?.innerHTML) render();
+    },
+    setImageKeySaved(saved) { imageKeySaved = saved; },
+    setView(next) { view = next; render(); },
+    render, toast, modal, close,
+  });
 }

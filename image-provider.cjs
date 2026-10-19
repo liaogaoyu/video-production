@@ -82,7 +82,9 @@ async function fetchOrThrow(fetchImpl, url, options, label) {
   try {
     return await fetchImpl(url, options);
   } catch (error) {
-    throw new Error(networkErrorMessage(label, url, error), { cause: error });
+    const wrapped = new Error(networkErrorMessage(label, url, error), { cause: error });
+    wrapped.kind = "network";
+    throw wrapped;
   }
 }
 
@@ -117,28 +119,18 @@ function submittedTask(payload) {
     : null;
 }
 
-async function generateImage({
+async function postImageGeneration({
   config,
   prompt,
   apiKey,
   references = [],
-  projectId,
-  assetId,
-  outputRoot,
   fetchImpl = fetch,
-  pollIntervalMs = 3000,
-  maxPollAttempts = 200,
 }) {
   if (!config?.baseUrl || !config?.model || !prompt?.trim())
     throw new Error("生图配置或提示词不完整");
   if (!apiKey?.trim()) throw new Error("请先保存 API Key");
   if (!Array.isArray(references) || references.length > 15)
     throw new Error("参考图数量必须在 0–15 张之间");
-  if (
-    !/^[a-z0-9_-]{1,80}$/i.test(projectId) ||
-    !/^[a-z0-9_-]{1,80}$/i.test(assetId)
-  )
-    throw new Error("项目或资产 ID 不正确");
   const apiMart = isApiMart(config.baseUrl);
   const body = apiMart
     ? {
@@ -172,31 +164,77 @@ async function generateImage({
     const text = (await response.text())
       .slice(0, 500)
       .replace(/sk-[A-Za-z0-9_-]+/g, "[已隐藏密钥]");
-    throw new Error(
+    const error = new Error(
       `生图接口返回 ${response.status}${text ? `：${text}` : ""}`,
     );
+    error.statusCode = response.status;
+    error.kind = response.status >= 500 ? "uncertain" : "rejected";
+    throw error;
   }
-  let payload = await response.json();
+  const payload = await response.json();
   const initialError = apiError(payload);
-  if (initialError) throw new Error(`生图接口错误：${initialError}`);
-  const task = submittedTask(payload);
-  if (task) {
+  if (initialError) {
+    const error = new Error(`生图接口错误：${initialError}`);
+    error.kind = "rejected";
+    throw error;
+  }
+  return { payload, task: submittedTask(payload) };
+}
+
+async function fetchImageTask({ config, apiKey, taskId, fetchImpl = fetch }) {
+  const pollUrl = taskEndpoint(config.baseUrl, taskId);
+  const polled = await fetchOrThrow(fetchImpl, pollUrl, {
+    method: "GET",
+    headers: { authorization: `Bearer ${apiKey}` },
+  }, "生图任务查询");
+  if (!polled.ok) {
+    const error = new Error(`生图任务查询失败：${polled.status}`);
+    error.statusCode = polled.status;
+    error.kind = polled.status >= 500 ? "retry" : "rejected";
+    throw error;
+  }
+  const payload = await polled.json();
+  const taskError = apiError(payload);
+  if (taskError) {
+    const error = new Error(`生图任务失败：${taskError}`);
+    error.kind = "rejected";
+    throw error;
+  }
+  const status = String(payload?.status || payload?.data?.status || "").toLowerCase();
+  if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+    const error = new Error(`生图任务失败：${status}`);
+    error.kind = "rejected";
+    throw error;
+  }
+  return { payload, image: imageItem(payload), status };
+}
+
+async function generateImage({
+  config,
+  prompt,
+  apiKey,
+  references = [],
+  projectId,
+  assetId,
+  outputRoot,
+  fetchImpl = fetch,
+  pollIntervalMs = 3000,
+  maxPollAttempts = 200,
+}) {
+  if (
+    !/^[a-z0-9_-]{1,80}$/i.test(projectId) ||
+    !/^[a-z0-9_-]{1,80}$/i.test(assetId)
+  )
+    throw new Error("项目或资产 ID 不正确");
+  const posted = await postImageGeneration({ config, prompt, apiKey, references, fetchImpl });
+  let payload = posted.payload;
+  if (posted.task) {
     let completed = false;
     for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
       if (pollIntervalMs) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      const pollUrl = taskEndpoint(config.baseUrl, task.id);
-      const polled = await fetchOrThrow(fetchImpl, pollUrl, {
-        method: "GET",
-        headers: { authorization: headers.authorization },
-      }, "生图任务查询");
-      if (!polled.ok) throw new Error(`生图任务查询失败：${polled.status}`);
-      payload = await polled.json();
-      const taskError = apiError(payload);
-      if (taskError) throw new Error(`生图任务失败：${taskError}`);
-      const status = String(payload?.status || payload?.data?.status || "").toLowerCase();
-      if (["failed", "error", "cancelled", "canceled"].includes(status))
-        throw new Error(`生图任务失败：${status}`);
-      if (imageItem(payload)) {
+      const polled = await fetchImageTask({ config, apiKey, taskId: posted.task.id, fetchImpl });
+      payload = polled.payload;
+      if (polled.image) {
         completed = true;
         break;
       }
@@ -261,5 +299,7 @@ module.exports = {
   resolutionForApiMart,
   taskEndpoint,
   imageItem,
+  postImageGeneration,
+  fetchImageTask,
   generateImage,
 };
