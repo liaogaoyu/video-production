@@ -194,6 +194,13 @@ function createJobRepository(db, { record }) {
     const job = db.prepare("SELECT * FROM jobs WHERE id=?").get(id);
     if (!job) throw new ApiError(404, "job_not_found", "任务不存在");
     if (job.lease_until && job.lease_until > iso()) throw new ApiError(409, "job_busy", "任务正在执行");
+    if (job.provider === "dreamina_global_canvas") {
+      const run=db.prepare("SELECT * FROM global_runs WHERE job_id=?").get(id);
+      if (run?.run_attempted) {
+        db.prepare("UPDATE jobs SET remote_task_id=?,status='remote_running',paused=0,next_run_at=NULL,lease_owner=NULL,lease_until=NULL,attempt=0,error_message='',version=version+1,updated_at=? WHERE id=?").run(run.submit_id,iso(),id);
+        return getJob(id);
+      }
+    }
     if (job.status === "submit_unknown" && !job.remote_task_id && !confirm) {
       throw new ApiError(409, "confirmation_required", "提交待确认。请核对即梦记录后，再明确重新提交");
     }
@@ -225,7 +232,11 @@ function createJobRepository(db, { record }) {
       const rows = db.prepare("SELECT * FROM jobs WHERE paused=0 AND status IN ('queued','remote_running','downloading','download_failed') AND (next_run_at IS NULL OR next_run_at<=?) AND (lease_until IS NULL OR lease_until<?) ORDER BY created_at, id LIMIT 20").all(nowIso, nowIso);
       for (const row of rows) {
         let accountId = row.account_id;
-        if (row.kind === "video" && row.status === "queued") {
+        if (row.provider === "dreamina_global_canvas" && row.status === "queued") {
+          const account = db.prepare("SELECT * FROM global_accounts WHERE id=?").get(accountId);
+          if (!account?.enabled || !account?.authorized || inflight(accountId) >= 1) continue;
+        }
+        if (row.provider === "jimeng" && row.kind === "video" && row.status === "queued") {
           const account = accountId ? db.prepare("SELECT * FROM jimeng_accounts WHERE id=?").get(accountId) : chooseAccount(nowIso);
           const usable = account && account.enabled && !account.removed_at && account.authorized && account.permission === "allowed" && account.identity_status !== "duplicate" && (!account.cooldown_until || account.cooldown_until <= nowIso);
           if (!usable) {
@@ -248,7 +259,7 @@ function createJobRepository(db, { record }) {
         const claimed = db.prepare("UPDATE jobs SET status=?, account_id=COALESCE(?, account_id), lease_owner=?, lease_until=?, attempt=attempt+1, version=version+1, updated_at=? WHERE id=? AND version=? AND (lease_until IS NULL OR lease_until<?)")
           .run(nextStatus, accountId, owner, until, nowIso, row.id, row.version, nowIso);
         if (claimed.changes === 1) {
-          if (accountId) db.prepare("UPDATE jimeng_accounts SET last_assigned_at=? WHERE id=?").run(nowIso, accountId);
+          if (accountId && row.provider === "jimeng") db.prepare("UPDATE jimeng_accounts SET last_assigned_at=? WHERE id=?").run(nowIso, accountId);
           record("job.claimed", { jobId: row.id, projectId: row.project_id, status: nextStatus });
           return getJob(row.id);
         }

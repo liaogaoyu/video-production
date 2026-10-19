@@ -55,6 +55,19 @@ async function createHttpApp(services) {
     if (request.url.startsWith("/api/")) authorize(paths.accessPassword, request);
   });
 
+  const global = services.global;
+  app.get("/api/v1/dreamina-global/runtime", async () => global.runtime());
+  app.get("/api/v1/dreamina-global/accounts", async () => ({accounts:global.listAccounts()}));
+  app.post("/api/v1/dreamina-global/accounts", async (request,reply) => {reply.code(201);return {account:global.createAccount(request.body||{})};});
+  app.patch("/api/v1/dreamina-global/accounts/:id", async request => ({account:global.updateAccount(request.params.id,request.body||{})}));
+  app.post("/api/v1/dreamina-global/accounts/:id/check", async request => ({account:await global.checkAccount(request.params.id)}));
+  app.post("/api/v1/dreamina-global/accounts/:id/auth-sessions", async (request,reply) => {reply.code(202);return global.beginAuth(request.params.id);});
+  app.get("/api/v1/dreamina-global/auth-sessions/:id", async request => global.getAuth(request.params.id));
+  app.get("/api/v1/dreamina-global/models", async request => ({items:await global.models(request.query.accountId,request.query.type)}));
+  app.post("/api/v1/projects/:id/global-previews", async (request,reply) => {reply.code(202);return global.createPreview(request.params.id,request.body||{});});
+  app.get("/api/v1/global-previews/:id", async request => global.getPreview(request.params.id));
+  app.post("/api/v1/global-previews/:id/approve", async (request,reply) => {reply.code(202);return global.approve(request.params.id,request.body||{});});
+
   app.get("/api/v1/projects", async () => ({
     projects: repos.content.listProjects().map((row) => presentProject(repos.content.graph(row.id))),
   }));

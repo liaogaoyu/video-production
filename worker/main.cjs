@@ -53,6 +53,7 @@ function createWorker(services = openServices()) {
     media: services.media,
     owner,
     providers: {
+      dreamina_global_canvas: services.global.provider(),
       image: createImageProvider({ repos: services.repos, publicBase: services.paths.publicBase }),
       jimeng: createJimengProvider({ repos: services.repos, pool, media: services.media, db: services.db, owner }),
     },
@@ -102,6 +103,7 @@ function createWorker(services = openServices()) {
           services.repos.accounts.releaseLease(account.id, owner);
         }
       }
+      await services.global.tick();
       await scheduler.tick();
     } catch (error) {
       console.error(error.message);

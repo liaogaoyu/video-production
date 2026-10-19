@@ -51,7 +51,8 @@ function createScheduler({ repos, providers, owner = "worker", db, media }) {
       });
     }
     if (result.outcome === "auth") {
-      if (job.accountId) db.prepare("UPDATE jimeng_accounts SET authorized=0, permission='denied', message=?, updated_at=? WHERE id=?").run(publicMessage(result.message), new Date().toISOString(), job.accountId);
+      if (job.accountId && job.provider === "dreamina_global_canvas") db.prepare("UPDATE global_accounts SET authorized=0,error=?,updated_at=? WHERE id=?").run(publicMessage(result.message),new Date().toISOString(),job.accountId);
+      else if (job.accountId) db.prepare("UPDATE jimeng_accounts SET authorized=0, permission='denied', message=?, updated_at=? WHERE id=?").run(publicMessage(result.message), new Date().toISOString(), job.accountId);
       return repos.jobs.commitJob(job, {
         status: "auth_expired",
         error_code: "auth_expired",
@@ -80,8 +81,9 @@ function createScheduler({ repos, providers, owner = "worker", db, media }) {
   }
 
   async function step(job) {
-    const provider = job.provider === "jimeng" ? providers.jimeng : providers.image;
+    const provider = providers[job.provider];
     try {
+      if (!provider) throw new Error("未注册的生成渠道");
       if (job.status === "preparing") {
         await provider.prepare(job);
         job = repos.jobs.commitJob(job, { status: "submitting" });

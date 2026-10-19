@@ -223,6 +223,7 @@ function openDatabase(filename) {
     db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)").run(now);
     db.prepare("INSERT INTO pool_settings(id, strategy, remote_task_limit, updated_at) VALUES(1, 'round-robin', 1, ?)").run(now);
   }
+  require("./global-schema.cjs").installGlobalSchema(db);
   return db;
 }
 
