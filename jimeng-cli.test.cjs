@@ -59,6 +59,19 @@ test('runtime status uses the pinned image and invalid IDs never reach Docker', 
   await assert.rejects(() => pool.inspect('../escape'), /ID/);
 });
 
+test('JSON account identity matches text identity without losing large integer precision', async () => {
+  const identity = '9876543210123456789';
+  const {pool}=setup([
+    {stdout:`{"total_credit":120,"user_id":${identity},"user_name":"测试用户","vip_level":"vip"}`},
+    {stdout:`{"total_credit":120,"user_id":"${identity}"}`},
+    {stdout:`total_credit: 120\nuser_id: ${identity}\n`},
+  ]);
+  const account='11111111-1111-1111-1111-111111111111';
+  const results=await Promise.all([pool.inspect(account),pool.inspect(account),pool.inspect(account)]);
+  const expected=require('node:crypto').createHash('sha256').update(identity).digest('hex');
+  for(const result of results){assert.equal(result.identityHash,expected);assert.equal(JSON.stringify(result).includes(identity),false);}
+});
+
 test('auth reports missing Docker instead of a misleading authorization URL error', async () => {
   const { pool } = setup([{ code: 'ENOENT', errorMessage: 'spawn docker ENOENT' }]);
   await assert.rejects(() => pool.beginAuth('77777777-7777-7777-7777-777777777777'), /Docker Desktop 未安装/);
