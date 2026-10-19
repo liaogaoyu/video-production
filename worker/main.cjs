@@ -5,6 +5,7 @@ const { createImageProvider } = require("./providers/image.cjs");
 const { createJimengProvider } = require("./providers/jimeng.cjs");
 const { createJimengCliPool } = require("../jimeng-cli.cjs");
 const { createRuntimeBootstrap } = require("./runtime.cjs");
+const { handleAuthFailure } = require("./auth.cjs");
 
 function createWorker(services = openServices()) {
   const owner = `worker-${process.pid}`;
@@ -78,7 +79,7 @@ function createWorker(services = openServices()) {
             }
           }
         } catch (error) {
-          services.repos.accounts.markAuth(session.id, /过期/.test(error.message) ? "expired" : "failed", error.message);
+          await handleAuthFailure({ session, error, pool, accounts: services.repos.accounts });
         } finally {
           services.repos.accounts.releaseLease(session.account_id, owner);
         }

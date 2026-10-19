@@ -11,6 +11,25 @@ const { findMentions } = require("./server/references.cjs");
 const { createScheduler } = require("./worker/scheduler.cjs");
 const { zipStore } = require("./server/zip.cjs");
 const { createRuntimeBootstrap } = require("./worker/runtime.cjs");
+const { handleAuthFailure } = require("./worker/auth.cjs");
+
+test("premature OAuth expiry recovers an already authorized CLI account", async () => {
+  const states = [];
+  let checked = false, cleared = false;
+  await handleAuthFailure({
+    session: {id:"session",account_id:"account",expires_at:new Date(Date.now()+60000).toISOString()},
+    error:new Error("授权已过期，请重新开始"),
+    pool:{inspect:async()=>({authorized:true,permission:"allowed",message:"已授权"})},
+    accounts:{applyCheck(){checked=true;},markAuth(id,status){states.push(status);},clearDeviceCode(){cleared=true;}},
+  });
+  assert.equal(checked,true);assert.equal(cleared,true);assert.deepEqual(states,["authorized"]);
+});
+
+test("a still valid OAuth exchange survives a transient expiry error", async () => {
+  const states = [];
+  await handleAuthFailure({session:{id:"s",account_id:"a",expires_at:new Date(Date.now()+60000).toISOString()},error:new Error("授权已过期"),pool:{inspect:async()=>({authorized:false})},accounts:{markAuth(id,status){states.push(status);}}});
+  assert.deepEqual(states,["awaiting_user"]);
+});
 
 test("worker installs missing CLI once while startup checks overlap", async () => {
   const states = [];
@@ -97,6 +116,44 @@ async function start() {
 function json(response) {
   return JSON.parse(response.body);
 }
+
+async function authPage(sessionResults) {
+  const elements = new Map();
+  let closed = false, toast = "", polls = 0;
+  const context = require("node:vm").createContext({
+    window: {}, sessionStorage:{getItem:()=>""},localStorage:{getItem:()=>null},
+    document:{querySelector:(key)=>elements.get(key)||null,createTextNode:(text)=>text,createElement:()=>({})},
+    setTimeout:(fn)=>{fn();return 1;},setInterval(){},clearTimeout(){},EventSource:class{},
+    fetch:async(url,options)=>{
+      let data={};
+      if(url.endsWith("/auth-sessions")) data={authSessionId:"session"};
+      else if(url.includes("/auth-sessions/")){data=sessionResults[Math.min(polls,sessionResults.length-1)];polls++;}
+      else if(url.endsWith("/projects")) data={projects:[]};
+      else if(url.endsWith("/jimeng/accounts"))data={accounts:[]};
+      else if(url.endsWith("/system/runtime"))data={cli:{}};
+      return {ok:true,status:200,text:async()=>JSON.stringify(data)};
+    },
+  });
+  require("node:vm").runInContext(fs.readFileSync(path.join(__dirname,"web/api.js"),"utf8"),context);
+  context.window.storydockApi.attach({
+    read:()=>({connections:{image:{},pool:{}}}),replaceAll(){},render(){},
+    modal(){for(const key of ["#authLink","#authStatus"])elements.set(key,{textContent:"",replaceChildren(){},append(){}});},
+    close(){closed=true;elements.clear();},toast(text){toast=text;},
+  });
+  await context.window.storydockApi.beginAuth({id:"account",name:"我的账号"});
+  return {elements,closed,toast,polls};
+}
+
+test("authorization waits past the old 40-poll limit and reports success",async()=>{
+  const page=await authPage([...Array.from({length:45},()=>({status:"awaiting_user"})),{status:"authorized"}]);
+  assert.equal(page.polls,46);assert.equal(page.closed,true);assert.match(page.toast,/授权完成/);
+});
+
+test("authorization errors remain visible inside the dialog",async()=>{
+  const page=await authPage([{status:"expired",message:"授权已过期，请重新开始"}]);
+  assert.equal(page.closed,false);assert.match(page.elements.get("#authStatus").textContent,/授权已过期/);
+  assert.equal(page.elements.get("#authLink").textContent,"本次授权已结束。");
+});
 
 test("browser server bootstrap uses external scripts allowed by CSP", async () => {
   const ctx = await start();
