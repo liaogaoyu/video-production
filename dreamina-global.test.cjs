@@ -548,3 +548,15 @@ test("international CLI is video-only: reject image model discovery and all asse
   }
 });
 test('long remote polling cannot consume the later download retry budget',async()=>{const c=await setup();try{const f=await fixture(c),p=await prepare(c,f),b=c.s.global.approve(p.id,{inputHash:p.inputHash,ceiling:20});const scheduler=createScheduler({repos:c.s.repos,db:c.s.db,media:c.s.media,owner:'test',providers:{dreamina_global_canvas:c.s.global.provider()}});await scheduler.tick();c.s.db.prepare('UPDATE jobs SET attempt=30,next_run_at=NULL WHERE id=?').run(b.jobIds[0]);await scheduler.tick();assert.equal(c.s.repos.jobs.getJob(b.jobIds[0]).attempt,0);await scheduler.tick();assert.equal(c.s.repos.jobs.getJob(b.jobIds[0]).status,'succeeded');}finally{await c.close();}});
+
+test("already logged in authorization reuses official state without a challenge", async () => {
+  const c = await setup();
+  try {
+    const f = await fixture(c), original = c.runner.call.bind(c.runner);
+    c.runner.call = async (profile, args) => args[0] === 'auth' && args[1] === 'login'
+      ? {data: {status: 'reused', state: {loggedIn: true}}} : original(profile, args);
+    const session = c.s.global.beginAuth(f.a.id);
+    await c.s.global.tick();
+    assert.equal(c.s.global.getAuth(session.authSessionId).status, 'authorized');
+  } finally { await c.close(); }
+});

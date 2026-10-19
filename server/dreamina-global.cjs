@@ -251,14 +251,17 @@ function createGlobalService(
         ).run(now(), a.id);
         const result = (await runner.call(profile, ["auth", "login"], 30000))
           .data;
-        if (result.status === "logged_in") {
-          await checkAccount(a.account_id);
+        if (result?.status === "logged_in" || result?.state?.loggedIn === true) {
+          const checked = await checkAccount(a.account_id);
+          if (!checked.authorized) throw Error(checked.error || "账号授权未通过检查");
           db.prepare(
             "UPDATE global_auth SET status='authorized',updated_at=? WHERE id=? AND status='starting'",
           ).run(now(), a.id);
           return;
         }
-        const c = result.challenge;
+        const c = result?.challenge;
+        if (!c?.verificationUriComplete || !c?.deviceCode || !Number.isFinite(Date.parse(c.expiresAt)))
+          throw new ApiError(502, "invalid_auth_response", "官方 CLI 未返回有效授权信息，请检查 CLI 状态后重试");
         const url = new URL(c.verificationUriComplete);
         if (url.protocol !== "https:" || url.hostname !== "dreamina.capcut.com")
           throw Error("授权地址不是官方 Dreamina 地址");
