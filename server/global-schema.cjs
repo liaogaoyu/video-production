@@ -1,5 +1,5 @@
 function installGlobalSchema(db) {
- db.exec(`
+  db.exec(`
  CREATE TABLE IF NOT EXISTS global_accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,profile TEXT NOT NULL UNIQUE,enabled INTEGER NOT NULL DEFAULT 1,authorized INTEGER NOT NULL DEFAULT 0,identity_hash TEXT,is_vip INTEGER,vip_level TEXT,expires_at TEXT,error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS global_auth(id TEXT PRIMARY KEY,account_id TEXT NOT NULL,status TEXT NOT NULL,url TEXT,expires_at TEXT,nonce TEXT,ciphertext TEXT,error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS global_canvases(local_project_id TEXT NOT NULL,account_id TEXT NOT NULL,remote_id TEXT NOT NULL UNIQUE,ready INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(local_project_id,account_id));
@@ -10,4 +10,4 @@ function installGlobalSchema(db) {
  INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(2,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
  `);
 }
-module.exports={installGlobalSchema};
+module.exports = { installGlobalSchema };
