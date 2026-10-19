@@ -236,8 +236,11 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
         if (!stat.isFile() || stat.size < 1 || stat.size > 50 * 1024 * 1024) throw new Error('参考图为空或超过 50MB');
         const name = `${String(index + 1).padStart(2, '0')}${extension}`;
         await fsp.copyFile(source, path.join(input, name));
+        await fsp.chmod(path.join(input, name), 0o444);
         command.push('--image', `/work/input/${name}`);
       }
+      // Only the staging directory is exposed; its account parent remains 0700.
+      await fsp.chmod(input, 0o555);
       command.push('--prompt', submittedPrompt, '--duration', String(request.duration), '--ratio', request.ratio, '--video_resolution', request.resolution, '--model_version', request.model, '--poll', '0');
       return {
         ...taskResult(await run(accountId, command, request.images.length ? [{ source: input, target: '/work/input', readonly: true }] : [], 180000)),
@@ -253,6 +256,9 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       const mounts = [];
       if (download) {
         await fsp.mkdir(output, { recursive: true, mode: 0o700 });
+        // Container root drops DAC override and has a different UID from the host service.
+        // This per-task directory lives below a private account parent.
+        await fsp.chmod(output, 0o777);
         command.push('--download_dir=/work/output');
         mounts.push({ source: output, target: '/work/output', readonly: false });
       }

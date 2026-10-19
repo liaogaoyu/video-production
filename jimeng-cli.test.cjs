@@ -200,3 +200,17 @@ test('video without references uses official text2video instead of multimodal mo
  assert.ok(!calls[0].args.includes('--image'));
  assert.equal(result.submittedPrompt,'云海中的宫廷，镜头缓慢推进。');
 });
+
+test('scoped download directory allows a different container UID to save video',async()=>{
+ const account='55555555-5555-5555-5555-555555555555';
+ const {pool}=setup([],{execFileImpl(file,args,options,callback){
+  const mount=args.find(a=>a.includes('target=/work/output'));
+  const output=mount.match(/source=([^,]+)/)[1];
+  assert.equal(fs.statSync(output).mode & 0o777,0o777);
+  fs.writeFileSync(path.join(output,'video.mp4'),'video');
+  callback(null,'submit_id: remote-output-123\ngen_status: success\n','');
+ }});
+ const result=await pool.queryVideo(account,'remote-output-123',true);
+ assert.equal(result.kind,'succeeded');
+ assert.equal(fs.readFileSync(result.files[0],'utf8'),'video');
+});
