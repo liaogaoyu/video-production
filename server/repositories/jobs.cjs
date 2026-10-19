@@ -254,7 +254,7 @@ function createJobRepository(db, { record }) {
           }
           accountId = account.id;
         }
-        const until = iso(new Date(now.getTime() + ttlMs));
+        const until = iso(new Date(now.getTime() + (row.provider === "dreamina_global_canvas" ? Math.max(ttlMs,360000) : ttlMs)));
         const nextStatus = row.status === "queued" ? "preparing" : row.status;
         const claimed = db.prepare("UPDATE jobs SET status=?, account_id=COALESCE(?, account_id), lease_owner=?, lease_until=?, attempt=attempt+1, version=version+1, updated_at=? WHERE id=? AND version=? AND (lease_until IS NULL OR lease_until<?)")
           .run(nextStatus, accountId, owner, until, nowIso, row.id, row.version, nowIso);

@@ -25,6 +25,7 @@ function createScheduler({ repos, providers, owner = "worker", db, media }) {
     if (result.outcome === "download") {
       return repos.jobs.commitJob(job, {
         status: "downloading",
+        attempt: 0,
         remote_task_id: result.remoteTaskId || job.remoteTaskId,
         lease_owner: null,
         lease_until: null,

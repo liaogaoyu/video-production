@@ -234,6 +234,7 @@ function createGlobalService(
     };
   }
   async function authTick() {
+    db.prepare("UPDATE global_auth SET status='failed',error='授权进程中断，请重新授权',updated_at=? WHERE status='starting' AND updated_at<?").run(now(),new Date(Date.now()-120000).toISOString());
     const a = db
       .prepare(
         "SELECT * FROM global_auth WHERE status IN ('queued','awaiting_user') ORDER BY CASE status WHEN 'queued' THEN 0 ELSE 1 END,updated_at LIMIT 1",
@@ -489,6 +490,7 @@ function createGlobalService(
     const items = JSON.parse(p.input_json);
     const catalog = await models(a.id, items[0].kind);
     for (const item of items) {
+      validateGeneration({...item,prompt:item.promptOriginal},catalog);
       let run = db
         .prepare("SELECT * FROM global_runs WHERE job_id=?")
         .get(item.jobId);
@@ -776,14 +778,17 @@ function createGlobalService(
           );
         return changed.changes ? { ...candidate, lease_owner: owner } : null;
       });
-      if (p)
+      if (p) {
+        const renewal=setInterval(()=>{try{db.prepare("UPDATE global_previews SET lease_until=? WHERE id=? AND lease_owner=?").run(new Date(Date.now()+300000).toISOString(),p.id,owner);}catch{}},20000);
+        renewal.unref();
         try {
           await preparePreview(p);
         } catch (e) {
           db.prepare(
             "UPDATE global_previews SET status='failed',error=?,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND lease_owner=?",
           ).run(publicMessage(e.message), now(), p.id, owner);
-        }
+        } finally { clearInterval(renewal); }
+      }
     } finally {
       busy = false;
     }
