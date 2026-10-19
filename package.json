@@ -1,6 +1,6 @@
 {
   "name": "lumenx-storydock-prototype",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "productName": "LumenX 漫剧工作台",
   "private": true,
   "description": "Local comic asset and storyboard workflow prototype",
