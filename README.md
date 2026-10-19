@@ -33,7 +33,7 @@ macOS Apple Silicon 构建：`npm run build:mac`。产物位于 `dist/LumenX 漫
 
 生图需要用户提供可用的 OpenAI Images 协议服务、模型名和 API Key。保存配置不等于接口验证成功。
 
-即梦需要 Docker Desktop、`lumenx-dreamina-eval:1.4.21` 镜像、用户完成官方 OAuth，以及账号具备官方 CLI 生成权限。缺少镜像时可在“模型与账号”页面一键从即梦官方下载并构建 Windows x64 可用的隔离运行环境。可选代理通过 `STORYDOCK_DREAMINA_PROXY` 启动环境变量设置，不写入镜像或项目导出。
+即梦需要运行中的 Docker（Linux 服务器使用 Docker Engine，本机可用 Docker Desktop）、用户完成官方 OAuth，以及账号具备官方 CLI 生成权限。B/S Worker 首次启动时自动下载通过 SHA-256 校验的固定版本官方 CLI，构建 `lumenx-dreamina-eval:1.4.21` 镜像；已有镜像直接复用，失败会退避重试。页面显示安装状态，安装不阻塞项目管理和生图。`STORYDOCK_AUTO_INSTALL_CLI=0` 可关闭自动安装；设置 `STORYDOCK_CLI_IMAGE` 使用预装自定义镜像时也不自动构建。客户端仍可在“模型与账号”页面一键安装运行环境。可选代理通过 `STORYDOCK_DREAMINA_PROXY` 启动环境变量设置，不写入镜像或项目导出。
 
 ## 验证边界
 

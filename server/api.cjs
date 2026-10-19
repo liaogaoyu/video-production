@@ -193,7 +193,7 @@ async function createHttpApp(services) {
       api: "ok",
       worker: alive ? "ok" : "down",
       sqliteWritable,
-      cli: cli ? { available: Boolean(cli.available), version: cli.version || "", message: cli.message || "" } : { available: false, version: "", message: "后台还没有报告 CLI 状态" },
+      cli: cli ? { available: Boolean(cli.available), state: cli.state || "", version: cli.version || "", message: cli.message || "" } : { available: false, version: "", message: "后台还没有报告 CLI 状态" },
       disk,
     };
   });

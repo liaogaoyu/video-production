@@ -4,6 +4,7 @@ const { createScheduler } = require("./scheduler.cjs");
 const { createImageProvider } = require("./providers/image.cjs");
 const { createJimengProvider } = require("./providers/jimeng.cjs");
 const { createJimengCliPool } = require("../jimeng-cli.cjs");
+const { createRuntimeBootstrap } = require("./runtime.cjs");
 
 function createWorker(services = openServices()) {
   const owner = `worker-${process.pid}`;
@@ -11,6 +12,7 @@ function createWorker(services = openServices()) {
     directory: services.paths.cli,
     runtimeDirectory: services.paths.runtime,
     allowInstall: false,
+    image: process.env.STORYDOCK_CLI_IMAGE || undefined,
     secretStore: {
       ensureKeyringPassword(accountId) {
         return services.repos.accounts.ensureSecret(accountId, "keyring", () => crypto.randomBytes(32).toString("hex"));
@@ -50,16 +52,16 @@ function createWorker(services = openServices()) {
     },
   });
   let stopped = false;
-  let cliCheckedAt = 0;
+  const runtime = createRuntimeBootstrap({
+    pool,
+    autoInstall: process.env.STORYDOCK_AUTO_INSTALL_CLI !== "0" && !process.env.STORYDOCK_CLI_IMAGE,
+    report: (status) => { if (!stopped) services.repos.accounts.setRuntime("cli", status); },
+  });
   async function loop() {
     if (stopped) return;
     try {
-      if (Date.now() - cliCheckedAt > 30000) {
-        cliCheckedAt = Date.now();
-        const status = await pool.runtimeStatus();
-        services.repos.accounts.setRuntime("cli", { available: Boolean(status.ok), message: status.message, version: status.image || "" });
-      }
-      const session = services.repos.accounts.nextAuthSession();
+      void runtime.check();
+      const session = runtime.isReady() && services.repos.accounts.nextAuthSession();
       if (session && services.repos.accounts.tryLease(session.account_id, owner, "auth", 240000)) {
         try {
           if (session.expires_at && Date.parse(session.expires_at) < Date.now()) {
@@ -81,7 +83,7 @@ function createWorker(services = openServices()) {
           services.repos.accounts.releaseLease(session.account_id, owner);
         }
       }
-      const account = services.repos.accounts.nextCheck();
+      const account = runtime.isReady() && services.repos.accounts.nextCheck();
       if (account && services.repos.accounts.tryLease(account.id, owner, "check", 180000)) {
         try {
           services.repos.accounts.applyCheck(account.id, await pool.inspect(account.id));

@@ -253,6 +253,7 @@
       load().catch((error) => hooks.toast(error.message || "无法连接服务器"));
       setInterval(() => {
         if (!memory.ready) return;
+        request("GET", "/api/v1/system/runtime").then((status) => hooks.setRuntime(status)).catch(() => {});
         const current = hooks.read().activeProject;
         if (current?.id) reloadJobs(current.id).catch(() => {});
       }, 4000);

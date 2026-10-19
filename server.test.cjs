@@ -10,6 +10,56 @@ const { createSecretStore } = require("./server/secret-store.cjs");
 const { findMentions } = require("./server/references.cjs");
 const { createScheduler } = require("./worker/scheduler.cjs");
 const { zipStore } = require("./server/zip.cjs");
+const { createRuntimeBootstrap } = require("./worker/runtime.cjs");
+
+test("worker installs missing CLI once while startup checks overlap", async () => {
+  const states = [];
+  let installed = false, installs = 0, release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const runtime = createRuntimeBootstrap({
+    pool: {
+      runtimeStatus: async () => ({ ok: installed, code: installed ? "ready" : "image_missing", image: "pinned", message: "status" }),
+      installRuntime: async () => { installs++; await gate; installed = true; },
+    },
+    report: (state) => states.push(state),
+  });
+  const pending = runtime.check();
+  await Promise.resolve();
+  assert.equal(states.at(-1).state, "installing");
+  assert.equal(runtime.isReady(), false);
+  assert.equal(runtime.check(), pending);
+  release();
+  await pending;
+  assert.equal(installs, 1);
+  assert.equal(runtime.isReady(), true);
+  assert.equal(states.at(-1).state, "ready");
+});
+
+test("worker reuses existing CLI and does not install when Docker is unavailable", async () => {
+  for (const status of [{ok:true,code:"ready"}, {ok:false,code:"docker_missing"}, {ok:false,code:"docker_stopped"}]) {
+    let installs = 0;
+    const runtime = createRuntimeBootstrap({pool:{ runtimeStatus: async()=>status, installRuntime:async()=>{ installs++; } }, report(){} });
+    await runtime.check();
+    assert.equal(installs,0);
+    assert.equal(runtime.isReady(),status.ok);
+  }
+});
+
+test("failed runtime installation backs off and retries", async () => {
+  let time = 0, attempts = 0;
+  const states = [];
+  const runtime = createRuntimeBootstrap({
+    pool: {runtimeStatus:async()=>({ok:false,code:"image_missing"}),installRuntime:async()=>{attempts++;throw new Error("network unavailable");}},
+    report:(state)=>states.push(state), now:()=>time, retryMs:1000,
+  });
+  await runtime.check();
+  await runtime.check();
+  assert.equal(attempts,1);
+  assert.equal(states.at(-1).state,"failed");
+  time = 1001;
+  await runtime.check();
+  assert.equal(attempts,2);
+});
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 
