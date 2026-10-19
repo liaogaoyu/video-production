@@ -48,6 +48,18 @@ function json(response) {
   return JSON.parse(response.body);
 }
 
+test("browser server bootstrap uses external scripts allowed by CSP", async () => {
+  const ctx = await start();
+  try {
+    const page = await ctx.app.inject({ method: "GET", url: "/" });
+    assert.match(page.body, /script-src 'self'/);
+    assert.doesNotMatch(page.body, /<script>window\.__STORYDOCK_SERVER__/);
+    assert.ok(page.body.indexOf('src="web/api.js"') < page.body.indexOf('src="app.js"'));
+    const script = await ctx.app.inject({ method: "GET", url: "/web/api.js" });
+    assert.match(script.body, /window\.__STORYDOCK_SERVER__ = true/);
+  } finally { await ctx.close(); }
+});
+
 test("secret store binds ciphertext to account and purpose", () => {
   const store = createSecretStore(crypto.randomBytes(32));
   const sealed = store.seal("keyring-password", { accountId: "account-1", purpose: "keyring" });
@@ -91,7 +103,7 @@ test("two browsers share projects and a stale revision returns 409", async () =>
   assert.equal(json(await ctx.app.inject({ method: "GET", url: "/api/v1/projects" })).projects.length, 0);
   const page = await ctx.app.inject({ method: "GET", url: "/" });
   assert.equal(page.statusCode, 200);
-  assert.match(page.body, /__STORYDOCK_SERVER__/);
+  assert.match(page.body, /src="web\/api.js"/);
   await ctx.close();
 });
 

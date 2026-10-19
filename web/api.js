@@ -1,5 +1,5 @@
 (function () {
-  if (!window.__STORYDOCK_SERVER__) return;
+  window.__STORYDOCK_SERVER__ = true;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   const memory = { ready: false, shadow: new Map(), projectIds: new Set(), assetIds: new Map(), shotIds: new Map(), chain: Promise.resolve(), seq: 0, hooks: null };
   function token() {
