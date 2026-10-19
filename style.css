@@ -319,3 +319,13 @@ button.danger { color: #bc534a; }
 .account-row button { padding: 7px 9px; font-size: 11px; }
 #poolConcurrency { width: 90px; }
 @media(max-width: 1050px) { .settings-layout { grid-template-columns: 1fr; } .settings-layout>.panel:last-child { grid-column: auto; } }
+
+.global-settings { margin-top: 20px; }
+.global-fields { display: grid; gap: 14px; }
+.global-fields label { display: grid; gap: 7px; color: var(--muted); }
+.global-fields input, .global-fields select { width: 100%; color: var(--text); }
+.global-settings .account-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 0; border-bottom:1px solid var(--line); }
+.global-settings .account-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.global-quote-items { max-height: 260px; overflow:auto; border-block:1px solid var(--line); }
+#globalConfigError, #globalApprovalError, #globalAddError { color:#b42318; }
+@media(max-width:700px) { .global-settings .account-row {align-items:flex-start;flex-direction:column;} }

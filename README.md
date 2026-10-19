@@ -57,3 +57,26 @@ node scripts/restore-desktop.cjs --source '/旧客户端数据目录' --apply
 ```
 
 来源目录必须包含 `storydock.sqlite`。macOS 打包版通常在 `~/Library/Application Support/LumenX 漫剧工作台`。迁移报告和备份写入服务端数据目录下 `backups/desktop-migration-<时间>/`，旧客户端文件保持不变。迁移结果与文件校验通过后再启动 API、Worker。运行时数据库和媒体不提交 Git。
+
+### Dreamina 国际版：Seedance 分镜视频
+
+国际 CLI **只接分镜视频**，资产生图仍使用「生图模型」中配置的 OpenAI/APIMart 接口。
+
+1. 在运行 Worker 的机器安装官方 Dreamina Canvas CLI 1.0.3；无需替换国内 `dreamina` 或 Docker 镜像。
+2. 「模型与账号 → Dreamina 国际版 · 分镜视频」添加账号。新账号自动获得独立 profile；本机已有登录可填写已有 profile，再点「检查」确认身份。新 profile 点「授权」，在官方网页由用户完成同意。
+3. 勾选分镜 →「批量生成视频」→ 视频渠道选「Dreamina 国际版 · Seedance」。模型来自当前账号实时目录，仅显示 Seedance。
+4. 「准备并获取报价」只上传资产和保存草稿；检查报价后点「批准并提交」。未批准不调用生成。无引用走 t2v，有引用走 m2v 并携带已固定的资产版本。
+5. 任务在「生成队列」查询并下载归档。提交响应丢失后使用原 submit ID 恢复；下载失败只重试下载，不重新生成。
+
+可选服务环境变量：
+
+```bash
+# CLI 绝对路径；默认 ~/.local/bin/dreamina-canvas（Windows 为 .exe）
+STORYDOCK_GLOBAL_CLI=/opt/storydock/bin/dreamina-canvas
+# 仅影响国际 CLI 子进程，按实际可达的 HTTP 代理填写；不要提交凭据
+STORYDOCK_GLOBAL_PROXY=http://127.0.0.1:7890
+```
+
+本地 CLI 凭据由官方 SDK 管理；`STORYDOCK_ROOT/global-state` 保存操作恢复记录，不是账号 token 的自定义存放目录。服务器无代理时不得以本机成功推断服务器可用；上线前应以 Worker 用户验证模型、上传和媒体下载通路。
+
+常规 `npm test` 不调用收费模型。当前已测试单账号真实 CLI 查询/下载、真实上传/引用/报价与队列归档；生成提交的限额、丢响应和恢复使用自动化测试覆盖，并已有前期真实 CLI 成功任务作协议依据。真正两个不同美区账号的隔离仍需要各自授权后验收。

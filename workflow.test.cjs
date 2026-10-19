@@ -84,3 +84,17 @@ test('HTTP batch confirmation submits image and video jobs with unique idempoten
   assert.notEqual(submitted[0].headers['idempotency-key'],submitted[1].headers['idempotency-key']);
   for(const r of submitted) assert.match(r.headers['idempotency-key'],/^[0-9a-f-]{36}$/);
 });
+
+test('Dreamina default channel applies to storyboard videos only, never asset images',async()=>{
+ const x=setup();let globalCalls=0,html='';
+ x.ctx.sessionStorage={getItem:()=>''};x.ctx.EventSource=class{};x.ctx.fetch=async()=>new Promise(()=>{});
+ x.ctx.localStorage.setItem('storydock-video-provider','dreamina_global_canvas');
+ x.run(fs.readFileSync(__dirname+'/web/api.js','utf8'));
+ x.ctx.window.storydockGlobal={configure:async args=>{assert.equal(args.kind,'shot');globalCalls++;}};
+ x.ctx.window.storydockApi.attach({modal:(title,body)=>{html=body;},toast(){}});
+ const project={id:'test',data:{assets:[],settings:{ratio:'16:9'}}};
+ await x.ctx.window.storydockApi.confirmAndSubmit({kind:'asset',rows:[{id:'asset'}],project});
+ assert.equal(globalCalls,0);assert.ok(!html.includes('Dreamina'));assert.ok(!html.includes('generationProvider'));
+ await x.ctx.window.storydockApi.confirmAndSubmit({kind:'shot',rows:[{id:'shot',refs:[]}],project});
+ assert.equal(globalCalls,1);
+});

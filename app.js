@@ -729,7 +729,7 @@ function serverJobLabel(job) {
     done: "已完成",
     failed: "失败",
     error: "失败",
-    download_failed: "失败",
+    download_failed: "下载失败，可重试",
     auth_expired: "授权失效",
   };
   const text = labels[job.status] || "处理中";
@@ -788,7 +788,7 @@ settingsPage = function () {
   return `<div class="heading"><h1>模型与账号</h1><span class="muted">${window.__STORYDOCK_SERVER__ ? "保存在服务器" : "仅保存在本机"}</span></div><div class="settings-layout"><section class="panel"><div class="section-title"><h2>生图模型</h2><span class="pill">${window.__STORYDOCK_SERVER__ ? "服务器配置" : window.desktop?.generateImage ? "可配置" : "桌面端可用"}</span></div><div class="settings-fields"><label for="imageName">配置名称</label><input id="imageName" value="${esc(connections.image.name)}"><label for="imageBaseUrl">接口地址 <small>OpenAI / APIMart</small></label><input id="imageBaseUrl" value="${esc(connections.image.baseUrl)}" placeholder="https://服务地址/v1"><label for="imageModel">模型名称</label><input id="imageModel" value="${esc(connections.image.model)}"><label for="imageResolution">输出分辨率 <small>APIMart</small></label><select id="imageResolution"><option value="1k" ${connections.image.resolution === "1k" ? "selected" : ""}>1K</option><option value="2k" ${connections.image.resolution === "2k" ? "selected" : ""}>2K</option><option value="4k" ${connections.image.resolution === "4k" ? "selected" : ""}>4K</option></select><label for="imageApiKey">API Key <small>${imageKeySaved ? (window.__STORYDOCK_SERVER__ ? "已加密保存在服务器，留空保留" : "已加密保存在本机，留空保留") : ""}</small></label><input id="imageApiKey" type="password" autocomplete="off" ${window.desktop?.saveImageKey || window.__STORYDOCK_SERVER__ ? "" : "disabled"}></div><div class="settings-footer">${btn("save-image-model", "保存配置", "", "primary")}</div></section><section class="panel"><div class="section-title"><h2>即梦官方 CLI 账号池 <small>${connections.accounts.length}</small></h2><div class="actions">${window.__STORYDOCK_SERVER__ || !jimengRuntime?.canInstall ? "" : btn("install-jimeng-runtime", "安装 CLI 运行环境", "down", "primary")}${btn("add-account", "添加账号", "plus")}</div></div><p id="jimengRuntimeStatus" class="field-help">${esc(jimengRuntime?.message || "正在检查官方 CLI 运行环境")}</p><div class="account-list">${accounts || '<div class="empty">暂无账号</div>'}</div><div class="setting-row"><span>分配方式</span><select id="poolStrategy"><option value="round-robin" ${connections.pool.strategy === "round-robin" ? "selected" : ""}>轮流分配</option><option value="least-busy" ${connections.pool.strategy === "least-busy" ? "selected" : ""}>空闲优先</option></select></div><p class="field-help">每个账号使用独立加密 Keyring 和 Docker 卷；生成权限与登录状态分开检查。</p></section><section class="panel"><h2>项目设置</h2><div class="setting-row"><span>默认画幅</span><select id="ratio"><option ${state.settings.ratio === "16:9" ? "selected" : ""}>16:9</option><option ${state.settings.ratio === "9:16" ? "selected" : ""}>9:16</option><option ${state.settings.ratio === "1:1" ? "selected" : ""}>1:1</option></select></div><div class="setting-row"><span>项目备份</span>${btn("export", "导出 JSON", "down")}</div></section></div>`;
 };
 const renderSettingsPage = settingsPage;
-settingsPage = () => renderSettingsPage().replace("导出 JSON", "导出完整项目包");
+settingsPage = () => renderSettingsPage().replace("导出 JSON", "导出完整项目包") + (window.__STORYDOCK_SERVER__ && window.storydockGlobal ? window.storydockGlobal.settingsHtml() : "");
 async function saveImageModel() {
   const name = document.querySelector("#imageName").value.trim(),
     baseUrl = document.querySelector("#imageBaseUrl").value.trim(),
@@ -2245,7 +2245,7 @@ if (window.desktop?.loadWorkspace) {
     .catch(() => toast("SQLite 数据库读取失败，当前使用浏览器备份"));
 }
 if (window.__STORYDOCK_SERVER__ && window.storydockApi) {
-  window.storydockApi.attach({
+  const serverHooks = {
     read: () => ({ workspace, activeProject, state, connections }),
     generation: () => workspaceGeneration,
     setAccounts(accounts) {
@@ -2293,5 +2293,7 @@ if (window.__STORYDOCK_SERVER__ && window.storydockApi) {
     setImageKeySaved(saved) { imageKeySaved = saved; },
     setView(next) { view = next; render(); },
     render, toast, modal, close,
-  });
+  };
+  window.storydockApi.attach(serverHooks);
+  window.storydockGlobal?.attach(serverHooks);
 }

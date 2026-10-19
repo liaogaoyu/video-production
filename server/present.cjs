@@ -12,6 +12,7 @@ function presentJob(row) {
     status: row.status === "succeeded" ? "done" : row.status,
     title: input.title || "",
     model: row.model || "",
+    provider: row.provider || "",
     error: row.error_message || row.errorMessage || "",
     queueNote: row.queue_note || row.queueNote || "",
     video: (row.kind === "video" || row.kind === "shot") && (row.media_id || row.mediaId) ? mediaUrl(row.media_id || row.mediaId) : "",
