@@ -52,8 +52,14 @@ async function createHttpApp(services) {
     const message = status >= 500 ? "服务器内部错误" : publicMessage(error.message || "请求失败");
     reply.code(status).send({ error: { code, message, requestId: request.id } });
   });
+  const auth = require("./auth-http.cjs").createAuth(services);
+  auth.register(app);
   app.addHook("onRequest", async (request) => {
-    if (request.url.startsWith("/api/")) authorize(paths.accessPassword, request);
+    if (!request.url.startsWith("/api/")) return;
+    const endpoint=request.url.split("?")[0];
+    if (["/api/v1/auth/session","/api/v1/auth/login","/api/v1/auth/logout"].includes(endpoint)) return;
+    if (auth.enabled()) { auth.guard(request); if(!["GET","HEAD"].includes(request.method)) auth.sameOrigin(request); }
+    else authorize(paths.accessPassword, request);
   });
 
   const web=services.web;
@@ -270,6 +276,11 @@ async function createHttpApp(services) {
     reply.code(202);
     return { exportId: row.id, missing };
   });
+  app.get("/api/v1/exports/:id", async request => {
+    const row=repos.accounts.getExport(request.params.id);
+    if(!row)throw new ApiError(404,"not_found","导出记录不存在");
+    return {id:row.id,status:row.status,errorMessage:row.error_message||""};
+  });
   app.get("/api/v1/exports/:id/download", async (request, reply) => {
     const row = repos.accounts.getExport(request.params.id);
     if (!row || row.status !== "succeeded" || !row.storage_key) throw new ApiError(404, "export_not_ready", "归档还没有完成");
@@ -371,6 +382,17 @@ async function createHttpApp(services) {
     const relative = raw === "/" ? "index.html" : raw.replace(/^\/+/, "");
     if (relative.includes("..") || relative.includes("\\")) throw new ApiError(404, "not_found", "页面不存在");
     const root = path.resolve(paths.staticRoot);
+    const reactRoot=path.join(root,"webapp","dist");
+    if (relative.startsWith("ui/")) {
+      const target=path.resolve(reactRoot,relative.slice(3));
+      if(!target.startsWith(reactRoot+path.sep)||!fs.existsSync(target)||!fs.statSync(target).isFile()||!/[.](?:js|css|woff2?|svg)$/.test(target))throw new ApiError(404,"not_found","页面不存在");
+      reply.header("Cache-Control","public, max-age=31536000, immutable");
+      return sendStatic(reply,target);
+    }
+    if (relative === "index.html" && process.env.STORYDOCK_WEB_UI === "react") {
+      reply.header("Cache-Control","no-store");
+      return sendStatic(reply,path.join(reactRoot,"index.html"));
+    }
     if (relative === "index.html") {
       const html = fs.readFileSync(path.join(root, "index.html"), "utf8")
         .replace("<script src=\"app.js\"></script>", "<script src=\"web/api.js\"></script><script src=\"web/dreamina-web.js\"></script><script src=\"app.js\"></script>");

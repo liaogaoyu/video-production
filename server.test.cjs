@@ -562,3 +562,22 @@ test('hash routing restores page and project after refresh and browser back',()=
  window.location.hash='#/shots?project=deleted';listeners.hashchange();assert.equal(context.view,'projects');
  assert.equal(history[0].name,'pushState');
 });
+
+test('application login protects APIs, imports old passwords and revokes sessions on password changes',async()=>{
+ const c=await start();
+ try{
+  const {importLegacyUsers,verify}=require('./server/auth-http.cjs');const file=path.join(c.services.paths.root,'legacy.htpasswd');const hash=await require('bcryptjs').hash('legacy-test-password',4);fs.writeFileSync(file,'admin:'+hash.replace('$2b$','$2y$')+'\n');importLegacyUsers(c.services.db,file);
+  assert.equal((await c.app.inject({url:'/api/v1/projects'})).statusCode,401);
+  assert.equal((await c.app.inject({method:'POST',url:'/api/v1/auth/login',payload:{username:'admin',password:'wrong'}})).statusCode,401);
+  const login=await c.app.inject({method:'POST',url:'/api/v1/auth/login',payload:{username:'admin',password:'legacy-test-password'}});assert.equal(login.statusCode,200);const cookie=login.headers['set-cookie'].split(';')[0];assert.match(login.headers['set-cookie'],/HttpOnly/);assert.match(login.headers['set-cookie'],/SameSite=Lax/);
+  assert.equal((await c.app.inject({url:'/api/v1/projects',headers:{cookie}})).statusCode,200);
+  assert.ok(c.services.db.prepare('SELECT password_hash FROM app_users').get().password_hash.startsWith('scrypt:'));
+  assert.notEqual(c.services.db.prepare('SELECT token_hash FROM app_sessions').get().token_hash,cookie.split('=')[1]);
+  assert.equal((await c.app.inject({method:'POST',url:'/api/v1/projects',headers:{cookie,origin:'https://another-site.example'},payload:{name:'bad origin'}})).statusCode,403);
+  const changed=await c.app.inject({method:'PUT',url:'/api/v1/auth/password',headers:{cookie},payload:{username:'owner',currentPassword:'legacy-test-password',password:'new-test-password'}});assert.equal(changed.statusCode,200);
+  assert.equal((await c.app.inject({url:'/api/v1/projects',headers:{cookie}})).statusCode,401);
+  assert.ok(await verify('new-test-password',c.services.db.prepare('SELECT password_hash FROM app_users').get().password_hash));
+  const fresh=changed.headers['set-cookie'].split(';')[0];assert.equal((await c.app.inject({url:'/api/v1/auth/session',headers:{cookie:fresh}})).json().user.username,'owner');
+  await c.app.inject({method:'POST',url:'/api/v1/auth/logout',headers:{cookie:fresh}});assert.equal((await c.app.inject({url:'/api/v1/projects',headers:{cookie:fresh}})).statusCode,401);
+ }finally{await c.close();}
+});

@@ -16,7 +16,8 @@
     "build:win": "electron-packager . 'LumenX 漫剧工作台' --platform=win32 --arch=x64 --out=dist-windows --overwrite --prune=true --ignore='(^|/)(dist|dist-windows|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'",
     "local:start": "node scripts/start-local.cjs",
     "web:setup": "node scripts/setup-dreamina-web.cjs",
-    "proxy": "node scripts/dreamina-proxy.cjs"
+    "proxy": "node scripts/dreamina-proxy.cjs",
+    "web:build": "npm run build --prefix webapp"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
@@ -24,6 +25,7 @@
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.4",
+    "bcryptjs": "^3.0.3",
     "fastify": "^5.12.7"
   }
 }
