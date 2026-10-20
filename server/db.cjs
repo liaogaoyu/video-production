@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
 CREATE TABLE IF NOT EXISTS pool_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   strategy TEXT NOT NULL DEFAULT 'round-robin',
-  remote_task_limit INTEGER NOT NULL DEFAULT 1,
+  remote_task_limit INTEGER NOT NULL DEFAULT 3,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS exports (
@@ -221,7 +221,7 @@ function openDatabase(filename) {
   if (!version) {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)").run(now);
-    db.prepare("INSERT INTO pool_settings(id, strategy, remote_task_limit, updated_at) VALUES(1, 'round-robin', 1, ?)").run(now);
+    db.prepare("INSERT INTO pool_settings(id, strategy, remote_task_limit, updated_at) VALUES(1, 'round-robin', 3, ?)").run(now);
   }
   require("./global-schema.cjs").installGlobalSchema(db);
   require("./job-times.cjs").installJobTimes(db);

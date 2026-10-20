@@ -519,3 +519,28 @@ test('SSE starts at latest event and reconnect resumes from Last-Event-ID',async
     assert.match(resumed,new RegExp('id: '+last+'\\n'));
   }finally{controllers.forEach(c=>c.abort());await c.close();}
 });
+
+test('domestic CLI admits multiple remote videos per account up to configured capacity',async()=>{
+ const c=await start();
+ try{
+  const {repos,db}=c.services,project=repos.content.createProject({name:'国内并行'}).project,a=repos.accounts.createAccount({name:'并行账号'});
+  db.prepare("UPDATE jimeng_accounts SET authorized=1,permission='allowed' WHERE id=?").run(a.id);
+  repos.accounts.updatePool({remoteTaskLimit:3});
+  for(let i=0;i<4;i++){const stamp=new Date(Date.now()+i).toISOString();db.prepare("INSERT INTO jobs(id,project_id,source_id,kind,status,provider,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,'video','queued','jimeng','{}','{}',?,?)").run(crypto.randomUUID(),project.id,crypto.randomUUID(),stamp,stamp);}
+  for(let i=0;i<3;i++){
+   const job=repos.jobs.claimJob('domestic-test');assert.ok(job);assert.equal(job.accountId,a.id);
+   repos.jobs.commitJob(job,{status:'remote_running',remote_task_id:'official-'+i,next_run_at:new Date(Date.now()+60000).toISOString(),lease_owner:null,lease_until:null});
+  }
+  assert.equal(repos.jobs.claimJob('domestic-test'),null);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status='remote_running'").get().n,3);
+ }finally{await c.close();}
+});
+
+test('HTTP copy writes directly through legacy clipboard without a manual-copy modal',async()=>{
+ const vm=require('node:vm');let copied='',removed=false,focused=false;
+ const field={style:{},focus(){},select(){},remove(){removed=true;}};
+ const context=vm.createContext({navigator:{},document:{activeElement:{focus(){focused=true;}},createElement:()=>field,body:{append(){}},execCommand(action){assert.equal(action,'copy');copied=field.value;return true;}}});
+ const source=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');vm.runInContext(source.slice(0,source.indexOf('const paths =')),context);
+ await vm.runInContext('copyText("Codex 指令内容")',context);
+ assert.equal(copied,'Codex 指令内容');assert.ok(removed&&focused);
+});

@@ -228,7 +228,7 @@
     }
     const poolKey = JSON.stringify(connections.pool || {});
     if (memory.shadow.get("pool") && memory.shadow.get("pool") !== poolKey) {
-      await request("PUT", "/api/v1/jimeng/pool", { body: { strategy: connections.pool.strategy, remoteTaskLimit: 1 } });
+      await request("PUT", "/api/v1/jimeng/pool", { body: { strategy: connections.pool.strategy, remoteTaskLimit: Number(connections.pool.concurrency) || 3 } });
     }
     memory.shadow.set("pool", poolKey);
   }

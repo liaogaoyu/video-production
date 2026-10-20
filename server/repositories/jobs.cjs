@@ -416,7 +416,7 @@ function createAccountRepository(db, { secrets, record }) {
     const strategy = patch.strategy || current.strategy;
     const limit = patch.remoteTaskLimit === undefined ? current.remote_task_limit : Number(patch.remoteTaskLimit);
     if (!["round-robin", "least-busy"].includes(strategy)) throw new ApiError(400, "invalid_field", "分配方式不受支持");
-    if (!Number.isInteger(limit) || limit < 1 || limit > 5) throw new ApiError(400, "invalid_field", "每账号远端任务上限为 1–5，首次验收请保持 1");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new ApiError(400, "invalid_field", "每账号同时生成的视频数为 1–10");
     db.prepare("UPDATE pool_settings SET strategy=?, remote_task_limit=?, updated_at=? WHERE id=1").run(strategy, limit, iso());
     return { strategy, remoteTaskLimit: limit };
   }
