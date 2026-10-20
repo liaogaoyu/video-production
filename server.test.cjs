@@ -544,3 +544,21 @@ test('HTTP copy writes directly through legacy clipboard without a manual-copy m
  await vm.runInContext('copyText("Codex 指令内容")',context);
  assert.equal(copied,'Codex 指令内容');assert.ok(removed&&focused);
 });
+
+test('hash routing restores page and project after refresh and browser back',()=>{
+ const vm=require('node:vm'),listeners={},history=[];
+ const window={location:{hash:'#/shots?project=second'},history:{},addEventListener(name,fn){listeners[name]=fn;}};
+ for(const name of ['pushState','replaceState'])window.history[name]=(_,__,hash)=>{history.push({name,hash});window.location.hash=hash;};
+ const first={id:'first',data:{marker:1}},second={id:'second',data:{marker:2}};
+ const context=vm.createContext({window,URLSearchParams,workspace:{projects:[first,second]},activeProject:first,state:first.data,view:'projects',selected:new Set(),selectedShots:new Set(),close(){},render(){}});
+ const source=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');
+ vm.runInContext(source.slice(source.indexOf('const routeViews ='),source.indexOf('let workspaceGeneration =')),context);
+ vm.runInContext('restoreRoute()',context);
+ assert.equal(context.view,'shots');assert.equal(context.activeProject.id,'second');assert.equal(context.state.marker,2);
+ vm.runInContext('view="jobs";updateRoute()',context);
+ assert.equal(window.location.hash,'#/jobs?project=second');
+ window.location.hash='#/assets?project=first';listeners.popstate();
+ assert.equal(context.view,'assets');assert.equal(context.activeProject.id,'first');
+ window.location.hash='#/shots?project=deleted';listeners.hashchange();assert.equal(context.view,'projects');
+ assert.equal(history[0].name,'pushState');
+});

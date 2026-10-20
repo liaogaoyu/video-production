@@ -264,6 +264,28 @@ let view = "projects",
   timer = null,
   importKind = "assets",
   parsedImport = null;
+const routeViews = new Set(["projects", "create", "assets", "shots", "jobs", "settings"]);
+let routeReady = !window.__STORYDOCK_SERVER__;
+function readRoute() {
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  const [page, query = ""] = raw.split("?");
+  return { view: routeViews.has(page) ? page : "projects", projectId: new URLSearchParams(query).get("project") || "" };
+}
+function restoreRoute() {
+  const route = readRoute();
+  const project = workspace.projects.find(item => item.id === route.projectId);
+  if (project) { activeProject = project; state = project.data; workspace.activeProjectId = project.id; }
+  view = route.view;
+  if (route.projectId && !project && ["assets", "shots", "jobs"].includes(view)) view = "projects";
+  selected = new Set(); selectedShots = new Set();
+}
+function updateRoute(replace = false) {
+  if (!routeReady) return;
+  const hash = `#/${view}${activeProject.id ? "?project=" + encodeURIComponent(activeProject.id) : ""}`;
+  if (window.location.hash !== hash) window.history[replace ? "replaceState" : "pushState"](null, "", hash);
+}
+window.addEventListener("popstate", () => { if (routeReady) { close(); restoreRoute(); render(); } });
+window.addEventListener("hashchange", () => { if (routeReady) { close(); restoreRoute(); render(); } });
 let workspaceGeneration = 0;
 const persist = () => {
   workspaceGeneration += 1;
@@ -292,6 +314,7 @@ function toast(t) {
 const btn = (action, label, n, cls = "") =>
   `<button class="${cls}" data-action="${action}">${n ? icon(n) : ""}${label}</button>`;
 function render() {
+  updateRoute();
   const pending = state.jobs.filter((j) => j.status !== "done").length;
   document.querySelector("#app").innerHTML =
     `<div class="shell"><aside class="sidebar"><div class="brand"><strong>LumenX</strong><span>漫剧管理</span></div><button class="project-select" data-action="projects"><strong>${esc(activeProject.name)}</strong><span>⌄</span></button><nav class="nav"><button aria-label="我的项目" data-view="projects" class="${view === "projects" || view === "create" ? "active" : ""}">${icon("folder")}<span>我的项目</span></button>${[
@@ -2206,6 +2229,7 @@ document.addEventListener("change", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") close();
 });
+if (routeReady) { restoreRoute(); updateRoute(true); }
 render();
 
 if (window.desktop?.imageKeyStatus) {
@@ -2237,6 +2261,7 @@ if (window.desktop?.loadWorkspace) {
           workspace.projects.find((p) => p.id === workspace.activeProjectId) ||
           workspace.projects[0];
         state = activeProject.data;
+        restoreRoute();
       } else {
         window.desktop.saveWorkspace(workspace).catch(() => {});
       }
@@ -2314,6 +2339,9 @@ if (window.__STORYDOCK_SERVER__ && window.storydockApi) {
       workspace = { activeProjectId: projects[0]?.id || "", projects };
       activeProject = projects[0] || blankProject();
       state = activeProject.data;
+      restoreRoute();
+      routeReady = true;
+      updateRoute(true);
       if (image) {
         connections.image = { name: "GPT-Image-2", baseUrl: "", model: "gpt-image-2", resolution: "1k", ...image };
         imageKeySaved = Boolean(image.apiKeySaved);
