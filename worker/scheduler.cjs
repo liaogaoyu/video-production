@@ -8,7 +8,9 @@ function backoff(attempt) {
   return new Date(Date.now() + base + Math.floor(Math.random() * base * 0.2)).toISOString();
 }
 
-function createScheduler({ repos, providers, owner = "worker", db, media }) {
+function createScheduler({ repos, providers, owner = "worker", db, media, imageConcurrency = 3, timers = { setInterval, clearInterval } }) {
+  const imageLimit = Math.max(1, Math.min(10, Math.floor(Number(imageConcurrency)) || 3));
+  const images = new Map();
   function settle(job, result) {
     if (result.accounting) job = repos.jobs.commitJob(job, {
       result_json: JSON.stringify({...JSON.parse(job.resultJson || "{}"), ...result.accounting}),
@@ -148,14 +150,33 @@ function createScheduler({ repos, providers, owner = "worker", db, media }) {
     }
   }
 
-  async function tick() {
-    repos.accounts.setRuntime("worker", { ok: true, owner });
-    await exportOne();
-    const job = repos.jobs.claimJob(owner);
-    if (job) await step(job);
+  function launchImage(job) {
+    // Extend only the lease, keeping the optimistic job version stable while HTTP waits.
+    const timer = timers.setInterval(() => {
+      db.prepare("UPDATE jobs SET lease_until=? WHERE id=? AND lease_owner=?")
+        .run(new Date(Date.now() + 180000).toISOString(), job.id, owner);
+    }, 30000);
+    timer.unref();
+    const task = step(job).catch(error => console.error(publicMessage(error.message))).finally(() => {
+      timers.clearInterval(timer);
+      images.delete(job.id);
+    });
+    images.set(job.id, task);
   }
 
-  return { tick, step, backoff };
+  async function tick({ backgroundImages = false } = {}) {
+    repos.accounts.setRuntime("worker", { ok: true, owner });
+    await exportOne();
+    do {
+      const job = repos.jobs.claimJob(owner, 180000, { excludeImages: backgroundImages && images.size >= imageLimit });
+      if (!job) return;
+      if (backgroundImages && job.provider === "image") launchImage(job);
+      else { await step(job); return; }
+    } while (images.size < imageLimit);
+
+  }
+
+  return { tick, step, backoff, drain: () => Promise.allSettled([...images.values()]) };
 }
 
 module.exports = { createScheduler, backoff };

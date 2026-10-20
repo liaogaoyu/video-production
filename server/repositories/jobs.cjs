@@ -243,14 +243,14 @@ function createJobRepository(db, { record }) {
     return { paused: result.changes };
   }
 
-  function claimJob(owner, ttlMs = 180000) {
+  function claimJob(owner, ttlMs = 180000, { excludeImages = false } = {}) {
     return transaction(db, () => {
       const now = new Date();
       const nowIso = iso(now);
       db.prepare("UPDATE jobs SET status='submit_unknown', error_code='submit_unconfirmed', error_message='提交待确认', lease_owner=NULL, lease_until=NULL, version=version+1, updated_at=? WHERE status='submitting' AND remote_task_id IS NULL AND lease_until IS NOT NULL AND lease_until < ?").run(nowIso, nowIso);
       db.prepare("UPDATE jobs SET status='queued', lease_owner=NULL, lease_until=NULL, version=version+1, updated_at=? WHERE status='preparing' AND lease_until IS NOT NULL AND lease_until < ?").run(nowIso, nowIso);
       db.prepare("UPDATE jobs SET lease_owner=NULL, lease_until=NULL, version=version+1, updated_at=? WHERE status IN ('remote_running','downloading','download_failed') AND lease_until IS NOT NULL AND lease_until < ?").run(nowIso, nowIso);
-      const rows = db.prepare("SELECT * FROM jobs WHERE paused=0 AND status IN ('queued','remote_running','downloading','download_failed') AND (next_run_at IS NULL OR next_run_at<=?) AND (lease_until IS NULL OR lease_until<?) ORDER BY created_at, id LIMIT 20").all(nowIso, nowIso);
+      const rows = db.prepare("SELECT * FROM jobs WHERE paused=0 AND (?=0 OR provider<>'image') AND status IN ('queued','remote_running','downloading','download_failed') AND (next_run_at IS NULL OR next_run_at<=?) AND (lease_until IS NULL OR lease_until<?) ORDER BY created_at, id LIMIT 20").all(excludeImages ? 1 : 0, nowIso, nowIso);
       for (const row of rows) {
         let accountId = row.account_id;
         if(row.provider === 'dreamina_web_api' && row.status === 'queued'){

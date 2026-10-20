@@ -52,6 +52,7 @@ function createWorker(services = openServices()) {
     db: services.db,
     media: services.media,
     owner,
+    imageConcurrency: process.env.STORYDOCK_IMAGE_CONCURRENCY || 3,
     providers: {
       dreamina_web_api: services.web.provider(),
       dreamina_global_canvas: services.global.provider(),
@@ -105,7 +106,7 @@ function createWorker(services = openServices()) {
         }
       }
       await services.global.tick();
-      await scheduler.tick();
+      await scheduler.tick({ backgroundImages: true });
     } catch (error) {
       console.error(error.message);
     }
@@ -114,7 +115,7 @@ function createWorker(services = openServices()) {
   return {
     services,
     start() { loop(); },
-    stop() { stopped = true; void services.web.close(); services.db.close(); },
+    async stop() { stopped = true; await scheduler.drain(); await services.web.close(); services.db.close(); },
   };
 }
 
@@ -122,8 +123,8 @@ if (require.main === module) {
   const worker = createWorker();
   if (worker.services.masterKeyCreated) console.log(`已生成主密钥，请单独备份：${worker.services.paths.masterKey}`);
   worker.start();
-  process.on("SIGINT", () => { worker.stop(); process.exit(0); });
-  process.on("SIGTERM", () => { worker.stop(); process.exit(0); });
+  process.once("SIGINT", async () => { await worker.stop(); process.exit(0); });
+  process.once("SIGTERM", async () => { await worker.stop(); process.exit(0); });
 }
 
 module.exports = { createWorker };

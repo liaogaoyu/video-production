@@ -430,3 +430,48 @@ test('text-only shots enqueue without references while referenced assets still n
 });
 test('server page exposes web video integration without loading retired international CLI UI',async()=>{const c=await start();try{const response=await c.app.inject({method:'GET',url:'/'});assert.equal(response.statusCode,200);assert.ok(response.body.includes('src="web/dreamina-web.js"'));assert.ok(!response.body.includes('src="web/global.js"'));}finally{await c.close();}});
 test('API shutdown closes active event streams instead of blocking service restart',async()=>{const c=await start(),abort=new AbortController();let timeout;try{c.services.repos.content.createProject({name:'event shutdown'});const address=await c.app.listen({port:0,host:'127.0.0.1'});const response=await fetch(address+'/api/v1/events',{headers:{accept:'text/event-stream'},signal:abort.signal});assert.equal(response.status,200);await Promise.race([c.app.close(),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Event stream blocked shutdown')),2000);})]);}finally{clearTimeout(timeout);abort.abort();await c.close();}});
+
+test('synchronous image responses use bounded concurrency without blocking other jobs or expiring active leases', async (t) => {
+  const ctx = await start();
+  const gates = [], submitted = [];
+  let otherCalls = 0;
+  let scheduler;
+  const renewals = new Set();
+  const timers = { setInterval(fn) { renewals.add(fn); return { unref() {} }; }, clearInterval() {} };
+  try {
+    const project = json(await ctx.app.inject({ method: 'POST', url: '/api/v1/projects', payload: { name: '同步并发' } })).project;
+    await ctx.app.inject({ method: 'PUT', url: '/api/v1/connections/image', payload: { name: 'sync', baseUrl: 'https://example.com/v1', model: 'gpt-image-2', apiKey: 'test' } });
+    const ids = [];
+    for (let i=0;i<3;i++) ids.push(json(await ctx.app.inject({ method:'POST',url:`/api/v1/projects/${project.id}/assets`,payload:{name:`角色${i}`,type:'角色',prompt:'portrait'} })).id);
+    const batch = json(await ctx.app.inject({method:'POST',url:`/api/v1/projects/${project.id}/jobs/batch`,headers:{'idempotency-key':crypto.randomUUID()},payload:{kind:'image',sourceIds:ids,ratio:'1:1'}}));
+    const jobs = ctx.services.repos.jobs;
+    const otherId = crypto.randomUUID(), stamp = new Date().toISOString();
+    ctx.services.db.prepare("INSERT INTO jobs(id,project_id,source_id,kind,status,provider,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,'image','queued','other','{}','{}',?,?)").run(otherId,project.id,ids[0],stamp,stamp);
+    scheduler=createScheduler({repos:ctx.services.repos,db:ctx.services.db,owner:'sync-test',imageConcurrency:2,timers,providers:{
+      image:{async prepare(){},async submit(job){submitted.push(job.id);await new Promise(resolve=>gates.push(resolve));const saved=await ctx.services.repos.content.saveMedia({projectId:job.projectId,assetId:job.sourceId,bytes:PNG,source:'generation'});return {outcome:'succeeded',mediaId:saved.id};}},
+      other:{async prepare(){},async submit(){otherCalls++;return {outcome:'failed',message:'test terminal'};}},
+    }});
+    await scheduler.tick({backgroundImages:true});
+    assert.equal(submitted.length,2,'second image is submitted before the first response');
+    assert.equal(jobs.listJobs(project.id).filter(j=>j.provider==='image'&&j.status==='queued').length,1);
+    await scheduler.tick({backgroundImages:true});
+    assert.equal(otherCalls,1,'saturated images do not block other providers');
+    assert.equal(submitted.length,2,'concurrency limit is enforced');
+    ctx.services.db.prepare("UPDATE jobs SET lease_until=? WHERE lease_owner='sync-test'").run(new Date(Date.now()-1000).toISOString());
+    for (const renew of renewals) renew();
+    assert.equal(jobs.claimJob('another-worker',180000,{excludeImages:true}),null);
+    for(const id of submitted)assert.equal(jobs.getJob(id).status,'submitting','lease renewal keeps pending sync requests owned');
+    gates.splice(0).forEach(resolve=>resolve());
+    await scheduler.drain();
+    assert.equal(submitted.filter(id=>jobs.getJob(id).status==='succeeded').length,2);
+    await scheduler.tick({backgroundImages:true});
+    assert.equal(submitted.length,3,'remaining image starts when a slot is released');
+    gates.splice(0).forEach(resolve=>resolve());
+    await scheduler.drain();
+    assert.ok(batch.jobIds.every(id=>jobs.getJob(id).status==='succeeded'));
+  } finally {
+    gates.splice(0).forEach(resolve=>resolve());
+    await scheduler?.drain();
+    await ctx.close();
+  }
+});
