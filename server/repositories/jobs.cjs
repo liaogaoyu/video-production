@@ -203,6 +203,7 @@ function createJobRepository(db, { record }) {
     }
     if (job.provider === "dreamina_web_api") {
       const run=db.prepare('SELECT * FROM web_runs WHERE job_id=?').get(id);
+      if(run?.attempted&&!run.history_id)throw new ApiError(409,'submit_unconfirmed','没有官网任务编号，无法查询原任务。请先核对官网记录，不会重复提交');
       if(run?.attempted){db.prepare("UPDATE jobs SET remote_task_id=?,status='remote_running',paused=0,next_run_at=NULL,lease_owner=NULL,lease_until=NULL,attempt=0,error_message='',version=version+1,updated_at=? WHERE id=?").run(run.submit_id,iso(),id);return getJob(id);}
     }
     if (job.status === "submit_unknown" && !job.remote_task_id && !confirm) {

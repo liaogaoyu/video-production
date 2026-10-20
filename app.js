@@ -733,7 +733,7 @@ function serverJobLabel(job) {
     auth_expired: "授权失效",
   };
   const text = labels[job.status] || "处理中";
-  return job.status === "remote_running" && job.queueNote ? `${text} · ${job.queueNote}` : text;
+  return ["remote_running", "submitting"].includes(job.status) && job.queueNote ? `${text} · ${job.queueNote}` : text;
 }
 function jobQueueGroup(job) {
   if (job.status === "done" || job.status === "succeeded") return "done";
