@@ -13,3 +13,6 @@ dist-windows/
 *.key
 output/
 var/
+
+webapp/dist/
+vendor/jimeng-api/node_modules

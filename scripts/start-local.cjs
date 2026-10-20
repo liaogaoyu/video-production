@@ -15,7 +15,7 @@ function start(name, entry) {
   if (pid > 0 && alive(pid)) return;
   const descriptor = fs.openSync(path.join(directory, `${name}.log`), 'a', 0o600);
   try {
-    const child = spawn(process.execPath, [entry], { cwd, env: { ...process.env, HOST: '127.0.0.1', PORT: String(port) }, detached: true, stdio: ['ignore', descriptor, descriptor] });
+    const child = spawn(process.execPath, [entry], { cwd, env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), ...(fs.existsSync(path.join(cwd,"webapp/dist/index.html"))?{STORYDOCK_WEB_UI:"react"}:{}) }, detached: true, stdio: ['ignore', descriptor, descriptor] });
     child.unref();
     fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
     console.log(`${name} started (PID ${child.pid})`);
