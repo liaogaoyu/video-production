@@ -174,3 +174,5 @@ sudo -u storydock env STORYDOCK_ROOT=/srv/storydock /usr/bin/node /opt/storydock
 ```
 
 **2026-10-20 实机验证：** macOS 和目标 Ubuntu 26.04.1 LTS amd64 的实际出口均已验证。Ubuntu 上以 storydock 服务用户完成官网 HTTP 200、余额查询、参考图上传检查、已有视频查询、10,744,618 字节视频下载（SHA-256与本机一致），以及 Chromium 156 通过代理打开官网。`storydock-proxy.service` 已实际安装，active / enabled，只监听127.0.0.1:17891。国内 API/Worker 保持运行，本次未整体替换服务器应用版本；新版本部署时读取已准备好的国际网页代理配置。Linux arm64 提供已校验安装包，但未在原生arm64服务器实测。没有额外提交收费生成。
+
+同步生图接口默认最多并行执行 3 个任务，等待响应期间会持续续租，不阻塞后续图片提交或其他渠道任务。可在 `/etc/storydock/storydock.env` 中设置 `STORYDOCK_IMAGE_CONCURRENCY=3`（范围 1–10）并重启 Worker。该上限按 Worker 进程计算；同步请求仍需等待接口返回后才能取得结果。
