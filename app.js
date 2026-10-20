@@ -7,6 +7,23 @@ function createId() {
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return; } catch {}
+  }
+  // HTTP deployments do not expose navigator.clipboard; copy during the click gesture.
+  const previous = document.activeElement;
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.readOnly = true;
+  field.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+  document.body.append(field);
+  try {
+    field.focus();
+    field.select();
+    if (!document.execCommand("copy")) throw new Error("浏览器未允许复制，请检查剪贴板权限后重试");
+  } finally { field.remove(); previous?.focus({ preventScroll: true }); }
+}
 const paths = {
   grid: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
   film: "M4 3h16v18H4z M4 8h16 M4 16h16 M8 3v18 M16 3v18",
@@ -1957,10 +1974,10 @@ document.addEventListener("click", async (e) => {
     const template = importKind === "assets" ? assetTemplate : shotTemplate;
     const text = `请根据我提供的剧本输出${importKind === "assets" ? "全部角色、场景、道具资产" : "整部剧所有分镜"}，只输出符合以下结构的 JSON，不要 Markdown 围栏：\n${JSON.stringify(template, null, 2)}\n${importKind === "shots" ? "每个镜头提供稳定且唯一的 key、episode 和 number；refs 使用资产清单里的 assetKey。duration 为 4–30 的整数秒。" : "每个资产提供稳定且唯一的 key；type 只能为 character、scene、prop。prompt 必须是完整且可独立生图的提示词。"}`;
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       toast("已复制，可把指令和剧本一起发给 Codex");
-    } catch {
-      modal("Codex 导入指令", `<textarea readonly>${esc(text)}</textarea>`);
+    } catch (error) {
+      toast(error.message || "复制失败，请检查剪贴板权限后重试");
     }
   }
   if (action === "select-all") {
