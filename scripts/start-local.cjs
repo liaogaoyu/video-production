@@ -23,6 +23,13 @@ function start(name, entry) {
 }
 async function health() { try { const r = await fetch(base + '/api/v1/system/runtime', { signal: AbortSignal.timeout(2000) }); return r.ok ? await r.json() : null; } catch { return null; } }
 (async () => {
+  const webConfig=path.join(paths.root,'web-runtime.json');
+  if(fs.existsSync(webConfig)){
+    const configured=JSON.parse(fs.readFileSync(webConfig,'utf8'));
+    if(configured.proxy==='http://127.0.0.1:17891' && fs.existsSync(path.join(paths.root,'proxy','xray.json'))){
+      await require('../server/proxy/xray.cjs').main(['start']);
+    }
+  }
   let status = await health();
   if (!status) start('api', 'server/main.cjs');
   if (status?.worker !== 'ok') start('worker', 'worker/main.cjs');

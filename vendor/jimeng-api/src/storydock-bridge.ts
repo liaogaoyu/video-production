@@ -4,13 +4,15 @@ import fs from 'node:fs/promises';
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { generateVideo } from './api/controllers/videos.ts';
-import { getCredit, request } from './api/controllers/core.ts';
+import { getCredit, request, parseRegionFromToken, checkImageContent } from './api/controllers/core.ts';
+import { uploadImageBuffer } from './lib/image-uploader.ts';
 import { extractVideoUrl } from './lib/image-utils.ts';
 import { closeAllBrowserSessions } from './lib/abogus-browser.ts';
 async function execute(m:any) {
  const b=m.body||{};
  if(m.method==='runtime') return {available:true,models:['jimeng-video-seedance-2.0','jimeng-video-seedance-2.0-fast']};
  if(m.method==='credit') return getCredit(m.token);
+ if(m.method==='check-upload'){const image=await uploadImageBuffer(await fs.readFile(b.file),m.token,parseRegionFromToken(m.token));await checkImageContent(image.uri,m.token,parseRegionFromToken(m.token));return {uploaded:true,width:image.width,height:image.height};}
  if(m.method==='submit') return generateVideo(b.model,b.prompt,{ratio:b.ratio,resolution:'720p',duration:b.duration,files:b.files||{},functionMode:b.references?'omni_reference':'first_last_frames',submitOnly:true,clientSubmitId:b.submitId},m.token);
  if(m.method==='query') {
   const id=String(b.historyId||b.submitId);const result=await request('post','/mweb/v1/get_history_by_ids',m.token,{data:{history_ids:[id]}});

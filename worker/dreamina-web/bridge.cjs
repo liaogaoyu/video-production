@@ -1,10 +1,10 @@
 const path=require('node:path'), fs=require('node:fs'), readline=require('node:readline'),{spawn}=require('node:child_process');
-function createWebBridge({directory=path.resolve(__dirname,'../../vendor/jimeng-api'),proxy=process.env.STORYDOCK_DREAMINA_PROXY||'',executable=process.env.STORYDOCK_BROWSER_EXECUTABLE||''}={}){
+function createWebBridge({directory=path.resolve(__dirname,'../../vendor/jimeng-api'),proxy=process.env.STORYDOCK_WEB_PROXY||process.env.STORYDOCK_DREAMINA_PROXY||'',executable=process.env.STORYDOCK_BROWSER_EXECUTABLE||''}={}){
  let child;let next=0;const pending=new Map();
  function start(){
   if(child)return;
   const entry=path.join(directory,'dist-bridge/storydock-bridge.cjs');if(!fs.existsSync(entry))throw Error('国际网页运行环境未安装，请运行 npm run web:setup');
-  child=spawn(process.execPath,[entry],{cwd:directory,env:{...process.env,ABOGUS_BROWSER_ENABLED:'1',ABOGUS_BROWSER_EXECUTABLE:executable,INTL_PROXY_URL:proxy},stdio:['pipe','pipe','pipe']});
+  child=spawn(process.execPath,['--require',path.join(__dirname,'proxy.cjs'),entry],{cwd:directory,env:{...process.env,ABOGUS_BROWSER_ENABLED:'1',STORYDOCK_ENFORCE_WEB_PROXY:proxy?'1':'',STORYDOCK_WEB_VENDOR:directory,ABOGUS_BROWSER_EXECUTABLE:executable,INTL_PROXY_URL:proxy},stdio:['pipe','pipe','pipe']});
   const live=child;live.stdin.on('error',()=>end(live));readline.createInterface({input:live.stdout}).on('line',line=>{if(!line.startsWith('@@STORYDOCK@@'))return;try{const r=JSON.parse(line.slice(13));const p=pending.get(r.id);if(p){clearTimeout(p.timer);pending.delete(r.id);r.error?p.reject(Error(r.error)):p.resolve(r.data);}}catch{}});
   live.stderr.on('data',()=>{});live.on('error',()=>end(live));live.on('exit',()=>end(live));
  }

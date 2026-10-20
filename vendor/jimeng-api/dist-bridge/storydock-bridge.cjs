@@ -3193,6 +3193,11 @@ async function execute(m) {
   const b = m.body || {};
   if (m.method === "runtime") return { available: true, models: ["jimeng-video-seedance-2.0", "jimeng-video-seedance-2.0-fast"] };
   if (m.method === "credit") return getCredit(m.token);
+  if (m.method === "check-upload") {
+    const image = await uploadImageBuffer(await import_promises.default.readFile(b.file), m.token, parseRegionFromToken(m.token));
+    await checkImageContent(image.uri, m.token, parseRegionFromToken(m.token));
+    return { uploaded: true, width: image.width, height: image.height };
+  }
   if (m.method === "submit") return generateVideo(b.model, b.prompt, { ratio: b.ratio, resolution: "720p", duration: b.duration, files: b.files || {}, functionMode: b.references ? "omni_reference" : "first_last_frames", submitOnly: true, clientSubmitId: b.submitId }, m.token);
   if (m.method === "query") {
     const id = String(b.historyId || b.submitId);

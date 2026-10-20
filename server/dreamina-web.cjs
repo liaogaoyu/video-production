@@ -13,9 +13,10 @@ function compileReferences(prompt,refs){
  const escaped=sorted.map(r=>r.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
  return String(prompt).replace(new RegExp('@('+escaped.join('|')+')','g'),(_,name)=>'@image_file_'+sorted.find(r=>r.name===name).index);
 }
+function resolveWebProxy(config={},env=process.env){return env.STORYDOCK_WEB_PROXY||config.proxy||env.STORYDOCK_DREAMINA_PROXY||'';}
 function createDreaminaWebService(services,{bridge,browserFactory}={}){
  const {db,secrets,paths,repos,media}=services;
- if(!bridge){const configFile=path.join(paths.root,'web-runtime.json');const config=fs.existsSync(configFile)?JSON.parse(fs.readFileSync(configFile,'utf8')):{};bridge=createWebBridge({proxy:process.env.STORYDOCK_DREAMINA_PROXY||config.proxy||''});}const owner=uuid(),sessions=new Map();
+ if(!bridge){const configFile=path.join(paths.root,'web-runtime.json');const config=fs.existsSync(configFile)?JSON.parse(fs.readFileSync(configFile,'utf8')):{};bridge=createWebBridge({proxy:resolveWebProxy(config)});}const owner=uuid(),sessions=new Map();
  db.exec(`CREATE TABLE IF NOT EXISTS web_accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,region TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,authorized INTEGER NOT NULL DEFAULT 0,identity_hash TEXT,total_credit REAL,credit_checked_at TEXT,nonce TEXT,ciphertext TEXT,error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS web_runs(job_id TEXT PRIMARY KEY,submit_id TEXT NOT NULL UNIQUE,history_id TEXT,attempted INTEGER NOT NULL DEFAULT 0,media_url TEXT,remote_model TEXT);
  CREATE TABLE IF NOT EXISTS web_leases(account_id TEXT PRIMARY KEY,owner TEXT NOT NULL,until_at TEXT NOT NULL);
@@ -63,4 +64,4 @@ function createDreaminaWebService(services,{bridge,browserFactory}={}){
  };}
  return {list:()=>db.prepare('SELECT * FROM web_accounts ORDER BY created_at').all().map(present),create,update(id,b){const a=account(id);const limit=b.maxConcurrent??a.max_concurrent;if(!Number.isInteger(limit)||limit<1||limit>10)throw new ApiError(400,'invalid_concurrency','单账号并发数应为1至10');db.prepare('UPDATE web_accounts SET enabled=?,max_concurrent=?,updated_at=? WHERE id=?').run(b.enabled===undefined?a.enabled:(b.enabled?1:0),limit,now(),id);return present(account(id));},checked,saveCredential,startLogin,loginFrame,loginInput,finishLogin,closeLogin,batch,provider,bridge,runtime:()=>({available:fs.existsSync(path.join(bridge.directory,'dist-bridge/storydock-bridge.cjs')),models:MODELS,message:'国际网页视频 · Seedance 2.0 / Fast'}),async close(){for(const id of sessions.keys())await closeLogin(id);bridge.close();},PROVIDER};
 }
-module.exports={createDreaminaWebService,compileReferences,PROVIDER,MODELS};
+module.exports={createDreaminaWebService,compileReferences,resolveWebProxy,PROVIDER,MODELS};
