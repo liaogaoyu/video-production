@@ -717,6 +717,7 @@ function shotsPage() {
   return `<div class="heading"><h1>分镜脚本</h1><div class="actions">${btn("select-all", allSelected ? "取消全选" : "全选", "check")}${btn("add-shot", "新增分镜", "plus")}${btn("delete-shots", "删除全部", "trash", "danger")}${btn("import-shots", "导入分镜脚本", "upload", "primary")}</div></div><div class="section-title"><h2>分镜列表 <small style="font-size:11px;margin-left:10px">${state.shots.length} 个分镜</small></h2><span class="muted">Seedance · ${state.settings.ratio}</span></div><div class="toolbar"><div class="tools"><select id="shotStatus" aria-label="分镜状态"><option value="all" ${shotStatusFilter === "all" ? "selected" : ""}>全部状态</option><option value="pending" ${shotStatusFilter === "pending" ? "selected" : ""}>待确认</option><option value="ready" ${shotStatusFilter === "ready" ? "selected" : ""}>已就绪</option><option value="queued" ${shotStatusFilter === "queued" ? "selected" : ""}>生成中</option><option value="done" ${shotStatusFilter === "done" ? "selected" : ""}>已生成</option><option value="failed" ${shotStatusFilter === "failed" ? "selected" : ""}>生成失败</option></select></div></div>${state.shots.some((s) => missing(s).length) ? `<div class="notice">${icon("info")} 部分引用未就绪，请先生成并锁定对应资产。</div>` : ""}<div class="shot-list">${rows || `<div class="empty">${state.shots.length ? "没有符合当前状态的分镜。" : "暂无分镜，可新增一条或导入脚本。"}</div>`}</div>`;
 }
 function serverJobLabel(job) {
+  if (job.resubmittedJobId) return "已重新提交";
   const labels = {
     queued: job.provider === "dreamina_web_api" ? "等待提交" : "待分配",
     waiting: "待分配",
@@ -762,8 +763,8 @@ jobsPage = function () {
       ? `<video class="job-video" data-preview-video="${esc(job.video)}" src="${esc(job.video)}" muted preload="metadata" aria-label="预览视频"></video>`
       : `<img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt="">`;
     const progress = window.__STORYDOCK_SERVER__ ? "" : `<div class="progress"><i style="width:${job.progress || 0}%"></i></div>`;
-    const retry = window.__STORYDOCK_SERVER__ && ["failed", "error", "download_failed", "submit_unknown", "auth_expired"].includes(job.status)
-      ? `<button data-retry-job="${esc(job.id)}" data-retry-confirm="${job.status === "submit_unknown" ? "1" : ""}">重试</button>`
+    const retry = window.__STORYDOCK_SERVER__ && !job.resubmittedJobId && ["failed", "error", "download_failed", "submit_unknown", "auth_expired"].includes(job.status)
+      ? `<button data-retry-job="${esc(job.id)}" data-retry-confirm="${job.status === "submit_unknown" && job.provider !== "dreamina_web_api" ? "1" : ""}" data-retry-new="${job.provider === "dreamina_web_api" && job.status !== "download_failed" ? "1" : ""}">${job.status === "download_failed" ? "重试下载" : job.provider === "dreamina_web_api" ? "重新提交" : "重试"}</button>`
       : "";
     return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small title="积分预占为官方任务记录，最终净扣费以官方账单为准">${detail}</small></div>${progress}<span class="job-status">${status}</span>${retry}${job.video ? `<button data-preview-video="${esc(job.video)}">预览</button>` : ""}</div>`;
   }).join("");
@@ -1783,8 +1784,10 @@ document.addEventListener("click", async (e) => {
   if (el.dataset.retryJob) {
     const confirmRetry = el.dataset.retryConfirm === "1";
     const run = async () => {
-      try { await window.storydockApi.retryJob(el.dataset.retryJob, confirmRetry); toast(confirmRetry ? "已按确认重新提交" : "已按失败阶段重试"); }
+      el.disabled = true;
+      try { await window.storydockApi.retryJob(el.dataset.retryJob, confirmRetry); toast(el.dataset.retryNew === "1" || confirmRetry ? "已重新提交新任务" : "已按失败阶段重试"); }
       catch (error) { toast(String(error?.message || error).slice(0, 180)); }
+      finally { el.disabled = false; }
     };
     if (confirmRetry) {
       modal("重新提交", `<p>上次提交没有确认是否被即梦接收。请先核对官方记录，确认后才会重新提交，不能自动重发。</p><div class="modal-actions">${btn("close", "取消")}<button class="primary" id="confirmRetry">确认重新提交</button></div>`);

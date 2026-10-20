@@ -108,3 +108,4 @@ test('international account check explains a disconnected application service',a
  await x.handlers.click({target:{closest:()=>button}});
  assert.match(message,/无法连接应用服务/);assert.equal(button.disabled,false);assert.ok(!message.includes('Failed to fetch'));
 });
+test('web submission failure offers direct resubmit and hides the old action after replacement',()=>{const x=setup();x.run("window.__STORYDOCK_SERVER__=true;state.jobs=[{id:'web-failed',title:'分镜',provider:'dreamina_web_api',kind:'shot',status:'submit_unknown'}]");const html=x.run('jobsPage()');assert.match(html,/data-retry-new="1"/);assert.match(html,/data-retry-confirm=""/);assert.match(html,/>重新提交<\/button>/);x.run("state.jobs[0].resubmittedJobId='new-job'");const replaced=x.run('jobsPage()');assert.match(replaced,/已重新提交/);assert.ok(!replaced.includes('data-retry-job="web-failed"'));});

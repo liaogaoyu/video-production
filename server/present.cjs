@@ -7,6 +7,7 @@ function presentJob(row) {
   const result = JSON.parse(row.result_json || row.resultJson || "{}");
   const hasCredit = result.creditKind === "preauthorized" && typeof result.creditAmount === "number" && Number.isFinite(result.creditAmount) && result.creditAmount >= 0;
   return {
+    resubmittedJobId: result.resubmittedJobId || "",
     creditAmount: hasCredit ? result.creditAmount : null,
     creditKind: hasCredit ? result.creditKind : null,
     id: row.id,

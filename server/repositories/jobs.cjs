@@ -202,9 +202,23 @@ function createJobRepository(db, { record }) {
       }
     }
     if (job.provider === "dreamina_web_api") {
-      const run=db.prepare('SELECT * FROM web_runs WHERE job_id=?').get(id);
-      if(run?.attempted&&!run.history_id)throw new ApiError(409,'submit_unconfirmed','没有官网任务编号，无法查询原任务。请先核对官网记录，不会重复提交');
-      if(run?.attempted){db.prepare("UPDATE jobs SET remote_task_id=?,status='remote_running',paused=0,next_run_at=NULL,lease_owner=NULL,lease_until=NULL,attempt=0,error_message='',version=version+1,updated_at=? WHERE id=?").run(run.submit_id,iso(),id);return getJob(id);}
+      return transaction(db,()=>{
+        const original=db.prepare('SELECT * FROM jobs WHERE id=?').get(id);
+        const result=JSON.parse(original.result_json||'{}');
+        if(result.resubmittedJobId)return getJob(result.resubmittedJobId);
+        const run=db.prepare('SELECT * FROM web_runs WHERE job_id=?').get(id);
+        if(original.status==='download_failed'&&run?.history_id){
+          db.prepare("UPDATE jobs SET status='downloading',next_run_at=NULL,lease_owner=NULL,lease_until=NULL,attempt=0,error_message='',version=version+1,updated_at=? WHERE id=?").run(iso(),id);
+          return getJob(id);
+        }
+        if(!['failed','submit_unknown','auth_expired'].includes(original.status))throw new ApiError(409,'job_not_retryable','任务仍在进行中或已经完成');
+        const nextId=crypto.randomUUID(),batchId=crypto.randomUUID(),submitId=crypto.randomUUID(),created=iso();
+        db.prepare("INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,account_id,provider,model,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?,?,?,?,?,?)").run(nextId,original.project_id,original.source_id,batchId,original.kind,original.account_id,original.provider,original.model,original.config_snapshot,original.input_snapshot,created,created);
+        db.prepare('INSERT INTO web_runs(job_id,submit_id) VALUES(?,?)').run(nextId,submitId);
+        db.prepare('UPDATE jobs SET result_json=?,version=version+1,updated_at=? WHERE id=?').run(JSON.stringify({...result,resubmittedJobId:nextId}),created,id);
+        record('job.resubmitted',{jobId:id,newJobId:nextId,projectId:original.project_id});
+        return getJob(nextId);
+      });
     }
     if (job.status === "submit_unknown" && !job.remote_task_id && !confirm) {
       throw new ApiError(409, "confirmation_required", "提交待确认。请核对即梦记录后，再明确重新提交");
