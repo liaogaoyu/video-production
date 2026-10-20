@@ -66,6 +66,7 @@ if [ "${STORYDOCK_ENABLE_DREAMINA_WEB:-0}" = "1" ]; then
   else
     /usr/bin/node scripts/setup-dreamina-web.cjs --with-deps
   fi
+  install -d -m 0700 -o storydock -g storydock vendor/jimeng-api/logs vendor/jimeng-api/tmp
   chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
   /usr/sbin/runuser -u storydock -- /usr/bin/env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" /usr/bin/node scripts/check-dreamina-web.cjs
 fi
