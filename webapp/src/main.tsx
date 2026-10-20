@@ -134,6 +134,7 @@ function Workspace({
   const [where, setWhere] = useState(route),
     [projects, setProjects] = useState<Project[]>([]),
     [loading, setLoading] = useState(true),
+    [collapsed, setCollapsed] = useState(false),
     [failed, setFailed] = useState(""),
     { message } = AntApp.useApp();
   const refreshBusy = useRef(false);
@@ -230,18 +231,21 @@ function Workspace({
           theme="light"
           breakpoint="lg"
           collapsedWidth={64}
+          onCollapse={setCollapsed}
         >
           <div className="sidebar-head">
             <Select
               aria-label="切换项目"
               placeholder="选择项目"
               showSearch
+              popupMatchSelectWidth={240}
+              labelRender={({ label }) =>
+                collapsed ? <FolderOutlined /> : label
+              }
               optionFilterProp="label"
               value={project?.id}
               options={projects.map((p) => ({ value: p.id, label: p.name }))}
-              onChange={(id) =>
-                go(where.page === "projects" ? "assets" : where.page, id)
-              }
+              onChange={(id) => go(where.page, id)}
             />
           </div>
           <Menu
@@ -371,6 +375,29 @@ function Workspace({
     </WorkspaceContext.Provider>
   );
 }
+class PageBoundary extends React.Component<
+  { children: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? (
+      <div className="page-loading">
+        <Alert
+          type="error"
+          title="页面加载失败"
+          description="请刷新页面重试，已提交的任务不受影响。"
+          action={<Button onClick={() => location.reload()}>刷新页面</Button>}
+        />
+      </div>
+    ) : (
+      this.props.children
+    );
+  }
+}
 function Root() {
   const [session, setSession] = useState<{
       authenticated: boolean;
@@ -430,7 +457,9 @@ createRoot(document.getElementById("root")!).render(
     }}
   >
     <AntApp>
-      <Root />
+      <PageBoundary>
+        <Root />
+      </PageBoundary>
     </AntApp>
   </ConfigProvider>,
 );
