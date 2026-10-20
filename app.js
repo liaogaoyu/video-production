@@ -716,8 +716,22 @@ function shotsPage() {
   }).join("");
   return `<div class="heading"><h1>分镜脚本</h1><div class="actions">${btn("select-all", allSelected ? "取消全选" : "全选", "check")}${btn("add-shot", "新增分镜", "plus")}${btn("delete-shots", "删除全部", "trash", "danger")}${btn("import-shots", "导入分镜脚本", "upload", "primary")}</div></div><div class="section-title"><h2>分镜列表 <small style="font-size:11px;margin-left:10px">${state.shots.length} 个分镜</small></h2><span class="muted">Seedance · ${state.settings.ratio}</span></div><div class="toolbar"><div class="tools"><select id="shotStatus" aria-label="分镜状态"><option value="all" ${shotStatusFilter === "all" ? "selected" : ""}>全部状态</option><option value="pending" ${shotStatusFilter === "pending" ? "selected" : ""}>待确认</option><option value="ready" ${shotStatusFilter === "ready" ? "selected" : ""}>已就绪</option><option value="queued" ${shotStatusFilter === "queued" ? "selected" : ""}>生成中</option><option value="done" ${shotStatusFilter === "done" ? "selected" : ""}>已生成</option><option value="failed" ${shotStatusFilter === "failed" ? "selected" : ""}>生成失败</option></select></div></div>${state.shots.some((s) => missing(s).length) ? `<div class="notice">${icon("info")} 部分引用未就绪，请先生成并锁定对应资产。</div>` : ""}<div class="shot-list">${rows || `<div class="empty">${state.shots.length ? "没有符合当前状态的分镜。" : "暂无分镜，可新增一条或导入脚本。"}</div>`}</div>`;
 }
+function latestJobAttempt(job) {
+  const seen = new Set();
+  let current = job;
+  while (current.resubmittedJobId && !seen.has(current.id)) {
+    seen.add(current.id);
+    const next = state.jobs.find(item => item.id === current.resubmittedJobId);
+    if (!next || seen.has(next.id)) break;
+    current = next;
+  }
+  return current;
+}
 function serverJobLabel(job) {
-  if (job.resubmittedJobId) return "已重新提交";
+  if (job.resubmittedJobId) {
+    const latest = latestJobAttempt(job);
+    return latest !== job ? `已重新提交 · ${serverJobLabel({...latest, resubmittedJobId: ""})}` : "已重新提交 · 等待新任务状态";
+  }
   const labels = {
     queued: job.provider === "dreamina_web_api" ? "等待提交" : "待分配",
     waiting: "待分配",
@@ -737,6 +751,7 @@ function serverJobLabel(job) {
   return ["remote_running", "submitting"].includes(job.status) && job.queueNote ? `${text} · ${job.queueNote}` : text;
 }
 function jobQueueGroup(job) {
+  job = latestJobAttempt(job);
   if (job.status === "done" || job.status === "succeeded") return "done";
   if (["error", "download_failed", "submit_unknown", "failed", "auth_expired"].includes(job.status)) return "failed";
   return "active";
@@ -756,17 +771,18 @@ jobsPage = function () {
   const done = state.jobs.filter((job) => job.status === "done" || job.status === "succeeded").length;
   const pending = state.jobs.filter((job) => ["waiting", "running", "submitting", "remote_running", "download_failed", "submit_unknown", "error", "queued", "preparing", "downloading", "failed", "auth_expired"].includes(job.status)).length;
   const rows = visibleJobs().map((job) => {
+    const attempt = window.__STORYDOCK_SERVER__ ? latestJobAttempt(job) : job;
     const status = window.__STORYDOCK_SERVER__ ? serverJobLabel(job) : job.status === "done" ? "✓ 已完成" : job.status === "error" ? "生成失败" : job.status === "submit_unknown" ? "提交待确认" : job.status === "download_failed" ? "下载失败" : job.status === "remote_running" ? (job.queueNote ? `排队中 · ${job.queueNote}` : "即梦生成中") : job.progress ? `处理中 ${job.progress}%` : "等待中";
     const credit = job.creditKind === "preauthorized" && typeof job.creditAmount === "number" ? ` · 积分预占 ${job.creditAmount}` : "";
-    const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${window.__STORYDOCK_SERVER__ ? "" : job.real ? " · 真实任务" : " · 演示任务"}${credit}${job.error ? " · " + esc(job.error) : ""}`;
-    const media = job.video
-      ? `<video class="job-video" data-preview-video="${esc(job.video)}" src="${esc(job.video)}" muted preload="metadata" aria-label="预览视频"></video>`
+    const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${window.__STORYDOCK_SERVER__ ? "" : job.real ? " · 真实任务" : " · 演示任务"}${credit}${attempt.error ? " · " + esc(attempt.error) : ""}`;
+    const media = attempt.video
+      ? `<video class="job-video" data-preview-video="${esc(attempt.video)}" src="${esc(attempt.video)}" muted preload="metadata" aria-label="预览视频"></video>`
       : `<img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt="">`;
     const progress = window.__STORYDOCK_SERVER__ ? "" : `<div class="progress"><i style="width:${job.progress || 0}%"></i></div>`;
     const retry = window.__STORYDOCK_SERVER__ && !job.resubmittedJobId && ["failed", "error", "download_failed", "submit_unknown", "auth_expired"].includes(job.status)
       ? `<button data-retry-job="${esc(job.id)}" data-retry-confirm="${job.status === "submit_unknown" && job.provider !== "dreamina_web_api" ? "1" : ""}" data-retry-new="${job.provider === "dreamina_web_api" && job.status !== "download_failed" ? "1" : ""}">${job.status === "download_failed" ? "重试下载" : job.provider === "dreamina_web_api" ? "重新提交" : "重试"}</button>`
       : "";
-    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small title="积分预占为官方任务记录，最终净扣费以官方账单为准">${detail}</small></div>${progress}<span class="job-status">${status}</span>${retry}${job.video ? `<button data-preview-video="${esc(job.video)}">预览</button>` : ""}</div>`;
+    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small title="积分预占为官方任务记录，最终净扣费以官方账单为准">${detail}</small></div>${progress}<span class="job-status">${status}</span>${retry}${attempt.video ? `<button data-preview-video="${esc(attempt.video)}">预览</button>` : ""}</div>`;
   }).join("");
   const video = [...state.jobs].reverse().find((job) => job.video)?.video;
   const batchId = window.__STORYDOCK_SERVER__ ? state.jobs.find((job) => job.batchId && ["queued", "preparing"].includes(job.status))?.batchId : "";
