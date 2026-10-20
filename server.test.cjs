@@ -445,7 +445,7 @@ test('synchronous image responses use bounded concurrency without blocking other
     for (let i=0;i<3;i++) ids.push(json(await ctx.app.inject({ method:'POST',url:`/api/v1/projects/${project.id}/assets`,payload:{name:`角色${i}`,type:'角色',prompt:'portrait'} })).id);
     const batch = json(await ctx.app.inject({method:'POST',url:`/api/v1/projects/${project.id}/jobs/batch`,headers:{'idempotency-key':crypto.randomUUID()},payload:{kind:'image',sourceIds:ids,ratio:'1:1'}}));
     const jobs = ctx.services.repos.jobs;
-    const otherId = crypto.randomUUID(), stamp = new Date().toISOString();
+    const otherId = crypto.randomUUID(), stamp = new Date(Date.now()+1000).toISOString();
     ctx.services.db.prepare("INSERT INTO jobs(id,project_id,source_id,kind,status,provider,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,'image','queued','other','{}','{}',?,?)").run(otherId,project.id,ids[0],stamp,stamp);
     scheduler=createScheduler({repos:ctx.services.repos,db:ctx.services.db,owner:'sync-test',imageConcurrency:2,timers,providers:{
       image:{async prepare(){},async submit(job){submitted.push(job.id);await new Promise(resolve=>gates.push(resolve));const saved=await ctx.services.repos.content.saveMedia({projectId:job.projectId,assetId:job.sourceId,bytes:PNG,source:'generation'});return {outcome:'succeeded',mediaId:saved.id};}},
