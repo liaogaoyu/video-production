@@ -8,7 +8,7 @@ const { presentAccount, presentJob, presentProject } = require("./present.cjs");
 const { endpointFor } = require("../image-provider.cjs");
 const { unzip } = require("./zip.cjs");
 
-const STATIC = new Set(["app.js", "style.css", "web/api.js", "web/global.js"]);
+const STATIC = new Set(["app.js", "style.css", "web/api.js", "web/global.js", "web/dreamina-web.js"]);
 
 function authorize(password, request) {
   if (!password) return;
@@ -55,6 +55,18 @@ async function createHttpApp(services) {
     if (request.url.startsWith("/api/")) authorize(paths.accessPassword, request);
   });
 
+  const web=services.web;
+  app.get('/api/v1/dreamina-web/runtime',async()=>web.runtime());
+  app.get('/api/v1/dreamina-web/accounts',async()=>({accounts:web.list()}));
+  app.post('/api/v1/dreamina-web/accounts',async request=>({account:web.create(request.body||{})}));
+  app.patch('/api/v1/dreamina-web/accounts/:id',async request=>({account:web.update(request.params.id,request.body||{})}));
+  app.post('/api/v1/dreamina-web/accounts/:id/check',async request=>({account:await web.checked(request.params.id)}));
+  app.post('/api/v1/dreamina-web/accounts/:id/login',async request=>web.startLogin(request.params.id));
+  app.get('/api/v1/dreamina-web/accounts/:id/login/frame',async request=>web.loginFrame(request.params.id));
+  app.post('/api/v1/dreamina-web/accounts/:id/login/input',async request=>web.loginInput(request.params.id,request.body||{}));
+  app.post('/api/v1/dreamina-web/accounts/:id/login/finish',async request=>({account:await web.finishLogin(request.params.id)}));
+  app.delete('/api/v1/dreamina-web/accounts/:id/login',async request=>web.closeLogin(request.params.id));
+  app.post('/api/v1/projects/:id/web-video-jobs',async(request,reply)=>{reply.code(202);return web.batch(request.params.id,request.body||{},String(request.headers['idempotency-key']||''));});
   const global = services.global;
   app.get("/api/v1/dreamina-global/runtime", async () => global.runtime());
   app.get("/api/v1/dreamina-global/accounts", async () => ({accounts:global.listAccounts()}));
@@ -353,7 +365,7 @@ async function createHttpApp(services) {
     const root = path.resolve(paths.staticRoot);
     if (relative === "index.html") {
       const html = fs.readFileSync(path.join(root, "index.html"), "utf8")
-        .replace("<script src=\"app.js\"></script>", "<script src=\"web/api.js\"></script><script src=\"web/global.js\"></script><script src=\"app.js\"></script>");
+        .replace("<script src=\"app.js\"></script>", "<script src=\"web/api.js\"></script><script src=\"web/global.js\"></script><script src=\"web/dreamina-web.js\"></script><script src=\"app.js\"></script>");
       return reply.type("text/html; charset=utf-8").send(html);
     }
     const allowed = STATIC.has(relative) || relative.startsWith("assets/");

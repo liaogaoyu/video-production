@@ -53,6 +53,7 @@ function createWorker(services = openServices()) {
     media: services.media,
     owner,
     providers: {
+      dreamina_web_api: services.web.provider(),
       dreamina_global_canvas: services.global.provider(),
       image: createImageProvider({ repos: services.repos, publicBase: services.paths.publicBase }),
       jimeng: createJimengProvider({ repos: services.repos, pool, media: services.media, db: services.db, owner }),

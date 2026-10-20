@@ -201,6 +201,10 @@ function createJobRepository(db, { record }) {
         return getJob(id);
       }
     }
+    if (job.provider === "dreamina_web_api") {
+      const run=db.prepare('SELECT * FROM web_runs WHERE job_id=?').get(id);
+      if(run?.attempted){db.prepare("UPDATE jobs SET remote_task_id=?,status='remote_running',paused=0,next_run_at=NULL,lease_owner=NULL,lease_until=NULL,attempt=0,error_message='',version=version+1,updated_at=? WHERE id=?").run(run.submit_id,iso(),id);return getJob(id);}
+    }
     if (job.status === "submit_unknown" && !job.remote_task_id && !confirm) {
       throw new ApiError(409, "confirmation_required", "提交待确认。请核对即梦记录后，再明确重新提交");
     }
@@ -232,6 +236,10 @@ function createJobRepository(db, { record }) {
       const rows = db.prepare("SELECT * FROM jobs WHERE paused=0 AND status IN ('queued','remote_running','downloading','download_failed') AND (next_run_at IS NULL OR next_run_at<=?) AND (lease_until IS NULL OR lease_until<?) ORDER BY created_at, id LIMIT 20").all(nowIso, nowIso);
       for (const row of rows) {
         let accountId = row.account_id;
+        if(row.provider === 'dreamina_web_api' && row.status === 'queued'){
+          const a=db.prepare('SELECT * FROM web_accounts WHERE id=?').get(accountId);
+          if(!a?.enabled||!a?.authorized||inflight(accountId)>=1||db.prepare('SELECT account_id FROM web_leases WHERE account_id=? AND until_at>?').get(accountId,nowIso))continue;
+        }
         if (row.provider === "dreamina_global_canvas" && row.status === "queued") {
           const account = db.prepare("SELECT * FROM global_accounts WHERE id=?").get(accountId);
           if (!account?.enabled || !account?.authorized || inflight(accountId) >= 1) continue;
@@ -254,7 +262,7 @@ function createJobRepository(db, { record }) {
           }
           accountId = account.id;
         }
-        const until = iso(new Date(now.getTime() + (row.provider === "dreamina_global_canvas" ? Math.max(ttlMs,360000) : ttlMs)));
+        const until = iso(new Date(now.getTime() + (["dreamina_global_canvas","dreamina_web_api"].includes(row.provider) ? Math.max(ttlMs,360000) : ttlMs)));
         const nextStatus = row.status === "queued" ? "preparing" : row.status;
         const claimed = db.prepare("UPDATE jobs SET status=?, account_id=COALESCE(?, account_id), lease_owner=?, lease_until=?, attempt=attempt+1, version=version+1, updated_at=? WHERE id=? AND version=? AND (lease_until IS NULL OR lease_until<?)")
           .run(nextStatus, accountId, owner, until, nowIso, row.id, row.version, nowIso);

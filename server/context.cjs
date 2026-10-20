@@ -17,6 +17,7 @@ function openServices(options = {}) {
   const repos = createRepositories({ db, media, secrets });
   const services = { paths, db, secrets, media, repos, masterKeyCreated: master.created };
   services.global = require("./dreamina-global.cjs").createGlobalService(services);
+  services.web = require("./dreamina-web.cjs").createDreaminaWebService(services);
   return services;
 }
 
