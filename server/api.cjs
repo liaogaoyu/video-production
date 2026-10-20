@@ -37,6 +37,7 @@ async function createHttpApp(services) {
   const { repos, media, secrets, paths } = services;
   const app = Fastify({
     logger: false,
+    forceCloseConnections: true,
     bodyLimit: 8 * 1024 * 1024,
     genReqId: (request) => String(request.headers["x-request-id"] || crypto.randomUUID()),
   });
