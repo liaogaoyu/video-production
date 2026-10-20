@@ -595,3 +595,24 @@ test('server backup roundtrip preserves image versions references locks and shot
   const result=await c.app.inject({method:'POST',url:'/api/v1/imports',headers:{'content-type':`multipart/form-data; boundary=${boundary}`},payload:body});assert.equal(result.statusCode,201,result.body);const restored=result.json().project;assert.equal(restored.data.assets[0].versions.length,1);assert.equal(restored.data.assets[0].references.length,1);assert.equal(restored.data.assets[0].locked,true);assert.equal(restored.data.shots[0].refs[0],'角色');
  }finally{await c.close();}
 });
+
+test('Jianying export freezes shot order and video versions, requires explicit missing-shot choice',async()=>{
+ const c=await start();try{
+  const {repos,db,media}=c.services,p=repos.content.createProject({name:'剪映导出验收'}).project;
+  const shot=repos.content.createShot({projectId:p.id,title:'第一镜',prompt:'test',episode:1,number:1,duration:15});
+  const missing=repos.content.createShot({projectId:p.id,title:'未生成镜头',prompt:'test',episode:1,number:2,duration:5});
+  assert.equal((await c.app.inject({method:'POST',url:`/api/v1/projects/${p.id}/exports`,payload:{kind:'jianying'}})).statusCode,409);
+  const bytes=require('./test-fixtures/mp4.cjs').fixture(2.75);
+  const stored=await repos.content.saveMedia({projectId:p.id,bytes,video:true,source:'test'}),stamp=new Date().toISOString();
+  db.prepare("INSERT INTO jobs(id,project_id,source_id,kind,status,provider,media_id,config_snapshot,input_snapshot,created_at,updated_at,completed_at) VALUES(?,?,?,'video','succeeded','jimeng',?,'{}','{}',?,?,?)").run(crypto.randomUUID(),p.id,shot.id,stored.id,stamp,stamp,stamp);
+  const blocked=await c.app.inject({method:'POST',url:`/api/v1/projects/${p.id}/exports`,payload:{kind:'jianying'}});assert.equal(blocked.statusCode,409);assert.equal(blocked.json().missing[0].id,missing.id);
+  const ready=await c.app.inject({method:'POST',url:`/api/v1/projects/${p.id}/exports`,payload:{kind:'jianying',allowPartial:true}});assert.equal(ready.statusCode,202,ready.body);
+  const row=repos.accounts.getExport(ready.json().exportId);const plan=JSON.parse(row.manifest_json).plan;assert.equal(plan.clips[0].title,'第一镜');
+  repos.content.updateShot(shot.id,{title:'提交导出后改名',revision:shot.revision});
+  await createScheduler({repos,db,media,providers:{}}).tick();
+  const status=await c.app.inject({url:`/api/v1/exports/${row.id}`});assert.equal(status.json().status,'succeeded',status.body);
+  const download=await c.app.inject({url:`/api/v1/exports/${row.id}/download`});assert.equal(download.statusCode,200);
+  const files=require('./server/zip.cjs').unzip(download.rawPayload),timeline=JSON.parse(files.find(f=>f.name==='timeline.json').data);
+  assert.equal(timeline.durationUs,2750000);assert.equal(timeline.clips[0].title,'第一镜');assert.equal(timeline.missing.length,1);assert.ok(files.some(f=>f.name==='导入剪映-Windows.cmd'));assert.ok(files.some(f=>f.name==='导入剪映-Mac.command'));
+ }finally{await c.close();}
+});

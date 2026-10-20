@@ -7,8 +7,8 @@ for (let index = 0; index < 256; index += 1) {
   for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
   crcTable[index] = value >>> 0;
 }
-function crc32(buffer) {
-  let crc = 0xffffffff;
+function crc32(buffer, initial = 0xffffffff) {
+  let crc = initial;
   for (const byte of buffer) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }

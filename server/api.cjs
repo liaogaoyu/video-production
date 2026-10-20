@@ -1,3 +1,4 @@
+const { planVideoExport } = require("./video-export.cjs");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -263,16 +264,15 @@ async function createHttpApp(services) {
   app.post("/api/v1/projects/:id/exports", async (request, reply) => {
     const graph = repos.content.graph(request.params.id);
     const project = presentProject(graph);
-    const kind = request.body?.kind === "videos" ? "videos" : "backup";
-    const missing = kind === "videos"
-      ? project.data.shots.filter((shot) => !project.data.jobs.some((job) => job.sourceId === shot.id && job.status === "done" && job.video)).map((shot) => ({
-        episode: shot.episode,
-        number: shot.number,
-        title: shot.title,
-        reason: "没有已完成的视频",
-      }))
-      : [];
-    const row = repos.accounts.createExport({ projectId: project.id, kind, manifest: { missing } });
+    const kind = request.body?.kind || "backup";
+    if (!["videos", "backup", "jianying"].includes(kind)) throw new ApiError(400, "invalid_export_kind", "不支持的导出格式");
+    const plan = kind === "backup" ? null : planVideoExport(project, services.db, media);
+    if (plan && !plan.clips.length) throw new ApiError(409, "no_videos", "当前项目还没有可导出的已完成分镜视频");
+    const missing = plan?.missing || [];
+    if (kind === "jianying" && missing.length && !request.body?.allowPartial) {
+      return reply.code(409).send({ error: { code: "incomplete_videos", message: `还有 ${missing.length} 个分镜没有视频，请生成完成或明确选择仅导出已完成分镜` }, missing });
+    }
+    const row = repos.accounts.createExport({ projectId: project.id, kind, manifest: { missing, plan } });
     reply.code(202);
     return { exportId: row.id, missing };
   });

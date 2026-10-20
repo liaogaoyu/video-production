@@ -1,3 +1,6 @@
+const { planVideoExport } = require("../server/video-export.cjs");
+const { buildDraft } = require("../server/jianying/draft.cjs");
+const { writeExportArchive } = require("../server/export-archive.cjs");
 const { publicMessage } = require("../server/errors.cjs");
 const { presentProject } = require("../server/present.cjs");
 const { zipStore } = require("../server/zip.cjs");
@@ -123,19 +126,22 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
       const previous = JSON.parse(row.manifest_json || "{}");
       const files = [];
       let packedMedia = [];
-      if (row.kind === "videos") {
-        const used = new Set();
-        for (const shot of [...project.data.shots].sort((left, right) => left.episode - right.episode || left.number - right.number || left.id.localeCompare(right.id))) {
-          const job = [...project.data.jobs].reverse().find((item) => item.sourceId === shot.id && item.status === "done" && item.video);
-          if (!job) continue;
-          const mediaId = job.video.split("/").pop();
-          const stored = db.prepare("SELECT * FROM media WHERE id=?").get(mediaId);
-          if (!stored) continue;
-          let name = `E${String(shot.episode).padStart(3, "0")}_S${String(shot.number).padStart(4, "0")}_${shot.title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}.mp4`;
-          if (used.has(name)) name = name.replace(/\.mp4$/, `_${shot.id.slice(0, 8)}.mp4`);
-          used.add(name);
-          files.push({ name, data: fs.readFileSync(media.locate(stored.storage_key)) });
+      if (row.kind === "videos" || row.kind === "jianying") {
+        const plan = previous.plan || planVideoExport(project, db, media);
+        if (!plan.clips.length) throw new Error("当前项目没有可导出的已完成分镜视频");
+        let manifest;
+        if (row.kind === "jianying") {
+          const draft = buildDraft(plan, clip => media.locate(clip.storageKey));
+          files.push(...draft.files); manifest = draft.manifest;
+        } else {
+          for (const clip of plan.clips) files.push({ name: clip.file, sourcePath: media.locate(clip.storageKey) });
+          manifest = { kind: "storydock-video-pack", schemaVersion: 1, missing: plan.missing, clips: plan.clips.map(({storageKey,...clip})=>clip) };
         }
+        files.push({ name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) });
+        const storageKey = `exports/${row.id}.zip`;
+        await writeExportArchive(media.locate(storageKey), files);
+        repos.accounts.finishExport(row.id, { status: "succeeded", storageKey, manifest });
+        return;
       } else {
         files.push({ name: "project.json", data: Buffer.from(JSON.stringify(project, null, 2)) });
         const mediaRows = db.prepare("SELECT * FROM media WHERE project_id=?").all(project.id);
