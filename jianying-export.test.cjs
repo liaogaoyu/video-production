@@ -35,7 +35,7 @@ test('draft timeline is contiguous with actual clip durations, original audio an
  if(process.platform==='darwin'||process.platform==='linux'){
   const root=path.join(dir,'自定义 草稿位置');fs.mkdirSync(root);
   cp.execFileSync('perl',[path.join(dir,'package/import.pl'),root]);
-  const dest=path.join(root,'Storydock-'+manifest.id),installed=JSON.parse(fs.readFileSync(path.join(dest,'draft_content.json')));
+  const dest=path.join(root,manifest.folderName),installed=JSON.parse(fs.readFileSync(path.join(dest,'draft_content.json')));
   assert.equal(installed.duration,5500000);assert.equal(typeof installed.duration,'number');assert.equal(installed.platform.os,'mac');assert.ok(installed.materials.videos.every(m=>fs.existsSync(m.path)));
   const before=fs.readFileSync(path.join(dest,'draft_content.json'));assert.throws(()=>cp.execFileSync('perl',[path.join(dir,'package/import.pl'),root],{stdio:'pipe'}));assert.deepEqual(fs.readFileSync(path.join(dest,'draft_content.json')),before);
  }

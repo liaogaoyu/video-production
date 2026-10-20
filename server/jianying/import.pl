@@ -8,7 +8,9 @@ sub read_json { my($p)=@_;open my $f,'<:raw',native($p) or die "Cannot read $p: 
 my $manifest=read_json("$source/timeline.json");
 $manifest->{kind} eq 'storydock-jianying' && $manifest->{id}=~/\A[0-9A-F-]{36}\z/ or die "Invalid package\n";
 -d native($root) or die "Draft root does not exist. Select the folder shown in Jianying settings.\n";
-my $dest="$root/Storydock-$manifest->{id}";
+my $folder=$manifest->{folderName} // "Storydock-$manifest->{id}";
+$folder!~m{[/\\\x00]} && $folder!~/\A\./ or die "Unsafe draft folder\n";
+my $dest="$root/$folder";
 -e native($dest) and die "This package is already imported. Existing draft was not changed.\n";
 for my $clip (@{$manifest->{clips}}){my $name=$clip->{file};$name!~m{[/\\\x00]} && $name!~/\A\./ or die "Unsafe media name\n";-f native("$source/draft/media/$name") or die "Missing media: $name\n";}
 sub fix {

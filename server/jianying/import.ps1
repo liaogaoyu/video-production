@@ -13,7 +13,10 @@ if (!$DraftRoot) {
 }
 if (!(Test-Path -LiteralPath $DraftRoot -PathType Container)) { throw 'Draft root does not exist. Check Jianying settings.' }
 $DraftRoot = [IO.Path]::GetFullPath($DraftRoot)
-$dest = Join-Path $DraftRoot ('Storydock-' + $manifest.id)
+$folder = $manifest.folderName
+if (!$folder) { $folder = 'Storydock-' + $manifest.id }
+if ($folder -match '[/\\\x00]' -or $folder.StartsWith('.')) { throw 'Unsafe draft folder' }
+$dest = Join-Path $DraftRoot $folder
 if (Test-Path -LiteralPath $dest) { throw 'Already imported. The existing draft was not changed.' }
 foreach ($clip in $manifest.clips) {
   if ($clip.file -match '[/\\\x00]' -or $clip.file.StartsWith('.')) { throw 'Unsafe media name' }
