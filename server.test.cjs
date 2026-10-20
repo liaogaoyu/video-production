@@ -569,7 +569,7 @@ test('application login protects APIs, imports old passwords and revokes session
   const {importLegacyUsers,verify}=require('./server/auth-http.cjs');const file=path.join(c.services.paths.root,'legacy.htpasswd');const hash=await require('bcryptjs').hash('legacy-test-password',4);fs.writeFileSync(file,'admin:'+hash.replace('$2b$','$2y$')+'\n');importLegacyUsers(c.services.db,file);
   assert.equal((await c.app.inject({url:'/api/v1/projects'})).statusCode,401);
   assert.equal((await c.app.inject({method:'POST',url:'/api/v1/auth/login',payload:{username:'admin',password:'wrong'}})).statusCode,401);
-  const login=await c.app.inject({method:'POST',url:'/api/v1/auth/login',payload:{username:'admin',password:'legacy-test-password'}});assert.equal(login.statusCode,200);const cookie=login.headers['set-cookie'].split(';')[0];assert.match(login.headers['set-cookie'],/HttpOnly/);assert.match(login.headers['set-cookie'],/SameSite=Lax/);
+  const login=await c.app.inject({method:'POST',url:'/api/v1/auth/login',headers:{host:'example.test:18456',origin:'http://example.test:18456'},payload:{username:'admin',password:'legacy-test-password'}});assert.equal(login.statusCode,200);const cookie=login.headers['set-cookie'].split(';')[0];assert.match(login.headers['set-cookie'],/HttpOnly/);assert.match(login.headers['set-cookie'],/SameSite=Lax/);
   assert.equal((await c.app.inject({url:'/api/v1/projects',headers:{cookie}})).statusCode,200);
   assert.ok(c.services.db.prepare('SELECT password_hash FROM app_users').get().password_hash.startsWith('scrypt:'));
   assert.notEqual(c.services.db.prepare('SELECT token_hash FROM app_sessions').get().token_hash,cookie.split('=')[1]);
