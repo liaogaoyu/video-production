@@ -24,6 +24,7 @@ function zipStore(files) {
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x800, 6); // UTF-8 filenames on Windows/macOS unzip tools.
     local.writeUInt16LE(0, 8);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(data.length, 18);
@@ -33,6 +34,7 @@ function zipStore(files) {
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x800, 8);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(data.length, 20);
     central.writeUInt32LE(data.length, 24);
