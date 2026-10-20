@@ -90,3 +90,37 @@ npm run local:start
 ```
 
 同时启动 API 和 Worker，使用独立后台进程，启动命令结束后继续运行。重复运行会复用已经存活的服务。默认地址 http://127.0.0.1:4320/ 。PID 与日志保存在 `var/storydock/local-services/`（使用 `STORYDOCK_ROOT` 时位于其目录下）。这仅是本机开发启动方式，生产仍使用 systemd。
+
+
+### Dreamina 国际网页渠道（Seedance 2.0 / Fast）
+
+此渠道独立于官方 CLI，使用内置的 `vendor/jimeng-api` fork（GPL-3.0，来源见其 `UPSTREAM.md`），只生成分镜视频。CLI 的 OAuth 不能直接当作网页 sessionid 使用。账号列表支持网页登录、剩余积分查询、暂停和轮流分配；资产生图仍走原来的配置。
+
+本机安装：`npm run web:setup`；环境自检：`node scripts/check-dreamina-web.cjs`。安装完成后重启 API、Worker，在模型与账号页面添加国际网页账号并打开登录窗口。登录窗口操作服务器端的 Chromium，完成登录后点击保存，网页 Cookie 加密存入服务器数据库。不要把自己电脑的代理地址直接复制到服务器。
+
+Ubuntu / systemd 部署（代码放 `/opt/storydock`，Node.js 24、Docker Engine 和 nginx 按原部署要求准备）：
+
+```sh
+cd /opt/storydock
+npm ci --omit=dev --ignore-scripts
+# 安装固定锁文件依赖、Chromium 和 Ubuntu 运行库；自检使用 storydock 用户
+sudo STORYDOCK_ENABLE_DREAMINA_WEB=1 sh deploy/install.sh
+```
+
+在 `/etc/storydock/storydock.env` 里配置以下值，然后执行 `sudo systemctl restart storydock-api storydock-worker`：
+
+```ini
+# 必须换为服务器实际可达的 HTTP 代理，API 登录和 Worker 生成共用该出口
+STORYDOCK_DREAMINA_PROXY=http://实际代理地址:端口
+STORYDOCK_ACCESS_PASSWORD=自行设置的访问密码
+# 官方 Canvas CLI 渠道独立配置；仅在使用该渠道时需要
+# STORYDOCK_GLOBAL_CLI=/服务用户可执行的路径/dreamina-canvas
+# STORYDOCK_GLOBAL_PROXY=http://实际代理地址:端口
+```
+
+- 前端只访问本站 API；不要公开 Chromium 调试端口或额外 jimeng-api HTTP 服务。公网入口使用 HTTPS，登录截图、验证码和输入经本站传输。
+- API 和 Worker 使用同一个 `storydock` 系统用户、`STORYDOCK_ROOT=/srv/storydock` 和主密钥。持久化 `/srv/storydock`（数据库、`web-profiles/`、媒体、恢复记录），另行备份 `/etc/storydock/master-key`；丢失密钥无法解密账号。浏览器运行库安装于 `/opt/storydock-browsers`。
+- 登录在服务器浏览器完成。关闭前端不会终止已提交生成；每账号同时一个生成任务。固定提交 UUID，受理后查询原任务；超时不会再次扣费提交，下载失败只重试原结果。
+- 官方 Canvas CLI 渠道依然由 Worker 在服务器发起 OAuth，用户在自己浏览器同意；凭据由官方 SDK 保存在服务器服务用户的凭据存储。不能把 macOS Keychain 复制给 Ubuntu。国际网页渠道需单独网页登录。
+- 部署后先用服务用户执行浏览器自检，再验证官网能打开、网页登录并保存、重启后检查积分、提交一个真实视频并下载。**本机验证不代表 Ubuntu 网络已验证**，本次没有在无代理的远程服务器提交任务。
+- 日志：`journalctl -u storydock-api -u storydock-worker -f`。bridge 不输出原始 Cookie / 签名请求到系统日志；第三方代码的内部日志仍按敏感运行数据管理，不公开或提交 Git。

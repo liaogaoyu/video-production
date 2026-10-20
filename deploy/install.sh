@@ -27,6 +27,13 @@ if [ -n "${STORYDOCK_CLI_IMAGE:-}" ]; then
   docker image inspect "$STORYDOCK_CLI_IMAGE" >/dev/null
   echo "自定义镜像请同时通过 systemd Environment=STORYDOCK_CLI_IMAGE 配置给 Worker。"
 fi
+# 国际网页渠道是可选运行时。先安装再启动，浏览器与运行用户共用固定缓存目录。
+if [ "${STORYDOCK_ENABLE_DREAMINA_WEB:-0}" = "1" ]; then
+  export PLAYWRIGHT_BROWSERS_PATH=/opt/storydock-browsers
+  /usr/bin/node scripts/setup-dreamina-web.cjs --with-deps
+  chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
+  /usr/sbin/runuser -u storydock -- /usr/bin/env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" /usr/bin/node scripts/check-dreamina-web.cjs
+fi
 install -m 0644 deploy/systemd/storydock-api.service /etc/systemd/system/storydock-api.service
 install -m 0644 deploy/systemd/storydock-worker.service /etc/systemd/system/storydock-worker.service
 systemctl daemon-reload

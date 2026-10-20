@@ -11,6 +11,7 @@ WorkingDirectory=/opt/storydock
 Environment=STORYDOCK_ROOT=/srv/storydock
 Environment=STORYDOCK_MASTER_KEY=/etc/storydock/master-key
 Environment=STORYDOCK_RUNTIME_DIR=/run/storydock
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/storydock-browsers
 EnvironmentFile=-/etc/storydock/storydock.env
 RuntimeDirectory=storydock
 RuntimeDirectoryMode=0700

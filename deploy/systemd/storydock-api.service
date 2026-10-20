@@ -12,6 +12,7 @@ Environment=STORYDOCK_MASTER_KEY=/etc/storydock/master-key
 Environment=STORYDOCK_RUNTIME_DIR=/run/storydock
 Environment=HOST=127.0.0.1
 Environment=PORT=4320
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/storydock-browsers
 EnvironmentFile=-/etc/storydock/storydock.env
 RuntimeDirectory=storydock
 RuntimeDirectoryMode=0700
