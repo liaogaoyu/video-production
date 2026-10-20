@@ -763,6 +763,18 @@ function visibleJobs() {
     .sort((a, b) => jobSort === "oldest" ? a.time - b.time || a.index - b.index : b.time - a.time || b.index - a.index)
     .map(({ job }) => job);
 }
+function jobTimesHtml(job) {
+  if (!window.__STORYDOCK_SERVER__) return "";
+  const show = (value, missing) => {
+    const date = value ? new Date(value) : null;
+    if (!date || !Number.isFinite(date.getTime())) return missing;
+    const text = date.toLocaleString("zh-CN", {timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"});
+    return `<time datetime="${esc(date.toISOString())}">${esc(text)}</time>`;
+  };
+  const finished = ["done", "succeeded"].includes(job.status);
+  const failed = ["failed", "error", "auth_expired", "download_failed"].includes(job.status);
+  return `<div class="job-times" aria-label="任务时间（北京时间）"><span title="任务提交到服务器队列的时间">提交时间：${show(job.submittedAt || job.createdAt,"未记录")}</span><span title="生成结果下载并保存完成的时间">完成时间：${show(job.completedAt,finished ? "未记录" : "—")}</span><span>失败时间：${show(job.failedAt,failed ? "未记录" : "—")}</span></div>`;
+}
 function jobsPage() {
   const done = state.jobs.filter((j) => j.status === "done").length;
   return `<div class="heading"><h1>生成队列</h1>${btn(timer ? "pause" : "resume", timer ? "暂停队列" : "继续演示", timer ? "jobs" : "play")}</div><div class="notice">演示队列，未连接模型，不产生真实视频。</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${state.jobs.length.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成演示</small><strong>${done.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>排队 / 进行中</small><strong>${String(state.jobs.length - done).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>本地输出命名：001_分镜名.mp4</small></div>${state.jobs.map((j) => `<div class="job"><img class="job-icon" src="${esc(j.image || "assets/alley.png")}" alt=""><div class="job-name"><strong>${esc(j.title)}</strong><small>${j.kind === "asset" ? esc(j.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"} · 演示任务</small></div><div class="progress"><i style="width:${j.progress}%"></i></div><span class="job-status">${j.status === "done" ? "✓ 演示完成" : j.progress ? `模拟生成 ${j.progress}%` : "等待中"}</span></div>`).join("") || '<div class="empty">暂无任务</div>'}</div>`;
@@ -782,7 +794,7 @@ jobsPage = function () {
     const retry = window.__STORYDOCK_SERVER__ && !job.resubmittedJobId && ["failed", "error", "download_failed", "submit_unknown", "auth_expired"].includes(job.status)
       ? `<button data-retry-job="${esc(job.id)}" data-retry-confirm="${job.status === "submit_unknown" && job.provider !== "dreamina_web_api" ? "1" : ""}" data-retry-new="${job.provider === "dreamina_web_api" && job.status !== "download_failed" ? "1" : ""}">${job.status === "download_failed" ? "重试下载" : job.provider === "dreamina_web_api" ? "重新提交" : "重试"}</button>`
       : "";
-    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small title="积分预占为官方任务记录，最终净扣费以官方账单为准">${detail}</small></div>${progress}<span class="job-status">${status}</span>${retry}${attempt.video ? `<button data-preview-video="${esc(attempt.video)}">预览</button>` : ""}</div>`;
+    return `<div class="job">${media}<div class="job-name"><strong>${esc(job.title)}</strong><small title="积分预占为官方任务记录，最终净扣费以官方账单为准">${detail}</small>${jobTimesHtml(attempt)}</div>${progress}<span class="job-status">${status}</span>${retry}${attempt.video ? `<button data-preview-video="${esc(attempt.video)}">预览</button>` : ""}</div>`;
   }).join("");
   const video = [...state.jobs].reverse().find((job) => job.video)?.video;
   const batchId = window.__STORYDOCK_SERVER__ ? state.jobs.find((job) => job.batchId && ["queued", "preparing"].includes(job.status))?.batchId : "";
