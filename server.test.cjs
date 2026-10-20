@@ -475,3 +475,47 @@ test('synchronous image responses use bounded concurrency without blocking other
     await ctx.close();
   }
 });
+
+test('event bursts and overlapping polls share one jobs request and one UI merge', async () => {
+  const vm=require('node:vm');
+  let source, poll, resolveJobs, calls=0, merges=0;
+  const hooks={read:()=>({activeProject:{id:'project'},connections:{image:{},pool:{}}}),replaceAll(){},render(){},toast(){},setRuntime(){},setAccounts(){},mergeJobs(){merges++;}};
+  const context=vm.createContext({window:{},sessionStorage:{getItem:()=>''},localStorage:{getItem:()=>null},setTimeout,clearTimeout,setInterval(fn){poll=fn;},EventSource:class{constructor(){source=this;}},fetch:async(url)=>{
+    if(url.endsWith('/jobs')){calls++;await new Promise(resolve=>{resolveJobs=resolve;});}
+    const data=url.endsWith('/projects')?{projects:[]}:url.endsWith('/accounts')?{accounts:[]}:url.endsWith('/jobs')?{jobs:[]}:{};
+    return {ok:true,status:200,text:async()=>JSON.stringify(data)};
+  }});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'web/api.js'),'utf8'),context);
+  context.window.storydockApi.attach(hooks);
+  await new Promise(resolve=>setImmediate(resolve));
+  for(let i=0;i<500;i++)source.onmessage({lastEventId:String(i),data:JSON.stringify({type:'job.updated'})});
+  for(let i=0;i<20;i++)poll();
+  await new Promise(resolve=>setTimeout(resolve,200));
+  assert.equal(calls,1);
+  resolveJobs();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(merges,1);
+  poll();
+  assert.equal(calls,2,'later polls continue after the pending request completes');
+  resolveJobs();
+  await new Promise(resolve=>setImmediate(resolve));
+});
+
+test('SSE starts at latest event and reconnect resumes from Last-Event-ID',async()=>{
+  const c=await start();
+  const controllers=[];
+  try{
+    c.services.repos.content.createProject({name:'old snapshot'});
+    const last=c.services.db.prepare('SELECT MAX(seq) AS seq FROM job_events').get().seq;
+    const address=await c.app.listen({port:0,host:'127.0.0.1'});
+    const read=async(headers)=>{
+      const abort=new AbortController();controllers.push(abort);
+      const r=await fetch(address+'/api/v1/events',{headers:{accept:'text/event-stream',...headers},signal:abort.signal});
+      const reader=r.body.getReader();const chunk=await reader.read();abort.abort();return Buffer.from(chunk.value).toString();
+    };
+    const fresh=await read({});
+    assert.match(fresh,/: connected/);assert.doesNotMatch(fresh,/data:/,'initial page snapshot must not trigger a historic event storm');
+    const resumed=await read({'last-event-id':String(last-1)});
+    assert.match(resumed,new RegExp('id: '+last+'\\n'));
+  }finally{controllers.forEach(c=>c.abort());await c.close();}
+});

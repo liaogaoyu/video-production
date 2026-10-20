@@ -5,13 +5,26 @@
   function token() {
     return sessionStorage.getItem("storydock-access") || "";
   }
-  async function request(method, url, options = {}) {
+  const pendingReads = new Map();
+  function request(method, url, options = {}) {
+    if (method !== "GET") return executeRequest(method, url, options);
+    if (pendingReads.has(url)) return pendingReads.get(url);
+    const promise = executeRequest(method, url, options).finally(() => pendingReads.delete(url));
+    pendingReads.set(url, promise);
+    return promise;
+  }
+  async function executeRequest(method, url, options = {}) {
     const headers = { ...(token() ? { authorization: `Bearer ${token()}` } : {}), ...(options.headers || {}) };
     if (options.body) headers["content-type"] = "application/json";
-    let response;
-    try { response = await fetch(url, { method, headers, body: options.form || (options.body ? JSON.stringify(options.body) : undefined) }); }
-    catch { throw new Error("无法连接应用服务，请确认服务已启动后重试"); }
-    const text = await response.text();
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), method === "GET" ? 20000 : 120000) : null;
+    let response, text;
+    try {
+      response = await fetch(url, { method, headers, signal: controller?.signal, body: options.form || (options.body ? JSON.stringify(options.body) : undefined) });
+      text = await response.text();
+    } catch {
+      throw new Error(controller?.signal.aborted ? "请求超时，请稍后重试" : "无法连接应用服务，请确认服务已启动后重试");
+    } finally { if (timer !== null) clearTimeout(timer); }
     let payload = {};
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
     if (response.status === 401 && memory.hooks) {
@@ -245,9 +258,14 @@
     clearTimeout(schedule.timer);
     schedule.timer = setTimeout(() => { flush(); }, 80);
   }
-  async function reloadJobs(projectId) {
-    const payload = await request("GET", `/api/v1/projects/${projectId}/jobs`);
-    memory.hooks.mergeJobs(projectId, payload.jobs);
+  const jobsReloads = new Map();
+  function reloadJobs(projectId) {
+    if (jobsReloads.has(projectId)) return jobsReloads.get(projectId);
+    const promise = request("GET", `/api/v1/projects/${projectId}/jobs`)
+      .then(payload => memory.hooks.mergeJobs(projectId, payload.jobs))
+      .finally(() => jobsReloads.delete(projectId));
+    jobsReloads.set(projectId, promise);
+    return promise;
   }
   window.storydockApi = {
     attach(hooks) {
@@ -261,10 +279,19 @@
         if (current?.id) reloadJobs(current.id).catch(() => {});
       }, 4000);
       const source = new EventSource("/api/v1/events");
+      let refreshTimer;
       source.onmessage = (event) => {
         memory.seq = Number(event.lastEventId || memory.seq);
-        const current = hooks.read().activeProject;
-        if (current?.id) reloadJobs(current.id).catch(() => {});
+        if (!memory.ready) return;
+        let data;
+        try { data = JSON.parse(event.data); } catch { return; }
+        if (!/^(job[.]|jobs[.]|batch[.])/.test(data.type || "")) return;
+        if (refreshTimer) return;
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          const current = hooks.read().activeProject;
+          if (current?.id) reloadJobs(current.id).catch(() => {});
+        }, 150);
       };
     },
     onPersist() { if (memory.ready) schedule(); },

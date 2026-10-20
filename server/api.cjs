@@ -179,21 +179,26 @@ async function createHttpApp(services) {
   app.put("/api/v1/jimeng/pool", async (request) => repos.accounts.updatePool(request.body || {}));
 
   app.get("/api/v1/events", async (request, reply) => {
-    const after = Number(request.query.after || 0);
+    const stream = String(request.headers.accept || "").includes("text/event-stream");
+    const supplied = request.query.after ?? request.headers["last-event-id"];
+    const after = supplied !== undefined ? Math.max(0, Number(supplied) || 0)
+      : stream ? services.db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM job_events").get().seq : 0;
     const events = repos.accounts.eventsAfter(after);
-    if (!String(request.headers.accept || "").includes("text/event-stream")) return { events };
+    if (!stream) return { events };
     reply.hijack();
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    let cursor = after;
+    reply.raw.write(": connected\n\n");
+    let cursor = after, idleTicks = 0;
     for (const event of events) {
       cursor = event.seq;
       reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
     }
     const timer = setInterval(() => {
+      if (++idleTicks % 15 === 0) reply.raw.write(": keepalive\n\n");
       for (const event of repos.accounts.eventsAfter(cursor)) {
         cursor = event.seq;
         reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
