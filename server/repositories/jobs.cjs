@@ -40,6 +40,8 @@ function normalizeJob(row) {
     queueNote: row.queue_note,
     resultJson: row.result_json,
     createdAt: row.created_at,
+    completedAt: row.completed_at,
+    failedAt: row.failed_at,
     updatedAt: row.updated_at,
   };
 }
@@ -293,6 +295,9 @@ function createJobRepository(db, { record }) {
 
   function commitJob(job, fields) {
     const now = iso();
+    fields = {...fields};
+    if(fields.status === 'succeeded' && job.status !== 'succeeded')fields.completed_at = now;
+    if(['failed','auth_expired','download_failed'].includes(fields.status) && job.status !== fields.status)fields.failed_at = now;
     const columns = [];
     const values = [];
     for (const [column, value] of Object.entries(fields)) {
@@ -532,6 +537,8 @@ function createAccountRepository(db, { secrets, record }) {
       type: row.type,
       payload: JSON.parse(row.payload_json),
       createdAt: row.created_at,
+    completedAt: row.completed_at,
+    failedAt: row.failed_at,
     }));
   }
   function createExport(input) {

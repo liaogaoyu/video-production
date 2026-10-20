@@ -25,6 +25,9 @@ function presentJob(row) {
     real: true,
     progress: 0,
     createdAt: row.created_at || row.createdAt,
+    submittedAt: row.created_at || row.createdAt || null,
+    completedAt: row.completed_at || row.completedAt || null,
+    failedAt: row.failed_at || row.failedAt || null,
     accountId: row.account_id || row.accountId || "",
     submitId: row.remote_task_id || row.remoteTaskId || "",
   };
