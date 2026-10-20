@@ -22,6 +22,7 @@ import { useWorkspace } from "./context";
 import { Action, Blank, Thumb } from "./common";
 import { Importer } from "./importer";
 import { Generation } from "./generation";
+import { ProjectExport } from "./project-export";
 import { PromptMentions } from "./prompt-mentions";
 import type { Shot } from "./types";
 export function ShotsPage() {
@@ -76,6 +77,7 @@ export function ShotsPage() {
           </Typography.Text>
         </div>
         <Space wrap>
+          <ProjectExport />
           <Button icon={<ImportOutlined />} onClick={() => setImporting(true)}>
             导入分镜脚本
           </Button>

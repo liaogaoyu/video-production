@@ -18,6 +18,7 @@ import {
 import { api, labels, time } from "./api";
 import { useWorkspace } from "./context";
 import { Action, Blank, Thumb } from "./common";
+import { ProjectExport } from "./project-export";
 import type { Job } from "./types";
 export function JobsPage() {
   const { project, refreshProject } = useWorkspace(),
@@ -95,13 +96,7 @@ export function JobsPage() {
           <Action icon={<ReloadOutlined />} run={refreshProject}>
             刷新
           </Action>
-          <Button
-            icon={<DownloadOutlined />}
-            loading={exporting}
-            onClick={() => exportPack("videos")}
-          >
-            按分镜顺序导出视频
-          </Button>
+          <ProjectExport />
           <Button loading={exporting} onClick={() => exportPack("backup")}>
             备份项目
           </Button>
