@@ -56,6 +56,7 @@ async function createHttpApp(services) {
   });
 
   const web=services.web;
+  app.addHook("onSend",async(request,reply,payload)=>{if(request.url.includes("/dreamina-web/"))reply.header("Cache-Control","no-store");return payload;});
   app.get('/api/v1/dreamina-web/runtime',async()=>web.runtime());
   app.get('/api/v1/dreamina-web/accounts',async()=>({accounts:web.list()}));
   app.post('/api/v1/dreamina-web/accounts',async request=>({account:web.create(request.body||{})}));
