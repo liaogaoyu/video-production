@@ -27,10 +27,45 @@ if [ -n "${STORYDOCK_CLI_IMAGE:-}" ]; then
   docker image inspect "$STORYDOCK_CLI_IMAGE" >/dev/null
   echo "自定义镜像请同时通过 systemd Environment=STORYDOCK_CLI_IMAGE 配置给 Worker。"
 fi
+# 可选国际网页专用代理；节点文件由运维提供，凭据不会进入仓库或镜像。
+if [ "${STORYDOCK_ENABLE_DREAMINA_PROXY:-0}" = "1" ]; then
+  if [ -n "${STORYDOCK_XRAY_ARCHIVE:-}" ]; then
+    /usr/sbin/runuser -u storydock -- /usr/bin/env STORYDOCK_ROOT=/srv/storydock /usr/bin/node scripts/dreamina-proxy.cjs install --archive "$STORYDOCK_XRAY_ARCHIVE"
+  else
+    /usr/sbin/runuser -u storydock -- /usr/bin/env STORYDOCK_ROOT=/srv/storydock /usr/bin/node scripts/dreamina-proxy.cjs install
+  fi
+  if [ -n "${STORYDOCK_PROXY_NODE_FILE:-}" ]; then
+    /usr/sbin/runuser -u storydock -- /usr/bin/env STORYDOCK_ROOT=/srv/storydock /usr/bin/node scripts/dreamina-proxy.cjs configure "$STORYDOCK_PROXY_NODE_FILE"
+  fi
+  test -s /srv/storydock/proxy/xray.json || { echo "缺少私有节点配置，请设置 STORYDOCK_PROXY_NODE_FILE" >&2; exit 1; }
+  install -m 0644 deploy/systemd/storydock-proxy.service /etc/systemd/system/storydock-proxy.service
+  for service in storydock-api storydock-worker; do
+    install -d /etc/systemd/system/$service.service.d
+    cat > /etc/systemd/system/$service.service.d/proxy.conf <<'DEPENDENCY'
+[Unit]
+Wants=storydock-proxy.service
+After=storydock-proxy.service
+DEPENDENCY
+  done
+  systemctl daemon-reload
+  systemctl enable storydock-proxy.service
+  systemctl restart storydock-proxy.service
+  /usr/sbin/runuser -u storydock -- /usr/bin/env STORYDOCK_ROOT=/srv/storydock /usr/bin/node scripts/dreamina-proxy.cjs enable
+  /usr/bin/node - <<'PROXY_ENV'
+const fs=require('node:fs'),file='/etc/storydock/storydock.env';
+const lines=fs.readFileSync(file,'utf8').split('\n').filter(line=>!line.startsWith('STORYDOCK_WEB_PROXY='));
+lines.push('STORYDOCK_WEB_PROXY=http://127.0.0.1:17891');
+fs.writeFileSync(file,lines.join('\n')+'\n');
+PROXY_ENV
+fi
 # 国际网页渠道是可选运行时。先安装再启动，浏览器与运行用户共用固定缓存目录。
 if [ "${STORYDOCK_ENABLE_DREAMINA_WEB:-0}" = "1" ]; then
   export PLAYWRIGHT_BROWSERS_PATH=/opt/storydock-browsers
-  /usr/bin/node scripts/setup-dreamina-web.cjs --with-deps
+  if [ "${STORYDOCK_ENABLE_DREAMINA_PROXY:-0}" = "1" ]; then
+    /usr/bin/env HTTP_PROXY=http://127.0.0.1:17891 HTTPS_PROXY=http://127.0.0.1:17891 /usr/bin/node scripts/setup-dreamina-web.cjs --with-deps
+  else
+    /usr/bin/node scripts/setup-dreamina-web.cjs --with-deps
+  fi
   chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
   /usr/sbin/runuser -u storydock -- /usr/bin/env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" /usr/bin/node scripts/check-dreamina-web.cjs
 fi
@@ -39,3 +74,7 @@ install -m 0644 deploy/systemd/storydock-worker.service /etc/systemd/system/stor
 systemctl daemon-reload
 systemctl enable --now storydock-api.service storydock-worker.service
 echo "API 和 Worker 共用 storydock 服务用户以访问同一数据库和媒体；仅 Worker 服务获得 docker 附加组。API 屏蔽 Docker socket。"
+
+if [ "${STORYDOCK_ENABLE_DREAMINA_PROXY:-0}" = "1" ]; then
+  systemctl restart storydock-api.service storydock-worker.service
+fi

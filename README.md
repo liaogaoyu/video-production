@@ -111,7 +111,7 @@ sudo STORYDOCK_ENABLE_DREAMINA_WEB=1 sh deploy/install.sh
 
 ```ini
 # 必须换为服务器实际可达的 HTTP 代理，API 登录和 Worker 生成共用该出口
-STORYDOCK_DREAMINA_PROXY=http://实际代理地址:端口
+STORYDOCK_WEB_PROXY=http://实际代理地址:端口
 STORYDOCK_ACCESS_PASSWORD=自行设置的访问密码
 # 官方 Canvas CLI 渠道独立配置；仅在使用该渠道时需要
 # STORYDOCK_GLOBAL_CLI=/服务用户可执行的路径/dreamina-canvas
@@ -132,3 +132,45 @@ STORYDOCK_ACCESS_PASSWORD=自行设置的访问密码
 
 
 网页渠道的“重新提交”会复用原任务冻结的提示词、模型和参考图，创建新的任务和提交 UUID，重新调用官网生成。原记录保留并显示“已重新提交”；同一旧记录的重复点击返回同一新任务。后台自动查询不会重新生成；“重试下载”继续下载已有结果。
+
+
+### 国际网页专用 VLESS / XHTTP / REALITY 代理（Linux 可部署）
+
+国际网页渠道可以使用独立 Xray 进程提供的本地 HTTP 代理，不依赖 macOS 的代理软件。固定内核 `v26.3.27`，安装器按 macOS arm64 / Linux amd64 / Linux arm64 选择官方包，并核对固定 SHA-256；支持离线安装。配置转换使用节点导出文件的 `password` 作为 VLESS 用户 ID，`uuid` 是导出记录元数据；REALITY 使用 `publicKey`、`shortId`、`peer`，XHTTP 使用 `path` / `mode`。依据：[VLESS](https://xtls.github.io/en/config/outbounds/vless.html)、[REALITY](https://xtls.github.io/en/config/transports/reality.html)、[XHTTP](https://xtls.github.io/en/config/transports/xhttp.html)。
+
+本机命令（从客户端代码目录运行）：
+
+```sh
+npm run proxy -- install
+# 离线可用：npm run proxy -- install --archive /可读目录/Xray-linux-64.zip
+npm run proxy -- configure /私有目录/node.json
+npm run proxy -- start
+npm run proxy -- check
+npm run proxy -- enable
+# enable 成功后重启 API、Worker，国际网页渠道才使用新出口
+```
+
+节点配置只保存在 `STORYDOCK_ROOT/proxy/xray.json`，目录0700、文件0600。代理入口只监听 `127.0.0.1:17891`，只有 VLESS 出站，没有直连备用出口。服务自身不修改系统代理、国内 CLI 或生图接口。国际 bridge 子进程统一给所有 Axios 请求设置代理，覆盖积分、上传令牌、ImageX申请/上传/提交、任务查询、CDN下载；浏览器登录和签名浏览器使用同一 HTTP 代理。代理不可用时请求失败，不降级为直连。
+
+Ubuntu / systemd：
+
+1. 先安装 Node.js 24、curl、unzip、ca-certificates，确认服务器时钟同步、能出站连接节点的TCP端口。Chromium 按上一节安装。
+2. 将节点JSON放入 `/etc/storydock/node.json`，设置 `root:storydock` / 0640（storydock 服务用户需可读）。不要提交到 Git 或打进镜像。
+3. 在 `/opt/storydock` 运行：
+
+```sh
+sudo STORYDOCK_ENABLE_DREAMINA_WEB=1 \
+  STORYDOCK_ENABLE_DREAMINA_PROXY=1 \
+  STORYDOCK_PROXY_NODE_FILE=/etc/storydock/node.json \
+  sh deploy/install.sh
+# 下载受限可额外设置 STORYDOCK_XRAY_ARCHIVE=/服务用户可读目录/官方安装包.zip
+```
+
+安装器启用 `storydock-proxy.service`，出口检查通过后才写入国际代理配置、重启 API/Worker。配置和二进制持久化在 `/srv/storydock/proxy/`。国际网页专用环境变量 `STORYDOCK_WEB_PROXY` 优先于 `web-runtime.json`；安装器将其设为本机17891端口，不修改国内 CLI 的 `STORYDOCK_DREAMINA_PROXY`。只有没有专用配置时才兼容读取旧变量。
+
+```sh
+sudo journalctl -u storydock-proxy -u storydock-api -u storydock-worker -f
+sudo -u storydock env STORYDOCK_ROOT=/srv/storydock /usr/bin/node /opt/storydock/scripts/dreamina-proxy.cjs check
+```
+
+**2026-10-20 实机验证：** macOS 和目标 Ubuntu 26.04.1 LTS amd64 的实际出口均已验证。Ubuntu 上以 storydock 服务用户完成官网 HTTP 200、余额查询、参考图上传检查、已有视频查询、10,744,618 字节视频下载（SHA-256与本机一致），以及 Chromium 156 通过代理打开官网。`storydock-proxy.service` 已实际安装，active / enabled，只监听127.0.0.1:17891。国内 API/Worker 保持运行，本次未整体替换服务器应用版本；新版本部署时读取已准备好的国际网页代理配置。Linux arm64 提供已校验安装包，但未在原生arm64服务器实测。没有额外提交收费生成。
