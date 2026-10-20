@@ -26,3 +26,27 @@ export function splitPromptMentions(value, names) {
     parts.push({ text: source.slice(start), mention: false });
   return parts;
 }
+
+// Keep the wire format plain text; only the editor represents references as atoms.
+export function promptDocument(value, assets) {
+  const names = assets.map((asset) => asset.name);
+  return {
+    type: "doc",
+    content: String(value || "")
+      .split("\n")
+      .map((line) => ({
+        type: "paragraph",
+        content: splitPromptMentions(line, names).map((part) =>
+          part.mention
+            ? {
+                type: "mention",
+                attrs: {
+                  id: assets.find((asset) => `@${asset.name}` === part.text).id,
+                  label: part.text.slice(1),
+                },
+              }
+            : { type: "text", text: part.text },
+        ),
+      })),
+  };
+}

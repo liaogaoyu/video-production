@@ -576,58 +576,77 @@ select {
 
 .prompt-mention-editor {
   position: relative;
-  background: #fff;
+}
+.prompt-mention-editor .tiptap {
+  min-height: 280px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 8px 11px;
+  border: 1px solid #d9d9d9;
   border-radius: 6px;
-}
-.prompt-mention-editor .ant-mentions {
-  background: transparent;
-}
-.prompt-mention-editor .ant-mentions > textarea,
-.prompt-mention-editor .ant-mentions-measure,
-.prompt-mention-mirror {
-  font-family: inherit;
+  background: #fff;
+  color: #263042;
   font-size: 14px;
-  font-weight: 400;
   line-height: 1.9;
-  letter-spacing: normal;
-  padding: 6px 11px;
   white-space: pre-wrap;
   overflow-wrap: break-word;
-  word-break: normal;
-  tab-size: 8;
+  outline: none;
 }
-.prompt-mention-mirror {
-  position: absolute;
-  inset: 1px;
-  overflow: hidden;
-  pointer-events: none;
-  color: #263042;
-  scrollbar-width: none;
+.prompt-mention-editor .tiptap:hover {
+  border-color: #4096ff;
 }
-.prompt-mention-mirror mark {
+.prompt-mention-editor .tiptap:focus {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgb(5 145 255 / 10%);
+}
+.prompt-mention-editor .tiptap p {
+  margin: 0;
+}
+.asset-mention {
+  display: inline-block;
+  white-space: nowrap;
   color: #165dff;
   background: #edf3ff;
-  box-shadow: inset 0 0 0 1px #91b5ff;
+  border: 1px solid #91b5ff;
   border-radius: 4px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+  padding: 0 3px;
+  margin: 0 1px;
+  line-height: 1.5;
+  vertical-align: baseline;
+  cursor: default;
+  user-select: all;
 }
-.prompt-mention-editor .ant-mentions > textarea {
+.asset-mention.ProseMirror-selectednode {
+  background: #cce0ff;
+  outline: 2px solid #1677ff;
+}
+.asset-mention-menu {
+  position: absolute;
+  z-index: 20;
+  width: 240px;
+  max-width: 100%;
+}
+.asset-mention-options {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+}
+.asset-mention-options button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
   background: transparent;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  caret-color: #263042;
-}
-.prompt-mention-editor .ant-mentions > textarea::selection {
-  background: rgb(22 93 255 / 22%);
-}
-.prompt-mention-editor .ant-mentions > textarea::placeholder {
-  -webkit-text-fill-color: #999;
-}
-.prompt-mention-editor.is-composing .prompt-mention-mirror {
-  visibility: hidden;
-}
-.prompt-mention-editor.is-composing .ant-mentions > textarea {
   color: #263042;
-  -webkit-text-fill-color: #263042;
+  text-align: left;
+  cursor: pointer;
+}
+.asset-mention-options button:hover,
+.asset-mention-options button[aria-selected="true"] {
+  background: #edf3ff;
+  color: #165dff;
 }
