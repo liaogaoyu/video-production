@@ -317,7 +317,7 @@ function render() {
   updateRoute();
   const pending = state.jobs.filter((j) => j.status !== "done").length;
   document.querySelector("#app").innerHTML =
-    `<div class="shell"><aside class="sidebar"><div class="brand"><strong>LumenX</strong><span>漫剧管理</span></div><select id="projectSwitcher" class="project-select" aria-label="切换项目" ${workspace.projects.length ? "" : "disabled"}>${workspace.projects.length ? workspace.projects.map(project => `<option value="${esc(project.id)}" ${project.id === activeProject.id ? "selected" : ""}>${esc(project.name)}</option>`).join("") : `<option value="">暂无项目</option>`}</select><nav class="nav"><button aria-label="我的项目" data-view="projects" class="${view === "projects" || view === "create" ? "active" : ""}">${icon("folder")}<span>我的项目</span></button>${[
+    `<div class="shell"><aside class="sidebar"><select id="projectSwitcher" class="project-select" aria-label="切换项目" ${workspace.projects.length ? "" : "disabled"}>${workspace.projects.length ? workspace.projects.map(project => `<option value="${esc(project.id)}" ${project.id === activeProject.id ? "selected" : ""}>${esc(project.name)}</option>`).join("") : `<option value="">暂无项目</option>`}</select><nav class="nav"><button aria-label="我的项目" data-view="projects" class="${view === "projects" || view === "create" ? "active" : ""}">${icon("folder")}<span>我的项目</span></button>${[
       ["assets", "grid", "资产库", state.assets.length],
       ["shots", "film", "分镜脚本", state.shots.length],
       ["jobs", "jobs", "生成队列", pending],
