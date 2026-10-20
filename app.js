@@ -317,7 +317,7 @@ function render() {
   updateRoute();
   const pending = state.jobs.filter((j) => j.status !== "done").length;
   document.querySelector("#app").innerHTML =
-    `<div class="shell"><aside class="sidebar"><div class="brand"><strong>LumenX</strong><span>漫剧管理</span></div><button class="project-select" data-action="projects"><strong>${esc(activeProject.name)}</strong><span>⌄</span></button><nav class="nav"><button aria-label="我的项目" data-view="projects" class="${view === "projects" || view === "create" ? "active" : ""}">${icon("folder")}<span>我的项目</span></button>${[
+    `<div class="shell"><aside class="sidebar"><div class="brand"><strong>LumenX</strong><span>漫剧管理</span></div><select id="projectSwitcher" class="project-select" aria-label="切换项目" ${workspace.projects.length ? "" : "disabled"}>${workspace.projects.length ? workspace.projects.map(project => `<option value="${esc(project.id)}" ${project.id === activeProject.id ? "selected" : ""}>${esc(project.name)}</option>`).join("") : `<option value="">暂无项目</option>`}</select><nav class="nav"><button aria-label="我的项目" data-view="projects" class="${view === "projects" || view === "create" ? "active" : ""}">${icon("folder")}<span>我的项目</span></button>${[
       ["assets", "grid", "资产库", state.assets.length],
       ["shots", "film", "分镜脚本", state.shots.length],
       ["jobs", "jobs", "生成队列", pending],
@@ -332,7 +332,8 @@ function render() {
   const mode = document.querySelector(".pill.demo");
   if (mode) mode.textContent = window.__STORYDOCK_SERVER__ ? "服务器" : window.desktop ? "本地模式" : "浏览器演示";
 }
-function switchProject(id) {
+function switchProject(id, { preserveView = false } = {}) {
+  if (!workspace.projects.some(project => project.id === id)) return;
   if (timer) {
     clearInterval(timer);
     timer = null;
@@ -348,7 +349,7 @@ function switchProject(id) {
   jobQueueStatus = "all";
   jobKindFilter = "all";
   jobSort = "newest";
-  view = "assets";
+  if (!preserveView) view = "assets";
   persist();
   render();
 }
@@ -2166,6 +2167,10 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.id === "projectSwitcher") {
+    switchProject(e.target.value, { preserveView: true });
+    return;
+  }
   if (e.target.id === "all") {
     selected = e.target.checked
       ? new Set(state.assets.map((a) => a.id))

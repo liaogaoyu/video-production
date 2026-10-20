@@ -36,7 +36,7 @@ p { line-height: 1.8; }
 .brand { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 27px; white-space: nowrap; }
 .brand strong { font-size: 20px; letter-spacing: -.6px; color: #202630; }
 .brand>span { color: var(--muted); font-size: 10px; }
-.project-select { justify-content: space-between; width: 100%; margin-bottom: 20px; padding: 11px 12px; text-align: left; }
+.project-select { cursor: pointer; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; justify-content: space-between; width: 100%; margin-bottom: 20px; padding: 11px 12px; text-align: left; }
 .project-select strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .project-select>span { color: #8a919c; }
 .nav { display: flex; flex-direction: column; gap: 5px; }
