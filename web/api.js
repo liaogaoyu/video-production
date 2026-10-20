@@ -295,8 +295,10 @@
     async confirmAndSubmit({ kind, rows, project }) {
       try { await flush(); }
       catch { return; }
-      if (kind === "shot" && localStorage.getItem("storydock-video-provider") === "dreamina_web_api" && window.storydockWeb) return window.storydockWeb.configure({rows,project});
-      if (kind === "shot" && localStorage.getItem("storydock-video-provider") === "dreamina_global_canvas" && window.storydockGlobal) return window.storydockGlobal.configure({kind,rows,project});
+      if (kind === "shot" && ["dreamina_web_api", "dreamina_global_canvas"].includes(localStorage.getItem("storydock-video-provider")) && window.storydockWeb) {
+        localStorage.setItem("storydock-video-provider", "dreamina_web_api");
+        return window.storydockWeb.configure({rows,project});
+      }
       const assets = project.data.assets;
       const preview = kind === "shot" ? rows.map((shot) => {
         const lines = (shot.refs || []).map((name, index) => {
@@ -306,10 +308,9 @@
         return `<p><strong>${esc(shot.title)}</strong><br>${lines.join("<br>") || "没有参考图"}</p>`;
       }).join("") : `<p>将提交 ${rows.length} 个生图任务。关闭页面后服务器会继续执行。</p>`;
       const videoFields = kind === "shot" ? `<label>模型</label><select id="videoModel"><option value="seedance2.0">Seedance 2.0</option><option value="seedance2.0fast">Seedance 2.0 Fast</option><option value="seedance2.0_vip">Seedance 2.0 VIP</option><option value="seedance2.0fast_vip">Seedance 2.0 Fast VIP</option><option value="seedance2.5">Seedance 2.5</option></select><label>分辨率</label><select id="videoResolution"><option value="720p">720p</option><option value="1080p">1080p</option></select>` : "";
-      memory.hooks.modal("提交到服务器", `${kind === "shot" ? '<label>视频渠道</label><select id="generationProvider"><option value="default">即梦国内 CLI</option><option value="global">Dreamina 国际 CLI</option><option value="web">Dreamina 国际网页 · Seedance 2.0 / Fast</option></select>' : ""}${preview}${videoFields}<div class="notice">本次会冻结提示词、参考图顺序和模型配置。之后改名或换图不会改变已提交的任务。</div><div class="modal-actions"><button data-action="close">取消</button><button class="primary" id="startServerBatch">确认并提交</button></div>`);
+      memory.hooks.modal("提交到服务器", `${kind === "shot" ? '<label>视频渠道</label><select id="generationProvider"><option value="default">即梦国内 CLI</option><option value="web">Dreamina 国际网页 · Seedance 2.0 / Fast</option></select>' : ""}${preview}${videoFields}<div class="notice">本次会冻结提示词、参考图顺序和模型配置。之后改名或换图不会改变已提交的任务。</div><div class="modal-actions"><button data-action="close">取消</button><button class="primary" id="startServerBatch">确认并提交</button></div>`);
       if (kind === "shot") document.querySelector("#generationProvider").onchange = () => {
         if (document.querySelector("#generationProvider").value === "web") window.storydockWeb?.configure({rows,project});
-        if (document.querySelector("#generationProvider").value === "global") window.storydockGlobal?.configure({kind,rows,project});
       };
       document.querySelector("#startServerBatch").onclick = async () => {
         const button = document.querySelector("#startServerBatch");

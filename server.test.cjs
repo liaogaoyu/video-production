@@ -428,3 +428,4 @@ test('text-only shots enqueue without references while referenced assets still n
   }
  } finally {await ctx.close();}
 });
+test('server page exposes web video integration without loading retired international CLI UI',async()=>{const c=await start();try{const response=await c.app.inject({method:'GET',url:'/'});assert.equal(response.statusCode,200);assert.ok(response.body.includes('src="web/dreamina-web.js"'));assert.ok(!response.body.includes('src="web/global.js"'));}finally{await c.close();}});
