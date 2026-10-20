@@ -114,7 +114,7 @@ function createWorker(services = openServices()) {
   return {
     services,
     start() { loop(); },
-    stop() { stopped = true; services.db.close(); },
+    stop() { stopped = true; void services.web.close(); services.db.close(); },
   };
 }
 

@@ -6,6 +6,10 @@ async function main() {
   const app = await createHttpApp(services);
   await app.listen({ port: services.paths.port, host: services.paths.host });
   console.log(`Storydock API http://${services.paths.host}:${services.paths.port}`);
+  let closing=false;
+  const shutdown=async()=>{if(closing)return;closing=true;await app.close();services.db.close();};
+  process.once("SIGTERM",()=>void shutdown());
+  process.once("SIGINT",()=>void shutdown());
   if (services.masterKeyCreated) console.log(`已生成主密钥，请单独备份：${services.paths.masterKey}`);
 }
 
