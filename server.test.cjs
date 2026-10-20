@@ -581,3 +581,17 @@ test('application login protects APIs, imports old passwords and revokes session
   await c.app.inject({method:'POST',url:'/api/v1/auth/logout',headers:{cookie:fresh}});assert.equal((await c.app.inject({url:'/api/v1/projects',headers:{cookie:fresh}})).statusCode,401);
  }finally{await c.close();}
 });
+
+test('server backup roundtrip preserves image versions references locks and shots',async()=>{
+ const c=await start();try{
+  const {repos}=c.services,p=repos.content.createProject({name:'React备份验收'}).project;
+  const asset=repos.content.createAsset({projectId:p.id,name:'角色',type:'角色',prompt:'portrait'});
+  const v=await repos.content.addVersion(asset.id,{bytes:PNG,source:'upload'});await repos.content.addReference(asset.id,PNG);repos.content.setLockedVersion(asset.id,v.id);
+  repos.content.createShot({projectId:p.id,title:'镜头',prompt:'@角色 回头',episode:1,number:1,duration:5});
+  const row=repos.accounts.createExport({projectId:p.id,kind:'backup',manifest:{}});
+  await createScheduler({repos,db:c.services.db,media:c.services.media,providers:{}}).tick();
+  const downloaded=await c.app.inject({url:`/api/v1/exports/${row.id}/download`});assert.equal(downloaded.statusCode,200);
+  const boundary='restoretest';const body=Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="backup.zip"\r\nContent-Type: application/zip\r\n\r\n`),downloaded.rawPayload,Buffer.from(`\r\n--${boundary}--\r\n`)]);
+  const result=await c.app.inject({method:'POST',url:'/api/v1/imports',headers:{'content-type':`multipart/form-data; boundary=${boundary}`},payload:body});assert.equal(result.statusCode,201,result.body);const restored=result.json().project;assert.equal(restored.data.assets[0].versions.length,1);assert.equal(restored.data.assets[0].references.length,1);assert.equal(restored.data.assets[0].locked,true);assert.equal(restored.data.shots[0].refs[0],'角色');
+ }finally{await c.close();}
+});

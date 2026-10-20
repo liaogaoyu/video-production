@@ -122,6 +122,7 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
       const project = presentProject(repos.content.graph(row.project_id));
       const previous = JSON.parse(row.manifest_json || "{}");
       const files = [];
+      let packedMedia = [];
       if (row.kind === "videos") {
         const used = new Set();
         for (const shot of [...project.data.shots].sort((left, right) => left.episode - right.episode || left.number - right.number || left.id.localeCompare(right.id))) {
@@ -138,9 +139,10 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
       } else {
         files.push({ name: "project.json", data: Buffer.from(JSON.stringify(project, null, 2)) });
         const mediaRows = db.prepare("SELECT * FROM media WHERE project_id=?").all(project.id);
+        packedMedia = mediaRows.map(m => ({id:m.id,file:`media/${m.storage_key}`}));
         for (const stored of mediaRows) files.push({ name: `media/${stored.storage_key}`, data: fs.readFileSync(media.locate(stored.storage_key)) });
       }
-      const manifest = { kind: row.kind === "videos" ? "storydock-video-pack" : "storydock-backup", missing: previous.missing || [], files: files.map((file) => file.name) };
+      const manifest = { kind: row.kind === "videos" ? "storydock-video-pack" : "storydock-backup", schemaVersion: 1, media: packedMedia, missing: previous.missing || [], files: files.map((file) => file.name) };
       files.push({ name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) });
       const storageKey = `exports/${row.id}.zip`;
       await media.writeAtomic(storageKey, zipStore(files));

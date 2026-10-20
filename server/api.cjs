@@ -298,6 +298,10 @@ async function createHttpApp(services) {
     let manifest;
     try { manifest = JSON.parse(manifestFile.data.toString("utf8")); }
     catch { throw new ApiError(400, "invalid_package", "项目包清单无法解析"); }
+    if (manifest?.kind === "storydock-backup" && manifest.schemaVersion === 1) {
+      const restored = await require("./restore-backup.cjs").restoreBackup(services,manifest,files);
+      reply.code(201);return restored;
+    }
     if (manifest?.schemaVersion !== 1 || manifest?.kind !== "storydock-project" || !manifest.project?.data) {
       throw new ApiError(400, "invalid_package", "不是受支持的 Storydock 项目包");
     }
