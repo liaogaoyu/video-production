@@ -70,6 +70,24 @@ if [ "${STORYDOCK_ENABLE_DREAMINA_WEB:-0}" = "1" ]; then
   chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
   /usr/sbin/runuser -u storydock -- /usr/bin/env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" /usr/bin/node scripts/check-dreamina-web.cjs
 fi
+# React 构建与运行时独立；开发工具只安装在 webapp 目录。
+if [ -f webapp/package-lock.json ]; then
+  if [ "${STORYDOCK_ENABLE_DREAMINA_PROXY:-0}" = "1" ]; then
+    (cd webapp && HTTP_PROXY=http://127.0.0.1:17891 HTTPS_PROXY=http://127.0.0.1:17891 npm ci --no-audit --no-fund && npm run build)
+  else
+    (cd webapp && npm ci --no-audit --no-fund && npm run build)
+  fi
+  if [ -n "${STORYDOCK_LEGACY_HTPASSWD:-}" ]; then
+    install -m 0600 -o storydock -g storydock "$STORYDOCK_LEGACY_HTPASSWD" /srv/storydock/login-migration.htpasswd
+    /usr/sbin/runuser -u storydock -- /usr/bin/env STORYDOCK_ROOT=/srv/storydock STORYDOCK_MASTER_KEY=/etc/storydock/master-key STORYDOCK_LEGACY_HTPASSWD=/srv/storydock/login-migration.htpasswd node -e 'const s=require("./server/context.cjs").openServices();require("./server/auth-http.cjs").createAuth(s);s.db.close()'
+  fi
+  /usr/bin/node - <<'LOGIN_ENV'
+const fs=require('node:fs'),file='/etc/storydock/storydock.env';
+const lines=fs.readFileSync(file,'utf8').split('\n').filter(line=>!/^STORYDOCK_(WEB_UI|AUTH_REQUIRED)=/.test(line));
+lines.push('STORYDOCK_WEB_UI=react','STORYDOCK_AUTH_REQUIRED=1');fs.writeFileSync(file,lines.join('\n')+'\n');
+LOGIN_ENV
+  echo "React 已构建。新服务器请先用 scripts/manage-login.cjs 初始化登录账号。"
+fi
 install -m 0644 deploy/systemd/storydock-api.service /etc/systemd/system/storydock-api.service
 install -m 0644 deploy/systemd/storydock-worker.service /etc/systemd/system/storydock-worker.service
 systemctl daemon-reload

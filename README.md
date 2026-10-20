@@ -176,3 +176,30 @@ sudo -u storydock env STORYDOCK_ROOT=/srv/storydock /usr/bin/node /opt/storydock
 **2026-10-20 实机验证：** macOS 和目标 Ubuntu 26.04.1 LTS amd64 的实际出口均已验证。Ubuntu 上以 storydock 服务用户完成官网 HTTP 200、余额查询、参考图上传检查、已有视频查询、10,744,618 字节视频下载（SHA-256与本机一致），以及 Chromium 156 通过代理打开官网。`storydock-proxy.service` 已实际安装，active / enabled，只监听127.0.0.1:17891。国内 API/Worker 保持运行，本次未整体替换服务器应用版本；新版本部署时读取已准备好的国际网页代理配置。Linux arm64 提供已校验安装包，但未在原生arm64服务器实测。没有额外提交收费生成。
 
 同步生图接口默认最多并行执行 3 个任务，等待响应期间会持续续租，不阻塞后续图片提交或其他渠道任务。可在 `/etc/storydock/storydock.env` 中设置 `STORYDOCK_IMAGE_CONCURRENCY=3`（范围 1–10）并重启 Worker。该上限按 Worker 进程计算；同步请求仍需等待接口返回后才能取得结果。
+
+## React 工作台与应用登录
+
+B/S 前端位于 `webapp/`，使用 React 19、TypeScript、Ant Design 6 和 Vite。后端与 Worker 保持独立。安装及构建：
+
+```sh
+npm ci --omit=dev --ignore-scripts
+npm ci --prefix webapp
+npm run web:build
+STORYDOCK_WEB_UI=react npm run server
+```
+
+`npm run local:start` 检测到构建产物后会使用 React。前端开发可运行 `npm run dev --prefix webapp`，`/api` 代理到本地 4320。路由仍使用 `#/assets?project=...`，刷新和前进后退保留项目。
+
+登录账号存储在业务 SQLite 的 `app_users` 中，密码使用带随机盐的 scrypt 哈希；登录会话只在数据库保存令牌哈希，浏览器通过 HttpOnly、SameSite Cookie 访问 API、图片、视频及下载。生产环境设置 `STORYDOCK_AUTH_REQUIRED=1`。第一次迁移可设置 `STORYDOCK_LEGACY_HTPASSWD` 指向旧 Nginx bcrypt 格式 htpasswd 文件；仅在尚无应用账号时导入，不会在后续重启时恢复旧密码。用户登录后会自动升级密码哈希，原用户名和密码不变。
+
+在“模型与账号 → 登录账号”修改账号和密码；新密码至少 8 位。修改后其他会话失效。管理员忘记密码时，可在服务器通过终端重置（不要把密码放在命令参数或 Git 中）：
+
+```sh
+read -s -p '新密码: ' STORYDOCK_NEW_PASSWORD
+printf '%s' "$STORYDOCK_NEW_PASSWORD" | sudo -u storydock env STORYDOCK_ROOT=/srv/storydock STORYDOCK_MASTER_KEY=/etc/storydock/master-key node scripts/manage-login.cjs admin
+unset STORYDOCK_NEW_PASSWORD
+```
+
+`deploy/install.sh` 会安装前端依赖并构建；已有 Nginx 登录部署可在首次部署时传入 `STORYDOCK_LEGACY_HTPASSWD=/etc/nginx/storydock.htpasswd`。确认应用已导入账号、未登录 API 返回 401 后，再移除 Nginx 的 `auth_basic`，避免浏览器认证弹窗覆盖应用登录页。新服务器先用上述终端命令初始化账号。应用不提供公开注册；所有登录账号共享原有工作空间。
+
+备份任务现在包含媒体索引，可导回图片版本、参考图、固定状态、分镜和已归档结果；恢复的历史任务不会自动再次调用生成服务。
