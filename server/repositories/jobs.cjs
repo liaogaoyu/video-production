@@ -238,7 +238,7 @@ function createJobRepository(db, { record }) {
         let accountId = row.account_id;
         if(row.provider === 'dreamina_web_api' && row.status === 'queued'){
           const a=db.prepare('SELECT * FROM web_accounts WHERE id=?').get(accountId);
-          if(!a?.enabled||!a?.authorized||inflight(accountId)>=1||db.prepare('SELECT account_id FROM web_leases WHERE account_id=? AND until_at>?').get(accountId,nowIso))continue;
+          if(!a?.enabled||!a?.authorized||inflight(accountId)>=(a.max_concurrent||3)||db.prepare('SELECT account_id FROM web_leases WHERE account_id=? AND until_at>?').get(accountId,nowIso))continue;
         }
         if (row.provider === "dreamina_global_canvas" && row.status === "queued") {
           const account = db.prepare("SELECT * FROM global_accounts WHERE id=?").get(accountId);
