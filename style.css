@@ -338,3 +338,7 @@ button.danger { color: #bc534a; }
 .job-times { display: flex; flex-wrap: wrap; gap: 5px 18px; margin-top: 8px; color: var(--muted, #6b7280); font-size: 11px; line-height: 1.6; font-variant-numeric: tabular-nums; }
 .job-times span { white-space: nowrap; }
 @media (max-width: 760px) { .job-times { gap: 3px 12px; } }
+
+.media-placeholder { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; background: #f5f6f8; color: #a0a7b2; border: 1px solid #e8ebef; }
+.media-placeholder svg { width: 22px; height: 22px; stroke-width: 1.4; }
+.shot-thumb.media-placeholder svg { width: 28px; height: 28px; }

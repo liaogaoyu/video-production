@@ -698,6 +698,12 @@ function shotForm(shot) {
   const episode = shot?.episode || 1;
   return `<div class="shot-fields"><label for="shotEpisode">集数</label><input id="shotEpisode" type="number" min="1" value="${episode}"><label for="shotNumber">镜头编号</label><input id="shotNumber" type="number" min="1" value="${shot?.number || nextShotNumber(episode)}"><label for="shotDuration">时长（秒）</label><input id="shotDuration" type="number" min="1" max="60" value="${shot?.duration || 5}"></div><label for="shotTitle">镜头名称</label><input id="shotTitle" value="${esc(shot?.title || "")}" placeholder="例如：孙悟空入宫"><label for="shotPromptEditor">提示词</label><div class="mention-box"><textarea id="shotPrompt" hidden>${esc(shot?.prompt || "")}</textarea><div id="shotPromptEditor" class="prompt-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入 @ 选择资产，选中后会显示蓝框"></div><div id="mentionMenu" class="mention-menu" hidden><input id="mentionSearch" placeholder="搜索资产名称" autocomplete="off"><div id="mentionList"></div></div></div>`;
 }
+function mediaThumbnail(url, className, kind = "image", alt = "") {
+  const sample = /(?:^|\/)assets\/(?:alley|shen|lu)\.png(?:[?#].*)?$/.test(String(url || ""));
+  return url && !sample
+    ? `<img class="${className}" src="${esc(url)}" alt="${esc(alt)}" loading="lazy">`
+    : `<span class="${className} media-placeholder" role="img" aria-label="${kind === "film" ? "暂无视频" : "暂无图片"}">${icon(kind)}</span>`;
+}
 function shotsPage() {
   const allSelected = selectedShots.size === state.shots.length && state.shots.length;
   const visible = state.shots.filter(shotMatchesStatus);
@@ -711,7 +717,7 @@ function shotsPage() {
     const a = s.refs.map((_, index) => assetForReference(s, index)).find((asset) => asset?.image);
     const thumb = video
       ? `<video class="shot-thumb" data-preview-video="${esc(video)}" src="${esc(video)}" muted preload="metadata" aria-label="预览视频"></video>`
-      : `<img class="shot-thumb" src="${esc(a?.image || "assets/alley.png")}" alt="分镜参考">`;
+      : mediaThumbnail(a?.image, "shot-thumb", "film", "分镜参考");
     return `<article class="shot ${selectedShots.has(s.id) ? "selected" : ""}"><button class="select-box" data-select-shot="${s.id}" aria-label="选择分镜 ${s.number}">${selectedShots.has(s.id) ? icon("check") : ""}</button>${thumb}<div class="shot-body"><h3><span class="muted" style="font:11px monospace;margin-right:10px">${String(s.number).padStart(3, "0")}</span><span class="shot-title">${esc(s.title)}</span><span class="shot-status ${tone}"><strong>${tone === "success" ? "✓ " : ""}${esc(parts.title)}</strong>${detail}</span></h3><p>${esc(s.prompt)}</p>${s.refs.map((n) => `<span class="reference ${m.includes(n) ? "bad" : ""}">${m.includes(n) ? "!" : "↗"} @${esc(n)}</span>`).join("")}</div><div class="shot-meta"><span class="shot-spec">${s.duration}s · ${state.settings.ratio}</span>${video ? `<button data-preview-video="${esc(video)}">预览视频</button>` : ""}<button data-edit-shot="${s.id}" class="shot-edit">编辑提示词</button></div></article>`;
   }).join("");
   return `<div class="heading"><h1>分镜脚本</h1><div class="actions">${btn("select-all", allSelected ? "取消全选" : "全选", "check")}${btn("add-shot", "新增分镜", "plus")}${btn("delete-shots", "删除全部", "trash", "danger")}${btn("import-shots", "导入分镜脚本", "upload", "primary")}</div></div><div class="section-title"><h2>分镜列表 <small style="font-size:11px;margin-left:10px">${state.shots.length} 个分镜</small></h2><span class="muted">Seedance · ${state.settings.ratio}</span></div><div class="toolbar"><div class="tools"><select id="shotStatus" aria-label="分镜状态"><option value="all" ${shotStatusFilter === "all" ? "selected" : ""}>全部状态</option><option value="pending" ${shotStatusFilter === "pending" ? "selected" : ""}>待确认</option><option value="ready" ${shotStatusFilter === "ready" ? "selected" : ""}>已就绪</option><option value="queued" ${shotStatusFilter === "queued" ? "selected" : ""}>生成中</option><option value="done" ${shotStatusFilter === "done" ? "selected" : ""}>已生成</option><option value="failed" ${shotStatusFilter === "failed" ? "selected" : ""}>生成失败</option></select></div></div>${state.shots.some((s) => missing(s).length) ? `<div class="notice">${icon("info")} 部分引用未就绪，请先生成并锁定对应资产。</div>` : ""}<div class="shot-list">${rows || `<div class="empty">${state.shots.length ? "没有符合当前状态的分镜。" : "暂无分镜，可新增一条或导入脚本。"}</div>`}</div>`;
@@ -777,7 +783,7 @@ function jobTimesHtml(job) {
 }
 function jobsPage() {
   const done = state.jobs.filter((j) => j.status === "done").length;
-  return `<div class="heading"><h1>生成队列</h1>${btn(timer ? "pause" : "resume", timer ? "暂停队列" : "继续演示", timer ? "jobs" : "play")}</div><div class="notice">演示队列，未连接模型，不产生真实视频。</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${state.jobs.length.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成演示</small><strong>${done.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>排队 / 进行中</small><strong>${String(state.jobs.length - done).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>本地输出命名：001_分镜名.mp4</small></div>${state.jobs.map((j) => `<div class="job"><img class="job-icon" src="${esc(j.image || "assets/alley.png")}" alt=""><div class="job-name"><strong>${esc(j.title)}</strong><small>${j.kind === "asset" ? esc(j.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"} · 演示任务</small></div><div class="progress"><i style="width:${j.progress}%"></i></div><span class="job-status">${j.status === "done" ? "✓ 演示完成" : j.progress ? `模拟生成 ${j.progress}%` : "等待中"}</span></div>`).join("") || '<div class="empty">暂无任务</div>'}</div>`;
+  return `<div class="heading"><h1>生成队列</h1>${btn(timer ? "pause" : "resume", timer ? "暂停队列" : "继续演示", timer ? "jobs" : "play")}</div><div class="notice">演示队列，未连接模型，不产生真实视频。</div><div class="stat-grid"><div class="panel stat"><small>全部任务</small><strong>${state.jobs.length.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>已完成演示</small><strong>${done.toString().padStart(2, "0")}</strong></div><div class="panel stat"><small>排队 / 进行中</small><strong>${String(state.jobs.length - done).padStart(2, "0")}</strong></div></div><div class="panel"><div class="section-title"><h2>任务列表</h2><small>本地输出命名：001_分镜名.mp4</small></div>${state.jobs.map((j) => `<div class="job">${mediaThumbnail(j.image, "job-icon", j.kind === "asset" ? "image" : "film")}<div class="job-name"><strong>${esc(j.title)}</strong><small>${j.kind === "asset" ? esc(j.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"} · 演示任务</small></div><div class="progress"><i style="width:${j.progress}%"></i></div><span class="job-status">${j.status === "done" ? "✓ 演示完成" : j.progress ? `模拟生成 ${j.progress}%` : "等待中"}</span></div>`).join("") || '<div class="empty">暂无任务</div>'}</div>`;
 }
 jobsPage = function () {
   const done = state.jobs.filter((job) => job.status === "done" || job.status === "succeeded").length;
@@ -789,7 +795,7 @@ jobsPage = function () {
     const detail = `${job.kind === "asset" ? esc(job.model || connections.image.model) + " · 资产图片" : "Seedance · 分镜视频"}${window.__STORYDOCK_SERVER__ ? "" : job.real ? " · 真实任务" : " · 演示任务"}${credit}${attempt.error ? " · " + esc(attempt.error) : ""}`;
     const media = attempt.video
       ? `<video class="job-video" data-preview-video="${esc(attempt.video)}" src="${esc(attempt.video)}" muted preload="metadata" aria-label="预览视频"></video>`
-      : `<img class="job-icon" src="${esc(job.image || "assets/alley.png")}" alt="">`;
+      : mediaThumbnail(job.image, "job-icon", job.kind === "asset" ? "image" : "film");
     const progress = window.__STORYDOCK_SERVER__ ? "" : `<div class="progress"><i style="width:${job.progress || 0}%"></i></div>`;
     const retry = window.__STORYDOCK_SERVER__ && !job.resubmittedJobId && ["failed", "error", "download_failed", "submit_unknown", "auth_expired"].includes(job.status)
       ? `<button data-retry-job="${esc(job.id)}" data-retry-confirm="${job.status === "submit_unknown" && job.provider !== "dreamina_web_api" ? "1" : ""}" data-retry-new="${job.provider === "dreamina_web_api" && job.status !== "download_failed" ? "1" : ""}">${job.status === "download_failed" ? "重试下载" : job.provider === "dreamina_web_api" ? "重新提交" : "重试"}</button>`
@@ -1324,12 +1330,7 @@ function generate(kind) {
         progress: 0,
         status: "waiting",
         createdAt: new Date().toISOString(),
-        image:
-          kind === "asset"
-            ? r.type === "角色"
-              ? "assets/shen.png"
-              : "assets/alley.png"
-            : "assets/alley.png",
+        image: kind === "asset" ? r.image || "" : "",
       }),
     );
     persist();
