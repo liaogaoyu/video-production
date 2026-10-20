@@ -6,7 +6,6 @@ import {
   Form,
   Input,
   InputNumber,
-  Mentions,
   Modal,
   Select,
   Space,
@@ -23,6 +22,7 @@ import { useWorkspace } from "./context";
 import { Action, Blank, Thumb } from "./common";
 import { Importer } from "./importer";
 import { Generation } from "./generation";
+import { PromptMentions } from "./prompt-mentions";
 import type { Shot } from "./types";
 export function ShotsPage() {
   const { project, refreshProject } = useWorkspace(),
@@ -289,10 +289,7 @@ export function ShotsPage() {
             extra="输入 @ 选择项目资产，保存后自动匹配参考图。"
             rules={[{ required: true }]}
           >
-            <Mentions
-              autoSize={{ minRows: 10, maxRows: 18 }}
-              options={assets.map((a) => ({ value: a.name, label: a.name }))}
-            />
+            <PromptMentions assets={assets} />
           </Form.Item>
         </Form>
       </Modal>
