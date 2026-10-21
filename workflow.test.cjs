@@ -2,11 +2,15 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const fs=require('node:fs');
-function setup(){const elements=new Map();const handlers={};const el=()=>({innerHTML:'',value:'',disabled:false,classList:{add(){},remove(){}},focus(){},selectionStart:0,setSelectionRange(){}});const storage=new Map();const document={querySelector(q){if(!elements.has(q))elements.set(q,el());return elements.get(q);},addEventListener(n,f){handlers[n]=f;}};const ctx=vm.createContext({document,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},crypto:require('node:crypto').webcrypto,setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,clearInterval(){},window:{},URL,console});vm.runInContext(fs.readFileSync(__dirname+'/app.js','utf8'),ctx);return{ctx,document,handlers,run:s=>vm.runInContext(s,ctx)};}
+function setup(cryptoApi=require('node:crypto').webcrypto){const elements=new Map();const handlers={};const el=()=>({innerHTML:'',value:'',disabled:false,classList:{add(){},remove(){}},focus(){},selectionStart:0,setSelectionRange(){}});const storage=new Map();const document={querySelector(q){if(!elements.has(q))elements.set(q,el());return elements.get(q);},addEventListener(n,f){handlers[n]=f;}};const ctx=vm.createContext({document,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},crypto:cryptoApi,setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,clearInterval(){},window:{location:{hash:""},history:{pushState(){},replaceState(){}},addEventListener(){}},URL,URLSearchParams,console});vm.runInContext(fs.readFileSync(__dirname+'/app.js','utf8'),ctx);return{ctx,document,handlers,run:s=>vm.runInContext(s,ctx)};}
 test('asset import skips duplicates and rejects invalid types',()=>{const x=setup();x.run("importKind='assets'");x.document.querySelector('#importText').value=JSON.stringify({assets:[{name:'沈知微',type:'角色',prompt:'duplicate'},{name:'新人物',type:'角色',prompt:'portrait'}]});x.run('validateImport()');assert.equal(x.run('parsedImport.length'),1);x.document.querySelector('#importText').value=JSON.stringify({assets:[{name:'x',type:'unknown',prompt:'x'}]});x.run('validateImport()');assert.equal(x.run('parsedImport'),null);});
 test('shot import retains unresolved references and rejects duplicate numbering',()=>{const x=setup();x.run("importKind='shots'");x.document.querySelector('#importText').value=JSON.stringify({shots:[{number:5,title:'新镜头',duration:8,prompt:'@不存在的角色 转身。',refs:[]}]});x.run('validateImport()');assert.equal(x.run('missing(parsedImport[0])[0]'),'不存在的角色');x.document.querySelector('#importText').value=JSON.stringify({shots:[{number:1,title:'重复',duration:8,prompt:'text'}]});x.run('validateImport()');assert.equal(x.run('parsedImport'),null);assert.match(x.document.querySelector('#importResult').innerHTML,/雨夜来客/);});
 test('structured asset keys survive names and allow the same shot number in another episode',()=>{const x=setup();x.run("state.assets.push({id:'keyed',externalKey:'char-keyed',name:'有键角色',type:'角色',prompt:'p',image:'file:///tmp/test.png',locked:true});importKind='shots'");x.document.querySelector('#importText').value=JSON.stringify({schemaVersion:1,kind:'shots',shots:[{key:'ep2-shot1',episode:2,number:1,title:'第二集第一镜',duration:5,prompt:'角色转身',refs:[{assetKey:'char-keyed'}]}]});x.run('validateImport()');assert.equal(x.run('parsedImport[0].refKeys[0]'),'char-keyed');assert.equal(x.run('parsedImport[0].refs[0]'),'有键角色');assert.equal(x.run('missing(parsedImport[0]).length'),0);});
 test('new projects start empty and remain isolated across switches',async()=>{const x=setup();x.document.querySelector('#projectName').value='长安夜行';x.document.querySelector('#projectRatio').value='9:16';await x.handlers.click({target:{closest:()=>({dataset:{action:'create-project'}})}});assert.equal(x.run('state.assets.length'),0);assert.equal(x.run('state.settings.ratio'),'9:16');assert.equal(x.run('activeProject.name'),'长安夜行');x.run("state.assets.push({id:'unique',name:'测试'});persist();switchProject('demo')");assert.equal(x.run('state.assets.length'),6);assert.equal(x.run("state.assets.some(a=>a.id==='unique')"),false);x.run('switchProject(workspace.projects[0].id)');assert.equal(x.run('state.assets[0].id'),'unique');});
+test('project cards expose edit and delete actions',()=>{const x=setup();const html=x.run('projectsPage()');assert.match(html,/data-edit-project="demo"/);assert.match(html,/data-delete-project="demo"/);});
+test('project edit updates metadata and aspect ratio',async()=>{const x=setup();await x.handlers.click({target:{closest:()=>({dataset:{editProject:'demo'}})}});x.document.querySelector('#editProjectName').value='雨夜档案';x.document.querySelector('#editProjectDescription').value='新的项目简介';x.document.querySelector('#editProjectStyle').value='黑色电影';x.document.querySelector('#editProjectRatio').value='9:16';x.document.querySelector('#saveProject').onclick();assert.equal(x.run('activeProject.name'),'雨夜档案');assert.equal(x.run('activeProject.description'),'新的项目简介');assert.equal(x.run('activeProject.style'),'黑色电影');assert.equal(x.run('state.settings.ratio'),'9:16');});
+test('deleting the active project selects a remaining project',async()=>{const x=setup();x.run("workspace.projects.push({id:'second',name:'第二项目',description:'',style:'',createdAt:new Date().toISOString(),data:{assets:[],shots:[],jobs:[],settings:{concurrency:2,ratio:'9:16'}}})");await x.handlers.click({target:{closest:()=>({dataset:{deleteProject:'demo'}})}});x.document.querySelector('#confirmDeleteProject').onclick();assert.equal(x.run("workspace.projects.some(project=>project.id==='demo')"),false);assert.equal(x.run('activeProject.id'),'second');assert.equal(x.run('workspace.activeProjectId'),'second');assert.equal(x.run('view'),'projects');});
+test('the last project cannot be deleted',async()=>{const x=setup();await x.handlers.click({target:{closest:()=>({dataset:{deleteProject:'demo'}})}});assert.equal(x.run('workspace.projects.length'),1);assert.match(x.document.querySelector('#toast').textContent,/至少保留一个项目/);});
 test('shots can be cleared, added, and mentioned from the asset list',()=>{const x=setup();assert.equal(x.run('mentionAtCaret("看 @沈",4).query'),'沈');assert.equal(x.run('mentionAssets("沈")[0].name'),'沈知微');assert.match(x.run('promptHtml("@沈知微 走进")'),/mention-chip/);assert.doesNotMatch(x.run('promptHtml("@沈 走进")'),/mention-chip/);x.handlers.click({target:{closest:()=>({dataset:{action:'delete-shots'}})}});x.document.querySelector('#confirmDeleteShots').onclick();assert.equal(x.run('state.shots.length'),0);x.handlers.click({target:{closest:()=>({dataset:{action:'add-shot'}})}});const prompt=x.document.querySelector('#shotPrompt');prompt.value='看 @沈';prompt.selectionStart=4;x.run('refreshMentionFromPrompt(document.querySelector("#shotPrompt"))');assert.match(x.document.querySelector('#mentionList').innerHTML,/沈知微/);x.run('applyMention("沈知微")');assert.equal(prompt.value,'看 @沈知微 ');x.document.querySelector('#shotTitle').value='入宫';x.document.querySelector('#shotEpisode').value='1';x.document.querySelector('#shotNumber').value='1';x.document.querySelector('#shotDuration').value='6';x.document.querySelector('#saveShot').onclick();assert.equal(x.run('state.shots.length'),1);assert.equal(x.run('state.shots[0].refs[0]'),'沈知微');assert.equal(x.run('state.shots[0].refKeys[0]'),'');});
 test('asset image batch submits every selected asset before any result returns', async () => {
   const x = setup();
@@ -37,3 +41,73 @@ test('asset versions append without overwriting task reference snapshots',()=>{c
 
 test('model configuration persists separately from project data',async()=>{const x=setup();x.document.querySelector('#imageName').value='本地生图';x.document.querySelector('#imageBaseUrl').value='http://127.0.0.1:9000/v1';x.document.querySelector('#imageModel').value='custom-image';await x.run('saveImageModel()');assert.equal(x.run('connections.image.model'),'custom-image');assert.equal(x.run('state.settings.model'),undefined);assert.equal(x.run("JSON.stringify(workspace).includes('custom-image')"),false);x.document.querySelector('#imageBaseUrl').value='javascript:alert(1)';x.document.querySelector('#imageModel').value='invalid';await x.run('saveImageModel()');assert.equal(x.run('connections.image.model'),'custom-image');});
 test('batch account aliases are deduplicated and excluded from project exports',()=>{const x=setup();x.run('addAccountModal()');x.document.querySelector('#accountNames').value='账号一\n账号二\n账号一';x.document.querySelector('#saveAccounts').onclick();assert.equal(x.run('connections.accounts.length'),2);assert.notEqual(x.run('connections.accounts[0].id'),x.run('connections.accounts[1].id'));assert.equal(x.run("JSON.stringify(workspace).includes('账号一')"),false);x.run('addAccountModal()');x.document.querySelector('#accountNames').value='账号一';x.document.querySelector('#saveAccounts').onclick();assert.equal(x.run('connections.accounts.length'),2);});
+test('settings offer runtime installation when the Jimeng image is missing',()=>{const x=setup();x.run("jimengRuntime={ok:false,canInstall:true,message:'即梦 CLI 运行环境未安装'}");assert.match(x.run('settingsPage()'),/data-action="install-jimeng-runtime"/);});
+
+test('HTTP deployments can add accounts and image versions without randomUUID',()=>{
+  const webcrypto=require('node:crypto').webcrypto;
+  const x=setup({getRandomValues:bytes=>webcrypto.getRandomValues(bytes)});
+  x.run('addAccountModal()');
+  x.document.querySelector('#accountNames').value='HTTP账号一\nHTTP账号二';
+  x.document.querySelector('#saveAccounts').onclick();
+  assert.equal(x.run('connections.accounts.length'),2);
+  assert.notEqual(x.run('connections.accounts[0].id'),x.run('connections.accounts[1].id'));
+  assert.match(x.run('connections.accounts[0].id'),/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  x.run("addAssetVersion(state.assets[0],'file:///http.png','upload')");
+  assert.equal(x.run('state.assets[0].image'),'file:///http.png');
+});
+
+test('HTTP batch confirmation submits image and video jobs with unique idempotency keys',async()=>{
+  const webcrypto=require('node:crypto').webcrypto;
+  const x=setup({getRandomValues:bytes=>webcrypto.getRandomValues(bytes)});
+  const requests=[];
+  x.ctx.sessionStorage={getItem:()=>''};
+  x.ctx.EventSource=class{};
+  x.ctx.fetch=async(url,options)=>{
+    if(url==='/api/v1/projects') return new Promise(()=>{});
+    requests.push({url,...options});
+    return {ok:true,status:200,text:async()=>JSON.stringify({jobs:[]})};
+  };
+  x.run(fs.readFileSync(__dirname+'/web/api.js','utf8'));
+  // Only success notification is expected; failures must leave the dialog open.
+  let closed=0;
+  x.ctx.window.storydockApi.attach({modal(){},close(){closed++;},mergeJobs(){},setView(){},toast(message){assert.match(message,/任务已交给服务器/);}});
+  const project={id:'project',data:{assets:[],settings:{ratio:'16:9'}}};
+  for(const kind of ['asset','shot']) {
+    await x.ctx.window.storydockApi.confirmAndSubmit({kind,rows:[{id:'source',title:'test',refs:[]}],project});
+    x.document.querySelector('#videoModel').value='seedance2.0';
+    x.document.querySelector('#videoResolution').value='720p';
+    await x.document.querySelector('#startServerBatch').onclick();
+  }
+  const submitted=requests.filter(r=>r.method==='POST');
+  assert.equal(closed,2);
+  assert.deepEqual(submitted.map(r=>JSON.parse(r.body).kind),['image','video']);
+  assert.notEqual(submitted[0].headers['idempotency-key'],submitted[1].headers['idempotency-key']);
+  for(const r of submitted) assert.match(r.headers['idempotency-key'],/^[0-9a-f-]{36}$/);
+});
+
+test('retired international CLI preference migrates videos to web without affecting asset images',async()=>{
+ const x=setup();let globalCalls=0,html='';
+ x.ctx.sessionStorage={getItem:()=>''};x.ctx.EventSource=class{};x.ctx.fetch=async()=>new Promise(()=>{});
+ x.ctx.localStorage.setItem('storydock-video-provider','dreamina_global_canvas');
+ x.run(fs.readFileSync(__dirname+'/web/api.js','utf8'));
+ x.ctx.window.storydockWeb={configure:async args=>{assert.ok(args.rows);globalCalls++;}};
+ x.ctx.window.storydockApi.attach({modal:(title,body)=>{html=body;},toast(){}});
+ const project={id:'test',data:{assets:[],settings:{ratio:'16:9'}}};
+ await x.ctx.window.storydockApi.confirmAndSubmit({kind:'asset',rows:[{id:'asset'}],project});
+ assert.equal(globalCalls,0);assert.ok(!html.includes('Dreamina'));assert.ok(!html.includes('generationProvider'));
+ await x.ctx.window.storydockApi.confirmAndSubmit({kind:'shot',rows:[{id:'shot',refs:[]}],project});
+ assert.equal(globalCalls,1);assert.equal(x.ctx.localStorage.getItem('storydock-video-provider'),'dreamina_web_api');
+});
+
+test('international account check explains a disconnected application service',async()=>{
+ const x=setup();let message='';
+ x.ctx.sessionStorage={getItem:()=>''};x.ctx.fetch=async()=>{throw new TypeError('Failed to fetch');};
+ x.run(fs.readFileSync(__dirname+'/web/global.js','utf8'));
+ x.ctx.window.storydockGlobal.attach({toast:text=>{message=text;}});
+ const button={dataset:{global:'check',id:'test-account'},disabled:false};
+ await x.handlers.click({target:{closest:()=>button}});
+ assert.match(message,/无法连接应用服务/);assert.equal(button.disabled,false);assert.ok(!message.includes('Failed to fetch'));
+});
+test('web submission failure offers direct resubmit and hides the old action after replacement',()=>{const x=setup();x.run("window.__STORYDOCK_SERVER__=true;state.jobs=[{id:'web-failed',title:'分镜',provider:'dreamina_web_api',kind:'shot',status:'submit_unknown'}]");const html=x.run('jobsPage()');assert.match(html,/data-retry-new="1"/);assert.match(html,/data-retry-confirm=""/);assert.match(html,/>重新提交<\/button>/);x.run("state.jobs[0].resubmittedJobId='new-job'");const replaced=x.run('jobsPage()');assert.match(replaced,/已重新提交/);assert.ok(!replaced.includes('data-retry-job="web-failed"'));});
+test('resubmitted record follows its latest attempt instead of showing a stale failure',()=>{const x=setup();x.run("window.__STORYDOCK_SERVER__=true;state.jobs=[{id:'old',title:'分镜',kind:'shot',status:'submit_unknown',error:'STALE_SUBMISSION_ERROR',resubmittedJobId:'new'},{id:'new',title:'分镜',kind:'shot',status:'remote_running',queueNote:'Dreamina 网页生成中'}]");assert.match(x.run('serverJobLabel(state.jobs[0])'),/生成中/);assert.ok(!x.run('jobsPage()').includes('STALE_SUBMISSION_ERROR'));x.run("state.jobs[1].status='downloading';state.jobs[1].queueNote=''");assert.match(x.run('serverJobLabel(state.jobs[0])'),/下载中/);x.run("state.jobs[1].status='done';state.jobs[1].video='/api/v1/media/video'");assert.match(x.run('serverJobLabel(state.jobs[0])'),/已完成/);assert.equal(x.run('state.jobs[0].status'),'submit_unknown');});
+test('queue shows precise submit, completion and failure times without inventing old timestamps',()=>{const x=setup();x.run("window.__STORYDOCK_SERVER__=true;state.jobs=[{id:'time',title:'分镜',kind:'shot',status:'done',submittedAt:'2026-10-20T01:02:03Z',completedAt:'2026-10-20T02:03:04Z',failedAt:'2026-10-20T01:30:00Z'}]");const html=x.run('jobsPage()');assert.match(html,/提交时间/);assert.match(html,/完成时间/);assert.match(html,/失败时间/);assert.match(html,/09:02:03/);assert.match(html,/10:03:04/);assert.match(html,/09:30:00/);x.run("state.jobs[0].completedAt=null");assert.match(x.run('jobsPage()'),/完成时间：未记录/);});

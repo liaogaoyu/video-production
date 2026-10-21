@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("desktop", {
   selectAssetImage: (request) => ipcRenderer.invoke("select-asset-image", request),
   selectReferenceImages: (request) => ipcRenderer.invoke("select-reference-images", request),
   jimengRuntimeStatus: () => ipcRenderer.invoke("jimeng-runtime-status"),
+  installJimengRuntime: () => ipcRenderer.invoke("install-jimeng-runtime"),
   beginJimengCliAuth: (account) => ipcRenderer.invoke("begin-jimeng-cli-auth", account),
   finishJimengCliAuth: (id) => ipcRenderer.invoke("finish-jimeng-cli-auth", id),
   checkJimengCli: (id) => ipcRenderer.invoke("check-jimeng-cli", id),

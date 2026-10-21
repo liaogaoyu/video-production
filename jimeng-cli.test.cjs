@@ -5,11 +5,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { bindPromptReferences, createJimengCliPool } = require('./jimeng-cli.cjs');
 
-function setup(outputs) {
+function setup(outputs, options = {}) {
   const calls = [];
   const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(`enc:${value}`), decryptString: value => value.toString().slice(4) };
-  const execFileImpl = (file, args, options, callback) => { calls.push({ file, args }); const next = outputs.shift() || { stdout: '', stderr: '', code: 0 }; const error = next.code ? Object.assign(new Error('exit'), { code: next.code }) : null; callback(error, next.stdout, next.stderr); };
-  const pool = createJimengCliPool({ directory: fs.mkdtempSync(path.join(os.tmpdir(), 'storydock-cli-')), safeStorage, execFileImpl });
+  const execFileImpl = (file, args, execOptions, callback) => { calls.push({ file, args }); const next = outputs.shift() || { stdout: '', stderr: '', code: 0 }; const error = next.code ? Object.assign(new Error(next.errorMessage || 'exit'), { code: next.code }) : null; callback(error, next.stdout, next.stderr); };
+  const pool = createJimengCliPool({ directory: fs.mkdtempSync(path.join(os.tmpdir(), 'storydock-cli-')), safeStorage, execFileImpl, ...options });
   return { pool, calls };
 }
 
@@ -39,11 +39,47 @@ test('OAuth success and CLI membership permission are separate states', async ()
   assert.equal(result.ok, false);
 });
 
+test('superseding an authorization stops its CLI container', async () => {
+  let removed = false, finishRun;
+  const {pool} = setup([], {
+    sessionStore:{get:async()=>({deviceCode:'private',expiresAt:new Date(Date.now()+60000).toISOString()}),isActive:async()=>false},
+    execFileImpl(file,args,options,callback) {
+      if(args[0]==='run') finishRun=callback;
+      else if(args[0]==='rm') {removed=true;callback(null,'','');finishRun(Object.assign(new Error('cancelled'),{code:137}),'','');}
+    },
+  });
+  await pool.finishAuth('11111111-1111-1111-1111-111111111111');
+  assert.equal(removed,true);
+});
+
 test('runtime status uses the pinned image and invalid IDs never reach Docker', async () => {
   const { pool, calls } = setup([{ stdout: 'sha256:test' }]);
   assert.equal((await pool.runtimeStatus()).ok, true);
-  assert.deepEqual(calls[0].args.slice(0, 3), ['image', 'inspect', 'lumenx-dreamina-eval:1.4.20']);
+  assert.deepEqual(calls[0].args.slice(0, 3), ['image', 'inspect', 'lumenx-dreamina-eval:1.4.21']);
   await assert.rejects(() => pool.inspect('../escape'), /ID/);
+});
+
+test('JSON account identity matches text identity without losing large integer precision', async () => {
+  const identity = '9876543210123456789';
+  const {pool}=setup([
+    {stdout:`{"total_credit":120,"user_id":${identity},"user_name":"测试用户","vip_level":"vip"}`},
+    {stdout:`{"total_credit":120,"user_id":"${identity}"}`},
+    {stdout:`total_credit: 120\nuser_id: ${identity}\n`},
+  ]);
+  const account='11111111-1111-1111-1111-111111111111';
+  const results=await Promise.all([pool.inspect(account),pool.inspect(account),pool.inspect(account)]);
+  const expected=require('node:crypto').createHash('sha256').update(identity).digest('hex');
+  for(const result of results){assert.equal(result.identityHash,expected);assert.equal(JSON.stringify(result).includes(identity),false);}
+});
+
+test('auth reports missing Docker instead of a misleading authorization URL error', async () => {
+  const { pool } = setup([{ code: 'ENOENT', errorMessage: 'spawn docker ENOENT' }]);
+  await assert.rejects(() => pool.beginAuth('77777777-7777-7777-7777-777777777777'), /Docker Desktop 未安装/);
+});
+
+test('auth tells the user to install the CLI runtime when the image is missing', async () => {
+  const { pool } = setup([{ code: 125, stderr: 'Unable to find image locally\ndocker: pull access denied for lumenx-dreamina-eval' }]);
+  await assert.rejects(() => pool.beginAuth('88888888-8888-8888-8888-888888888888'), /安装.*CLI 运行环境/);
 });
 
 test('video submission stages ordered images and returns an accepted remote id', async () => {
@@ -73,6 +109,14 @@ test('video submission stages ordered images and returns an accepted remote id',
   ]);
 });
 
+test('overlapping asset names bind the longer token', () => {
+  const bound = bindPromptReferences('@少年·外勤装 看向 @少年', ['少年', '少年·外勤装']);
+  assert.match(bound, /参考图1对应资产“少年”/);
+  assert.match(bound, /参考图2对应资产“少年·外勤装”/);
+  assert.match(bound, /参考图2 看向 参考图1/);
+  assert.equal(bound.includes('@'), false);
+});
+
 test('prompt binding keeps the CLI image order as the semantic reference order', () => {
   assert.equal(
     bindPromptReferences('@角色甲 拿起 @道具乙', ['角色甲', '道具乙']),
@@ -82,7 +126,7 @@ test('prompt binding keeps the CLI image order as the semantic reference order',
 
 test('video preflight rejects invalid limits before starting Docker', async () => {
   const { pool, calls } = setup([]);
-  await assert.rejects(() => pool.submitVideo('44444444-4444-4444-4444-444444444444', { jobId: 'job-2', prompt: 'p', images: [], referenceNames: [], model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' }), /参考图数量/);
+  await assert.rejects(() => pool.submitVideo('44444444-4444-4444-4444-444444444444', { jobId: 'job-2', prompt: 'p', images: Array(10).fill('too-many.png'), referenceNames: Array(10).fill('asset'), model: 'seedance2.0', ratio: '9:16', duration: 5, resolution: '720p' }), /参考图数量/);
   assert.equal(calls.length, 0);
 });
 
@@ -126,4 +170,47 @@ test('first-use compliance failure is not shown as a raw API error', async () =>
   assert.equal(result.kind, 'blocked');
   assert.equal(result.code, 'web_confirmation_required');
   assert.match(result.message, /首次使用确认/);
+});
+
+ test('keyring mount is readable without DAC capabilities and removed after execution', async () => {
+  let mountedPath;
+  const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'storydock-keyring-test-'));
+  const oldMask=process.umask(0o077);
+  try {
+    const {pool}=setup([], {runtimeDirectory:runtime,execFileImpl(file,args,options,callback){
+      const mount=args.find(value=>value.includes('target=/run/secrets/keyring_password'));
+      mountedPath=mount.match(/source=([^,]+)/)[1];
+      assert.equal(fs.statSync(mountedPath).mode & 0o777,0o444);
+      assert.equal(fs.statSync(path.dirname(mountedPath)).mode & 0o777,0o700);
+      assert.match(mount,/,readonly$/);
+      assert.ok(args.includes('--cap-drop=ALL'));
+      callback(null,'OAuth 登录成功。\ntotal_credit: 1\nuser_id: test-account\n','');
+    }});
+    await pool.inspect('11111111-1111-1111-1111-111111111111');
+    assert.equal(fs.existsSync(mountedPath),false);
+  } finally { process.umask(oldMask); fs.rmSync(runtime,{recursive:true,force:true}); }
+});
+
+test('video without references uses official text2video instead of multimodal mode',async()=>{
+ const {pool,calls}=setup([{stdout:'submit_id: remote-text-123\ngen_status: querying\n'}]);
+ const result=await pool.submitVideo('33333333-3333-3333-3333-333333333333',{jobId:'text-only',prompt:'云海中的宫廷，镜头缓慢推进。',images:[],referenceNames:[],model:'seedance2.0',ratio:'16:9',duration:5,resolution:'720p'});
+ assert.equal(result.kind,'accepted');
+ assert.ok(calls[0].args.includes('text2video'));
+ assert.ok(!calls[0].args.includes('multimodal2video'));
+ assert.ok(!calls[0].args.includes('--image'));
+ assert.equal(result.submittedPrompt,'云海中的宫廷，镜头缓慢推进。');
+});
+
+test('scoped download directory allows a different container UID to save video',async()=>{
+ const account='55555555-5555-5555-5555-555555555555';
+ const {pool}=setup([],{execFileImpl(file,args,options,callback){
+  const mount=args.find(a=>a.includes('target=/work/output'));
+  const output=mount.match(/source=([^,]+)/)[1];
+  assert.equal(fs.statSync(output).mode & 0o777,0o777);
+  fs.writeFileSync(path.join(output,'video.mp4'),'video');
+  callback(null,'submit_id: remote-output-123\ngen_status: success\n','');
+ }});
+ const result=await pool.queryVideo(account,'remote-output-123',true);
+ assert.equal(result.kind,'succeeded');
+ assert.equal(fs.readFileSync(result.files[0],'utf8'),'video');
 });

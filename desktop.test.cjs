@@ -40,6 +40,7 @@ async function setup() {
   };
   const electron = {
     session,
+    net: { fetch: async () => { throw new Error("unexpected network call"); } },
     app: {
       whenReady: () => Promise.resolve(),
       getPath: () => userData,
@@ -50,6 +51,7 @@ async function setup() {
     dialog: {},
     safeStorage: {
       isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => "test-keyring",
       encryptString: (k) => Buffer.from("encrypted:" + k),
     },
   };

@@ -6,16 +6,25 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 
 const ACCOUNT_RE = /^[a-f0-9-]{36}$/;
+const OFFICIAL_LINUX_AMD64_URL = 'https://lf3-static.bytednsdoc.com/obj/eden-cn/psj_hupthlyk/ljhwZthlaukjlkulzlp/dreamina_cli_beta/dreamina_cli_linux_amd64';
+const OFFICIAL_LINUX_AMD64_SHA256 = '0a5fdc262ab44669e7db4ce67e6543ece6daf405804aca3d1d17d1345c146f69';
+
+function escapeRegExp(value) {
+  return String(value).replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+}
 
 function bindPromptReferences(prompt, referenceNames) {
-  if (!Array.isArray(referenceNames) || !referenceNames.length) return prompt.trim();
+  if (!Array.isArray(referenceNames) || !referenceNames.length) return String(prompt || '').trim();
   const bindings = referenceNames.map((name, index) => ({
     name: String(name).trim(),
     label: `参考图${index + 1}`,
   }));
-  let boundPrompt = prompt.trim();
-  for (const binding of bindings) {
-    boundPrompt = boundPrompt.split(`@${binding.name}`).join(binding.label);
+  let boundPrompt = String(prompt || '').trim();
+  const ordered = [...bindings].sort((left, right) => right.name.length - left.name.length || left.name.localeCompare(right.name));
+  for (const binding of ordered) {
+    if (!binding.name) continue;
+    const pattern = new RegExp(`@${escapeRegExp(binding.name)}(?=$|[\\s，。！？、；：,.!?:;])`, 'g');
+    boundPrompt = boundPrompt.replace(pattern, binding.label);
   }
   const legend = bindings
     .map((binding) => `${binding.label}对应资产“${binding.name}”`)
@@ -23,7 +32,7 @@ function bindPromptReferences(prompt, referenceNames) {
   return `参考图对应关系：${legend}。\n${boundPrompt}`;
 }
 
-function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, image = 'lumenx-dreamina-eval:1.4.20', proxy = process.env.STORYDOCK_DREAMINA_PROXY || '' }) {
+function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, fetchImpl = globalThis.fetch, image = 'lumenx-dreamina-eval:1.4.21', proxy = process.env.STORYDOCK_DREAMINA_PROXY || '', secretStore = null, sessionStore = null, runtimeDirectory = '', allowInstall = true }) {
   const pending = new Map();
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (proxy) {
@@ -39,7 +48,8 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     return path.join(directory, accountId);
   }
   async function ensureSecret(accountId) {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密存储不可用');
+    if (secretStore) return secretStore.ensureKeyringPassword(accountId);
+    if (!safeStorage?.isEncryptionAvailable()) throw new Error('系统加密存储不可用');
     const folder = accountDirectory(accountId);
     await fsp.mkdir(folder, { recursive: true, mode: 0o700 });
     const encryptedPath = path.join(folder, 'keyring-password.enc');
@@ -52,20 +62,49 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
     }
   }
   function execute(file, args, options = {}) {
-    return new Promise((resolve) => execFileImpl(file, args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024, ...options }, (error, stdout = '', stderr = '') => resolve({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr) })));
+    return new Promise((resolve) => execFileImpl(file, args, { timeout: 120000, maxBuffer: 2 * 1024 * 1024, ...options }, (error, stdout = '', stderr = '') => resolve({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr), errorMessage: String(error?.message || ''), timedOut: Boolean(error?.killed) })));
+  }
+  function runtimeFailure(result) {
+    const output = `${result.errorMessage}\n${result.stdout}\n${result.stderr}`;
+    if (result.code === 'ENOENT' || /spawn docker ENOENT|docker.*not (?:found|recognized)/i.test(output)) return { code: 'docker_missing', canInstall: false, message: 'Docker Desktop 未安装，请安装并启动后重试' };
+    if (/cannot connect to the docker daemon|docker daemon is not running|dockerDesktopLinuxEngine|open \\.\/pipe\/docker/i.test(output)) return { code: 'docker_stopped', canInstall: false, message: 'Docker Desktop 未启动，请启动后重试' };
+    if (/no such image|unable to find image|pull access denied|manifest unknown/i.test(output)) return { code: 'image_missing', canInstall: allowInstall, message: allowInstall ? '即梦 CLI 运行环境未安装，请点击“安装 CLI 运行环境”' : '服务器尚未安装固定版本的即梦 CLI 镜像' };
+    if (/platform .* does not match|exec format error/i.test(output)) return { code: 'architecture_mismatch', canInstall: allowInstall, message: allowInstall ? '即梦 CLI 运行环境架构不兼容，请重新安装运行环境' : '服务器上的即梦 CLI 镜像架构不兼容' };
+    const detail = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).find((line) => !/device_code|keyring_password/i.test(line));
+    return { code: 'runtime_error', canInstall: false, message: detail ? `即梦 CLI 启动失败：${detail.slice(0, 180)}` : '即梦 CLI 启动失败，请检查 Docker Desktop' };
   }
   async function run(accountId, command, mounts = [], timeout = 120000) {
     const password = await ensureSecret(accountId);
-    const runtime = await fsp.mkdtemp(path.join(os.tmpdir(), 'storydock-dreamina-'));
+    const runtime = await fsp.mkdtemp(path.join(runtimeDirectory || os.tmpdir(), 'storydock-dreamina-'));
     const unlockFile = path.join(runtime, 'keyring-password');
     await fsp.writeFile(unlockFile, `${password}\n`, { mode: 0o600 });
+    // Container root has no DAC override and differs from the service UID.
+    // The host directory stays 0700; only this file is mounted, read-only.
+    await fsp.chmod(unlockFile, 0o444);
     const slug = accountId.replaceAll('-', '');
-    const args = ['run', '--rm', '--name', `storydock-dreamina-${slug.slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--memory=768m', '--cpus=1', '--mount', `type=volume,source=storydock-dreamina-${slug},target=/root`, '--mount', `type=bind,source=${unlockFile},target=/run/secrets/keyring_password,readonly`];
+    const containerName = `storydock-dreamina-${slug.slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`;
+    const args = ['run', '--rm', '--name', containerName, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--memory=768m', '--cpus=1', '--mount', `type=volume,source=storydock-dreamina-${slug},target=/root`, '--mount', `type=bind,source=${unlockFile},target=/run/secrets/keyring_password,readonly`];
     for (const mount of mounts) args.push('--mount', `type=bind,source=${mount.source},target=${mount.target}${mount.readonly ? ',readonly' : ''}`);
     if (proxy) args.push('--env', `HTTP_PROXY=${proxy}`, '--env', `HTTPS_PROXY=${proxy}`);
     args.push(image, ...command);
-    try { return await execute('docker', args, { timeout }); }
-    finally { await fsp.rm(runtime, { recursive: true, force: true }); }
+    let result;
+    let checkingCancellation = false;
+    const cancellation = command[0] === 'login' && sessionStore?.isActive ? setInterval(async () => {
+      if (checkingCancellation) return;
+      checkingCancellation = true;
+      try {
+        if (!(await sessionStore.isActive(accountId))) await execute('docker', ['rm', '-f', containerName], { timeout: 20000 });
+      } catch { /* The normal execution timeout remains the fallback. */ }
+      finally { checkingCancellation = false; }
+    }, 1000) : null;
+    cancellation?.unref();
+    try { result = await execute('docker', args, { timeout }); }
+    finally {
+      if (cancellation) clearInterval(cancellation);
+      if (result?.timedOut) await execute('docker', ['rm', '-f', containerName], { timeout: 20000 });
+      await fsp.rm(runtime, { recursive: true, force: true });
+    }
+    return result;
   }
   function match(output, name) {
     return output.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1]?.trim();
@@ -73,7 +112,9 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
   function publicResult(result) {
     const output = `${result.stdout}\n${result.stderr}`;
     const creditMatch = output.match(/"total_credit"\s*:\s*(\d+(?:\.\d+)?)|total_credit:\s*(\d+(?:\.\d+)?)/);
-    const identity = output.match(/user_id:\s*([^\s]+)/)?.[1];
+    // Read the original digits: JSON.parse would round numeric IDs above 2^53.
+    const jsonIdentity = output.match(/"user_id"\s*:\s*(?:"([a-zA-Z0-9_-]+)"|(\d+)(?=\s*[,}]))/);
+    const identity = jsonIdentity?.[1] || jsonIdentity?.[2] || output.match(/^\s*user_id:\s*([a-zA-Z0-9_-]+)\s*$/m)?.[1];
     return {
       ok: result.code === 0,
       authorized: /OAuth 登录成功|当前登录账户信息|"total_credit"/.test(output),
@@ -113,24 +154,59 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
   return {
     async runtimeStatus() {
       const result = await execute('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], { timeout: 15000 });
-      return { ok: result.code === 0, image, message: result.code === 0 ? '官方 CLI 运行环境已就绪' : '缺少即梦官方 CLI 容器镜像' };
+      if (result.code === 0) return { ok: true, code: 'ready', canInstall: false, image, message: '官方 CLI 运行环境已就绪' };
+      return { ok: false, image, ...runtimeFailure(result) };
+    },
+    async installRuntime() {
+      const docker = await execute('docker', ['version', '--format', '{{.Server.Os}}/{{.Server.Arch}}'], { timeout: 15000 });
+      if (docker.code !== 0) throw new Error(runtimeFailure(docker).message);
+      if (typeof fetchImpl !== 'function') throw new Error('客户端无法下载官方 CLI，请检查网络后重试');
+      const buildRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'storydock-dreamina-build-'));
+      try {
+        const response = await fetchImpl(OFFICIAL_LINUX_AMD64_URL, { redirect: 'follow' });
+        if (!response.ok) throw new Error(`下载官方 CLI 失败（HTTP ${response.status}）`);
+        const binary = Buffer.from(await response.arrayBuffer());
+        const digest = crypto.createHash('sha256').update(binary).digest('hex');
+        if (digest !== OFFICIAL_LINUX_AMD64_SHA256) throw new Error('官方 CLI 文件校验失败，请稍后重试');
+        await fsp.writeFile(path.join(buildRoot, 'dreamina'), binary, { mode: 0o755 });
+        await fsp.writeFile(path.join(buildRoot, 'version.json'), JSON.stringify({ version: '1.4.21', source: 'official', sha256: OFFICIAL_LINUX_AMD64_SHA256 }, null, 2));
+        await fsp.writeFile(path.join(buildRoot, 'entrypoint.sh'), `#!/bin/sh\nset -eu\nif [ "\${1:-}" != "--inside-keyring" ]; then exec dbus-run-session -- "$0" --inside-keyring "$@"; fi\nshift\nif [ ! -r /run/secrets/keyring_password ]; then echo 'Missing account keyring password' >&2; exit 1; fi\nmkdir -p /run/dreamina-keyring /root/.dreamina_cli\nif [ ! -f /root/.dreamina_cli/version.json ]; then cp /opt/dreamina/version.json /root/.dreamina_cli/version.json; fi\nexport GNOME_KEYRING_CONTROL=/run/dreamina-keyring\ngnome-keyring-daemon --unlock --components=secrets < /run/secrets/keyring_password >/dev/null\nexec /usr/local/bin/dreamina "$@"\n`, { mode: 0o755 });
+        await fsp.writeFile(path.join(buildRoot, 'Dockerfile'), `FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends ca-certificates dbus gnome-keyring libsecret-tools && rm -rf /var/lib/apt/lists/*\nCOPY dreamina /usr/local/bin/dreamina\nCOPY entrypoint.sh /usr/local/bin/dreamina-entrypoint\nCOPY version.json /opt/dreamina/version.json\nRUN chmod 755 /usr/local/bin/dreamina /usr/local/bin/dreamina-entrypoint\nENTRYPOINT ["/usr/local/bin/dreamina-entrypoint"]\n`);
+        const built = await execute('docker', ['build', '--platform', 'linux/amd64', '--tag', image, buildRoot], { timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 });
+        if (built.code !== 0) throw new Error(runtimeFailure(built).message);
+        const verified = await execute('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], { timeout: 15000 });
+        if (verified.code !== 0) throw new Error('CLI 运行环境构建完成但校验失败');
+        return { ok: true, code: 'ready', canInstall: false, image, message: '官方 CLI 运行环境已安装' };
+      } finally {
+        await fsp.rm(buildRoot, { recursive: true, force: true });
+      }
     },
     async beginAuth(accountId) {
       const result = await run(accountId, ['login', '--headless']);
       const output = `${result.stdout}\n${result.stderr}`;
       const authorizationUrl = output.match(/https:\/\/jimeng\.jianying\.com\/ai-tool\/cli-auth\?[^\s]+/)?.[0];
       const deviceCode = match(output, 'device_code');
-      if (!authorizationUrl || !deviceCode) throw new Error('官方 CLI 没有返回有效授权地址');
-      pending.set(accountId, { deviceCode, expiresAt: Date.now() + 10 * 60 * 1000 });
-      return { authorizationUrl, expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() };
+      if (!authorizationUrl || !deviceCode) {
+        if (result.code !== 0) throw new Error(runtimeFailure(result).message);
+        throw new Error('官方 CLI 没有返回有效授权地址，请更新 CLI 运行环境');
+      }
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      if (sessionStore) await sessionStore.put(accountId, { deviceCode, authorizationUrl, expiresAt });
+      else pending.set(accountId, { deviceCode, expiresAt: Date.parse(expiresAt) });
+      return { authorizationUrl, expiresAt };
     },
     async finishAuth(accountId) {
       validateAccount(accountId);
-      const auth = pending.get(accountId);
-      if (!auth || auth.expiresAt < Date.now()) throw new Error('授权已过期，请重新开始');
+      const stored = sessionStore ? await sessionStore.get(accountId) : null;
+      const auth = stored || pending.get(accountId);
+      const expiresAt = stored ? Date.parse(stored.expiresAt) : auth?.expiresAt;
+      if (!auth?.deviceCode || !expiresAt || expiresAt < Date.now()) throw new Error('授权已过期，请重新开始');
       const result = await run(accountId, ['login', 'checklogin', `--device_code=${auth.deviceCode}`, '--poll=20']);
       const parsed = publicResult(result);
-      if (parsed.authorized) pending.delete(accountId);
+      if (parsed.authorized) {
+        if (sessionStore) await sessionStore.clear(accountId);
+        else pending.delete(accountId);
+      }
       return parsed;
     },
     async inspect(accountId) {
@@ -145,14 +221,14 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       if (!models.has(request.model) || !ratios.has(request.ratio) || !Number.isInteger(request.duration) || request.duration < 4 || request.duration > (request.model === 'seedance2.5' ? 30 : 15)) throw new Error('视频模型、画幅或时长不受支持');
       const allowedResolutions = request.model === 'seedance2.5' ? ['480p', '720p', '1080p'] : request.model === 'seedance2.0_vip' ? ['720p', '1080p', '4k'] : ['720p'];
       if (!allowedResolutions.includes(request.resolution)) throw new Error('该模型不支持所选分辨率');
-      if (!Array.isArray(request.images) || request.images.length < 1 || request.images.length > (request.model === 'seedance2.5' ? 30 : 9)) throw new Error('参考图数量不受支持');
+      if (!Array.isArray(request.images) || request.images.length > (request.model === 'seedance2.5' ? 30 : 9)) throw new Error('参考图数量不受支持');
       if (!Array.isArray(request.referenceNames) || request.referenceNames.length !== request.images.length || request.referenceNames.some((name) => typeof name !== 'string' || !name.trim() || name.length > 120 || /[\r\n]/.test(name))) throw new Error('参考图名称与图片不匹配');
-      const submittedPrompt = bindPromptReferences(request.prompt, request.referenceNames);
+      const submittedPrompt = request.promptAlreadyBound ? request.prompt.trim() : bindPromptReferences(request.prompt, request.referenceNames);
       if (submittedPrompt.length > 20000) throw new Error('绑定参考图后的提示词过长');
       const runRoot = path.join(accountDirectory(accountId), 'runs', request.jobId);
       const input = path.join(runRoot, 'input');
       await fsp.mkdir(input, { recursive: true, mode: 0o700 });
-      const command = ['multimodal2video'];
+      const command = [request.images.length ? 'multimodal2video' : 'text2video'];
       for (const [index, source] of request.images.entries()) {
         const extension = path.extname(source).toLowerCase();
         if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) throw new Error('参考图格式不正确');
@@ -160,11 +236,14 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
         if (!stat.isFile() || stat.size < 1 || stat.size > 50 * 1024 * 1024) throw new Error('参考图为空或超过 50MB');
         const name = `${String(index + 1).padStart(2, '0')}${extension}`;
         await fsp.copyFile(source, path.join(input, name));
+        await fsp.chmod(path.join(input, name), 0o444);
         command.push('--image', `/work/input/${name}`);
       }
+      // Only the staging directory is exposed; its account parent remains 0700.
+      await fsp.chmod(input, 0o555);
       command.push('--prompt', submittedPrompt, '--duration', String(request.duration), '--ratio', request.ratio, '--video_resolution', request.resolution, '--model_version', request.model, '--poll', '0');
       return {
-        ...taskResult(await run(accountId, command, [{ source: input, target: '/work/input', readonly: true }], 180000)),
+        ...taskResult(await run(accountId, command, request.images.length ? [{ source: input, target: '/work/input', readonly: true }] : [], 180000)),
         submittedPrompt,
         referenceBindings: request.referenceNames.map((name, index) => ({ name, imageNumber: index + 1 })),
       };
@@ -177,6 +256,9 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       const mounts = [];
       if (download) {
         await fsp.mkdir(output, { recursive: true, mode: 0o700 });
+        // Container root drops DAC override and has a different UID from the host service.
+        // This per-task directory lives below a private account parent.
+        await fsp.chmod(output, 0o777);
         command.push('--download_dir=/work/output');
         mounts.push({ source: output, target: '/work/output', readonly: false });
       }

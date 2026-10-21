@@ -1,6 +1,6 @@
 {
   "name": "lumenx-storydock-prototype",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "productName": "LumenX 漫剧工作台",
   "private": true,
   "description": "Local comic asset and storyboard workflow prototype",
@@ -8,12 +8,24 @@
   "scripts": {
     "start": "electron .",
     "preview": "node serve.cjs",
-    "check": "node --check app.js && node --check electron.cjs && node --check preload.cjs && node --check account-sessions.cjs && node --check database.cjs && node --check image-provider.cjs && node --check jimeng-cli.cjs && node --check media-store.cjs && node --check project-package.cjs",
-    "test": "node --test workflow.test.cjs desktop.test.cjs account-sessions.test.cjs database.test.cjs image-provider.test.cjs jimeng-cli.test.cjs media-store.test.cjs project-package.test.cjs",
-    "build:mac": "electron-packager . 'LumenX 漫剧工作台' --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --ignore='(^|/)(dist|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'"
+    "server": "node server/main.cjs",
+    "worker": "node worker/main.cjs",
+    "check": "node --check app.js && node --check web/api.js && node --check electron.cjs && node --check preload.cjs && node --check account-sessions.cjs && node --check database.cjs && node --check image-provider.cjs && node --check jimeng-cli.cjs && node --check media-store.cjs && node --check project-package.cjs && node --check server/api.cjs && node --check server/main.cjs && node --check worker/main.cjs && node --check worker/scheduler.cjs && node --check web/global.js && node --check server/dreamina-global.cjs && node --check worker/dreamina-global/runner.cjs && node --check server/dreamina-web.cjs && node --check web/dreamina-web.js",
+    "test": "node --test workflow.test.cjs desktop.test.cjs account-sessions.test.cjs database.test.cjs image-provider.test.cjs jimeng-cli.test.cjs media-store.test.cjs project-package.test.cjs server.test.cjs dreamina-global.test.cjs dreamina-web.test.cjs proxy.test.cjs jianying-export.test.cjs zip-utf8.test.cjs",
+    "build:mac": "electron-packager . 'LumenX 漫剧工作台' --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --ignore='(^|/)(dist|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'",
+    "build:win": "electron-packager . 'LumenX 漫剧工作台' --platform=win32 --arch=x64 --out=dist-windows --overwrite --prune=true --ignore='(^|/)(dist|dist-windows|.*\\.test\\.cjs|serve\\.cjs|README\\.md)$'",
+    "local:start": "node scripts/start-local.cjs",
+    "web:setup": "node scripts/setup-dreamina-web.cjs",
+    "proxy": "node scripts/dreamina-proxy.cjs",
+    "web:build": "npm run build --prefix webapp"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
     "electron": "^44.8.0"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.1.4",
+    "bcryptjs": "^3.0.3",
+    "fastify": "^5.12.7"
   }
 }

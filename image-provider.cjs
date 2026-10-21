@@ -54,6 +54,40 @@ function apiError(payload) {
   return String(error.message || error.detail || error.code || error).slice(0, 500);
 }
 
+function networkErrorMessage(label, url, error) {
+  const details = [
+    error?.cause?.code,
+    error?.cause?.message,
+    error?.code,
+    error?.message,
+  ].filter(Boolean).join(" ");
+  const matched = details.match(/\b(?:net::)?(ERR_[A-Z0-9_]+|UND_ERR_[A-Z0-9_]+|E[A-Z0-9_]+)\b/i);
+  const code = matched?.[1]?.toUpperCase() || "";
+  const hostname = new URL(url).hostname;
+  let hint = `请检查网络、系统代理和防火墙是否允许访问 ${hostname}`;
+  if (["ENOTFOUND", "EAI_AGAIN", "ERR_NAME_NOT_RESOLVED"].includes(code))
+    hint = `DNS 无法解析 ${hostname}`;
+  else if (["ECONNREFUSED", "ERR_CONNECTION_REFUSED"].includes(code))
+    hint = `${hostname} 拒绝连接`;
+  else if (["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "ERR_TIMED_OUT"].includes(code))
+    hint = `连接 ${hostname} 超时`;
+  else if (code.includes("CERT") || code.includes("SSL"))
+    hint = `${hostname} 的 HTTPS 证书校验失败`;
+  else if (code.includes("PROXY") || code.includes("TUNNEL"))
+    hint = "系统代理连接失败，请检查 Windows 代理设置";
+  return `${label}连接失败${code ? `（${code}）` : ""}：${hint}`;
+}
+
+async function fetchOrThrow(fetchImpl, url, options, label) {
+  try {
+    return await fetchImpl(url, options);
+  } catch (error) {
+    const wrapped = new Error(networkErrorMessage(label, url, error), { cause: error });
+    wrapped.kind = "network";
+    throw wrapped;
+  }
+}
+
 function firstHttpUrl(value) {
   const values = Array.isArray(value) ? value : [value];
   return values.find((item) => typeof item === "string" && /^https?:\/\//i.test(item)) || "";
@@ -85,28 +119,19 @@ function submittedTask(payload) {
     : null;
 }
 
-async function generateImage({
+async function postImageGeneration({
   config,
   prompt,
   apiKey,
   references = [],
-  projectId,
-  assetId,
-  outputRoot,
+  referenceFiles = [],
   fetchImpl = fetch,
-  pollIntervalMs = 3000,
-  maxPollAttempts = 200,
 }) {
   if (!config?.baseUrl || !config?.model || !prompt?.trim())
     throw new Error("生图配置或提示词不完整");
   if (!apiKey?.trim()) throw new Error("请先保存 API Key");
-  if (!Array.isArray(references) || references.length > 15)
+  if (!Array.isArray(references) || !Array.isArray(referenceFiles) || references.length + referenceFiles.length > 15)
     throw new Error("参考图数量必须在 0–15 张之间");
-  if (
-    !/^[a-z0-9_-]{1,80}$/i.test(projectId) ||
-    !/^[a-z0-9_-]{1,80}$/i.test(assetId)
-  )
-    throw new Error("项目或资产 ID 不正确");
   const apiMart = isApiMart(config.baseUrl);
   const body = apiMart
     ? {
@@ -130,39 +155,100 @@ async function generateImage({
     "content-type": "application/json",
     authorization: `Bearer ${apiKey}`,
   };
-  const response = await fetchImpl(endpointFor(config.baseUrl), {
+  let endpoint = endpointFor(config.baseUrl);
+  let requestBody = JSON.stringify(body);
+  if (referenceFiles.length) {
+    if (apiMart) throw new Error("APIMart 参考图应使用 image_urls 格式");
+    endpoint = endpoint.replace(/\/images\/generations(?=\?|$)/, "/images/edits");
+    const form = new FormData();
+    for (const [key, value] of Object.entries(body)) form.set(key, String(value));
+    referenceFiles.forEach((file, index) => {
+      if (!file.bytes?.length || !/^image\/(png|jpeg|webp)$/.test(file.mime)) throw new Error("参考图文件不正确");
+      form.append(referenceFiles.length === 1 ? "image" : "image[]", new Blob([file.bytes], { type: file.mime }), `reference-${index + 1}.${file.mime.split("/")[1]}`);
+    });
+    delete headers["content-type"];
+    requestBody = form;
+  }
+  const response = await fetchOrThrow(fetchImpl, endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
-  });
+    body: requestBody,
+  }, "生图接口");
   if (!response.ok) {
     const text = (await response.text())
       .slice(0, 500)
       .replace(/sk-[A-Za-z0-9_-]+/g, "[已隐藏密钥]");
-    throw new Error(
+    const error = new Error(
       `生图接口返回 ${response.status}${text ? `：${text}` : ""}`,
     );
+    error.statusCode = response.status;
+    error.kind = response.status >= 500 ? "uncertain" : "rejected";
+    throw error;
   }
-  let payload = await response.json();
+  const payload = await response.json();
   const initialError = apiError(payload);
-  if (initialError) throw new Error(`生图接口错误：${initialError}`);
-  const task = submittedTask(payload);
-  if (task) {
+  if (initialError) {
+    const error = new Error(`生图接口错误：${initialError}`);
+    error.kind = "rejected";
+    throw error;
+  }
+  return { payload, task: submittedTask(payload) };
+}
+
+async function fetchImageTask({ config, apiKey, taskId, fetchImpl = fetch }) {
+  const pollUrl = taskEndpoint(config.baseUrl, taskId);
+  const polled = await fetchOrThrow(fetchImpl, pollUrl, {
+    method: "GET",
+    headers: { authorization: `Bearer ${apiKey}` },
+  }, "生图任务查询");
+  if (!polled.ok) {
+    const error = new Error(`生图任务查询失败：${polled.status}`);
+    error.statusCode = polled.status;
+    error.kind = polled.status >= 500 ? "retry" : "rejected";
+    throw error;
+  }
+  const payload = await polled.json();
+  const taskError = apiError(payload);
+  if (taskError) {
+    const error = new Error(`生图任务失败：${taskError}`);
+    error.kind = "rejected";
+    throw error;
+  }
+  const status = String(payload?.status || payload?.data?.status || "").toLowerCase();
+  if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+    const error = new Error(`生图任务失败：${status}`);
+    error.kind = "rejected";
+    throw error;
+  }
+  return { payload, image: imageItem(payload), status };
+}
+
+async function generateImage({
+  config,
+  prompt,
+  apiKey,
+  references = [],
+  projectId,
+  assetId,
+  outputRoot,
+  fetchImpl = fetch,
+  pollIntervalMs = 3000,
+  maxPollAttempts = 200,
+}) {
+  if (
+    !/^[a-z0-9_-]{1,80}$/i.test(projectId) ||
+    !/^[a-z0-9_-]{1,80}$/i.test(assetId)
+  )
+    throw new Error("项目或资产 ID 不正确");
+  const posted = await postImageGeneration({ config, prompt, apiKey, references, fetchImpl });
+  let payload = posted.payload;
+  if (posted.task) {
     let completed = false;
     for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
       if (pollIntervalMs) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      const polled = await fetchImpl(taskEndpoint(config.baseUrl, task.id), {
-        method: "GET",
-        headers: { authorization: headers.authorization },
-      });
-      if (!polled.ok) throw new Error(`生图任务查询失败：${polled.status}`);
-      payload = await polled.json();
-      const taskError = apiError(payload);
-      if (taskError) throw new Error(`生图任务失败：${taskError}`);
-      const status = String(payload?.status || payload?.data?.status || "").toLowerCase();
-      if (["failed", "error", "cancelled", "canceled"].includes(status))
-        throw new Error(`生图任务失败：${status}`);
-      if (imageItem(payload)) {
+      const polled = await fetchImageTask({ config, apiKey, taskId: posted.task.id, fetchImpl });
+      payload = polled.payload;
+      if (polled.image) {
         completed = true;
         break;
       }
@@ -183,7 +269,7 @@ async function generateImage({
       )
     )
       throw new Error("图片结果地址不安全");
-    const downloaded = await fetchImpl(remote.href, { redirect: "follow" });
+    const downloaded = await fetchOrThrow(fetchImpl, remote.href, { redirect: "follow" }, "图片下载");
     if (!downloaded.ok) throw new Error(`图片下载失败：${downloaded.status}`);
     const contentType = downloaded.headers.get("content-type") || "";
     const fromName = path.extname(new URL(remote.href).pathname).toLowerCase();
@@ -227,5 +313,7 @@ module.exports = {
   resolutionForApiMart,
   taskEndpoint,
   imageItem,
+  postImageGeneration,
+  fetchImageTask,
   generateImage,
 };

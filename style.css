@@ -36,7 +36,7 @@ p { line-height: 1.8; }
 .brand { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 27px; white-space: nowrap; }
 .brand strong { font-size: 20px; letter-spacing: -.6px; color: #202630; }
 .brand>span { color: var(--muted); font-size: 10px; }
-.project-select { justify-content: space-between; width: 100%; margin-bottom: 20px; padding: 11px 12px; text-align: left; }
+.project-select { cursor: pointer; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; justify-content: space-between; width: 100%; margin-bottom: 20px; padding: 11px 12px; text-align: left; }
 .project-select strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .project-select>span { color: #8a919c; }
 .nav { display: flex; flex-direction: column; gap: 5px; }
@@ -209,6 +209,9 @@ button.danger { color: #bc534a; }
 .list-mode .card-body { padding: 22px; }
 .project-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
 .project-card { display: block; overflow: hidden; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: #fff; text-align: left; }
+.project-card:hover { border-color: #c8d0da; box-shadow: 0 5px 18px #1922300c; }
+.project-card-open { display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: #fff; text-align: left; }
+.project-card-open:hover { background: #fff; }
 .project-art { position: relative; height: 175px; background: #f5f6f8; }
 .project-art img { width: 100%; height: 100%; object-fit: cover; }
 .project-art>.pill { position: absolute; right: 10px; bottom: 10px; background: #fffffff0; }
@@ -216,6 +219,22 @@ button.danger { color: #bc534a; }
 .project-card-body .card-title>svg { width: 14px; color: #929ba8; }
 .project-card-body p { overflow: hidden; margin: 10px 0 16px; color: #7a8391; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
 .project-card-body .card-footer { margin-top: 16px; }
+.project-card-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 0 12px 12px; }
+.project-card-actions button { gap: 5px; padding: 7px 9px; border-color: transparent; background: transparent; color: #657080; font-size: 11px; }
+.project-card-actions button:hover { border-color: var(--line); background: #f7f8fa; }
+.project-card-actions button.danger-text:hover { border-color: #eed3d1; background: #fff7f6; color: #b94740; }
+.project-card-actions svg { width: 14px; height: 14px; }
+.project-edit-form label { display: block; margin: 18px 0 8px; color: #4b5563; font-size: 12px; }
+.project-edit-form label:first-child { margin-top: 0; }
+.project-edit-form label small { margin-left: 5px; font-size: 11px; }
+.project-edit-form input, .project-edit-form textarea, .project-edit-form select { width: 100%; }
+.project-edit-form textarea { height: 86px; resize: vertical; }
+.project-edit-grid { display: grid; grid-template-columns: 160px 1fr; gap: 16px; }
+.delete-project-message { display: grid; grid-template-columns: 42px 1fr; gap: 14px; align-items: start; padding: 8px 0 10px; }
+.delete-project-message strong { color: #29313d; font-size: 14px; }
+.delete-project-message p { margin: 8px 0 0; color: #6f7886; font-size: 12px; line-height: 1.8; }
+.delete-project-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #fff1f0; color: #c54c45; }
+.delete-project-icon svg { width: 19px; height: 19px; }
 .new-project-art { display: grid; place-items: center; height: 100%; color: #b4bbc5; }
 .new-project-art svg { width: 36px; height: 36px; }
 .create-form { max-width: 640px; padding: 28px; }
@@ -300,3 +319,26 @@ button.danger { color: #bc534a; }
 .account-row button { padding: 7px 9px; font-size: 11px; }
 #poolConcurrency { width: 90px; }
 @media(max-width: 1050px) { .settings-layout { grid-template-columns: 1fr; } .settings-layout>.panel:last-child { grid-column: auto; } }
+
+.global-settings { margin-top: 20px; }
+.global-fields { display: grid; gap: 14px; }
+.global-fields label { display: grid; gap: 7px; color: var(--muted); }
+.global-fields input, .global-fields select { width: 100%; color: var(--text); }
+.global-settings .account-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 0; border-bottom:1px solid var(--line); }
+.global-settings .account-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.global-quote-items { max-height: 260px; overflow:auto; border-block:1px solid var(--line); }
+#globalConfigError, #globalApprovalError, #globalAddError { color:#b42318; }
+@media(max-width:700px) { .global-settings .account-row {align-items:flex-start;flex-direction:column;} }
+
+.global-official-link { color: var(--accent); padding: 9px 5px; text-decoration: none; }
+.global-official-link:hover { text-decoration: underline; }
+
+/* Queue event times remain readable when a long prompt or status wraps. */
+.job-name { min-width: 0; }
+.job-times { display: flex; flex-wrap: wrap; gap: 5px 18px; margin-top: 8px; color: var(--muted, #6b7280); font-size: 11px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.job-times span { white-space: nowrap; }
+@media (max-width: 760px) { .job-times { gap: 3px 12px; } }
+
+.media-placeholder { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; background: #f5f6f8; color: #a0a7b2; border: 1px solid #e8ebef; }
+.media-placeholder svg { width: 22px; height: 22px; stroke-width: 1.4; }
+.shot-thumb.media-placeholder svg { width: 28px; height: 28px; }

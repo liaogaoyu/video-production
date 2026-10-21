@@ -1,0 +1,33 @@
+{
+  "name": "short-drama-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test prompt-document.test.mjs ../prompt-tokens.test.mjs"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.1.0",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-document": "3.32.0",
+    "@tiptap/extension-hard-break": "3.32.0",
+    "@tiptap/extension-mention": "3.32.0",
+    "@tiptap/extension-paragraph": "3.32.0",
+    "@tiptap/extension-text": "3.32.0",
+    "@tiptap/extensions": "3.32.0",
+    "@tiptap/pm": "3.32.0",
+    "@tiptap/react": "3.32.0",
+    "@tiptap/suggestion": "3.32.0",
+    "antd": "6.6.7",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "vite": "8.3.4"
+  }
+}

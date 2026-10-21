@@ -211,6 +211,33 @@ test("successful HTTP error payload keeps the provider message", async () => {
   );
 });
 
+test("transport failures expose the actionable network cause", async () => {
+  const failure = new TypeError("fetch failed");
+  failure.cause = Object.assign(new Error("getaddrinfo ENOTFOUND api.apimart.ai"), {
+    code: "ENOTFOUND",
+  });
+  await assert.rejects(
+    () =>
+      generateImage({
+        config: {
+          baseUrl: "https://api.apimart.ai/v1",
+          model: "gpt-image-2",
+          ratio: "16:9",
+          resolution: "1k",
+        },
+        prompt: "p",
+        apiKey: "k",
+        projectId: "project-1",
+        assetId: "asset-1",
+        outputRoot: os.tmpdir(),
+        fetchImpl: async () => {
+          throw failure;
+        },
+      }),
+    /生图接口连接失败.*ENOTFOUND.*DNS/,
+  );
+});
+
 test("missing image payload and unsafe IDs are rejected", async () => {
   const fetchImpl = async () => ({
     ok: true,
