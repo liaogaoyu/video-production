@@ -135,6 +135,7 @@ function presentProject(graph) {
     runningJobs,
     data: {
       settings: { ratio: project.ratio, concurrency: 2 },
+      projectReferences: (graph.projectReferences || []).map(r => ({ id:r.id, mediaId:r.media_id, url:mediaUrl(r.media_id) })),
       assets,
       shots,
       jobs,

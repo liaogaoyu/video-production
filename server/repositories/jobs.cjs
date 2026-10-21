@@ -69,10 +69,13 @@ function createJobRepository(db, { record }) {
     return accounts[0];
   }
   function freezeImage(asset, connection, ratio) {
-    const references = db.prepare(`
-      SELECT r.position, r.media_id, m.sha256 FROM asset_references r
-      JOIN media m ON m.id=r.media_id WHERE r.asset_id=? ORDER BY r.position
-    `).all(asset.id);
+    const common = db.prepare(`SELECT r.position,r.media_id,m.sha256 FROM project_references r JOIN media m ON m.id=r.media_id WHERE r.project_id=? ORDER BY r.position,r.id`).all(asset.project_id);
+    const own = db.prepare(`SELECT r.position,r.media_id,m.sha256 FROM asset_references r JOIN media m ON m.id=r.media_id WHERE r.asset_id=? ORDER BY r.position,r.id`).all(asset.id);
+    const seen = new Set();
+    const references = [...common.map(r=>({...r,scope:"project"})),...own.map(r=>({...r,scope:"asset"}))].filter(r=>{
+      if(seen.has(r.media_id))return false;seen.add(r.media_id);return true;
+    });
+    if (references.length > 15) throw new ApiError(400,"too_many_references",`资产“${asset.name}”的公共及专属参考图合计超过 15 张，请先减少参考图`);
     return {
       provider: "image",
       model: connection?.model || "",
@@ -89,7 +92,7 @@ function createJobRepository(db, { record }) {
         title: asset.name,
         promptOriginal: asset.prompt,
         promptSubmitted: asset.prompt,
-        references: references.map((item) => ({ mediaId: item.media_id, index: item.position, sha256: item.sha256 })),
+        references: references.map((item, index) => ({ mediaId: item.media_id, index: index + 1, sha256: item.sha256, scope: item.scope })),
         ratio,
       },
     };

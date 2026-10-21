@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS asset_references (
   media_id TEXT NOT NULL,
   position INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS project_references (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  media_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  UNIQUE(project_id, media_id)
+);
 CREATE TABLE IF NOT EXISTS shots (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,

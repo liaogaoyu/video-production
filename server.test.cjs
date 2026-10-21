@@ -616,3 +616,45 @@ test('Jianying export freezes shot order and video versions, requires explicit m
   assert.equal(timeline.durationUs,2750000);assert.equal(timeline.clips[0].title,'第一镜');assert.equal(timeline.missing.length,1);assert.ok(files.some(f=>f.name==='导入剪映-Windows.cmd'));assert.ok(files.some(f=>f.name==='导入剪映-Mac.command'));
  }finally{await c.close();}
 });
+
+test('project references apply to every asset, deduplicate own images, stay frozen and remain isolated',async()=>{
+ const c=await start();try{
+  const {repos}=c.services,p=repos.content.createProject({name:'公共参考验收'}).project,other=repos.content.createProject({name:'另一个项目'}).project;
+  const a=repos.content.createAsset({projectId:p.id,name:'角色',type:'角色',prompt:'portrait'}),b=repos.content.createAsset({projectId:p.id,name:'场景',type:'场景',prompt:'room'}),o=repos.content.createAsset({projectId:other.id,name:'其他',type:'道具',prompt:'prop'});
+  const ref=await repos.content.addProjectReference(p.id,PNG);await repos.content.addProjectReference(p.id,PNG);
+  await repos.content.addReference(a.id,PNG);const own=await repos.content.addReference(a.id,Buffer.concat([PNG,Buffer.from('own')]));
+  assert.equal(repos.content.graph(p.id).projectReferences.length,1);
+  assert.throws(()=>repos.content.deleteProjectReference(other.id,ref.id),/不存在/);
+  await c.app.inject({method:'PUT',url:'/api/v1/connections/image',payload:{name:'参考图验收',baseUrl:'https://example.com/v1',model:'gpt-image-2',apiKey:'test-key'}});
+  const batch=(projectId,ids)=>repos.jobs.createBatch({projectId,body:{kind:'image',sourceIds:ids},idempotencyKey:crypto.randomUUID()});
+  const first=batch(p.id,[a.id,b.id]);const jobs=first.jobIds.map(id=>repos.jobs.getJob(id));
+  const r=JSON.parse(jobs[0].inputSnapshot).references;
+  assert.deepEqual(r.map(x=>x.mediaId),[ref.mediaId,own.mediaId]);assert.deepEqual(r.map(x=>x.index),[1,2]);assert.deepEqual(r.map(x=>x.scope),['project','asset']);
+  assert.equal(JSON.parse(jobs[1].inputSnapshot).references[0].mediaId,ref.mediaId);
+  assert.equal(JSON.parse(repos.jobs.getJob(batch(other.id,[o.id]).jobIds[0]).inputSnapshot).references.length,0);
+  repos.content.deleteProjectReference(p.id,ref.id);
+  assert.deepEqual(JSON.parse(repos.jobs.getJob(jobs[0].id).inputSnapshot).references,r);
+  assert.equal(JSON.parse(repos.jobs.getJob(batch(p.id,[b.id]).jobIds[0]).inputSnapshot).references.length,0);
+  let received;
+  const provider=require('./worker/providers/image.cjs').createImageProvider({repos,fetchImpl:async(url,options)=>{received={url,options};return {ok:true,json:async()=>({data:[{b64_json:PNG.toString('base64')}]})};}});
+  assert.equal((await provider.submit(jobs[0])).outcome,'succeeded');assert.match(received.url,/images\/edits$/);assert.ok(received.options.body instanceof FormData);const attachments=received.options.body.getAll('image[]');assert.equal(attachments.length,2);assert.deepEqual(Buffer.from(await attachments[0].arrayBuffer()),PNG);
+  const apimart={...jobs[0],configSnapshot:JSON.stringify({baseUrl:'https://api.apimart.ai/v1',model:'gpt-image-2',ratio:'16:9'})};await provider.submit(apimart);assert.equal(JSON.parse(received.options.body).image_urls[0],`data:image/png;base64,${PNG.toString('base64')}`);
+ }finally{await c.close();}
+});
+
+test('project reference upload API persists in backups and combined reference cap never truncates',async()=>{
+ const c=await start();try{
+  const {repos,db,media}=c.services,p=repos.content.createProject({name:'备份公共参考'}).project;
+  const boundary='projectref',body=Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ref.png"\r\nContent-Type: image/png\r\n\r\n`),PNG,Buffer.from(`\r\n--${boundary}--\r\n`)]);
+  const upload=await c.app.inject({method:'POST',url:`/api/v1/projects/${p.id}/references`,headers:{'content-type':`multipart/form-data; boundary=${boundary}`},payload:body});assert.equal(upload.statusCode,201,upload.body);
+  const detail=(await c.app.inject({url:`/api/v1/projects/${p.id}`})).json().project;assert.equal(detail.data.projectReferences.length,1);
+  const row=repos.accounts.createExport({projectId:p.id,kind:'backup',manifest:{}});await createScheduler({repos,db,media,providers:{}}).tick();
+  const archive=require('./server/zip.cjs').unzip(fs.readFileSync(media.locate(repos.accounts.getExport(row.id).storage_key)));const manifest=JSON.parse(archive.find(f=>f.name==='manifest.json').data);
+  const restored=await require('./server/restore-backup.cjs').restoreBackup(c.services,manifest,archive);
+  assert.equal(restored.project.data.projectReferences.length,1);
+  const asset=repos.content.createAsset({projectId:p.id,name:'超限测试',type:'角色',prompt:'test'});
+  for(let i=0;i<15;i++)await repos.content.addReference(asset.id,Buffer.concat([PNG,Buffer.from('own-'+i)]));
+  await c.app.inject({method:'PUT',url:'/api/v1/connections/image',payload:{name:'参考图验收',baseUrl:'https://example.com/v1',model:'gpt-image-2',apiKey:'test'}});
+  assert.throws(()=>repos.jobs.createBatch({projectId:p.id,body:{kind:'image',sourceIds:[asset.id]},idempotencyKey:crypto.randomUUID()}),/合计超过 15/);
+ }finally{await c.close();}
+});

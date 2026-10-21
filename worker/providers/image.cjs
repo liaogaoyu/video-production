@@ -1,7 +1,7 @@
-const { postImageGeneration, fetchImageTask, imageItem } = require("../../image-provider.cjs");
+const { postImageGeneration, fetchImageTask, imageItem, isApiMart } = require("../../image-provider.cjs");
 const { downloadLimited } = require("../../server/net-guard.cjs");
 
-function createImageProvider({ repos, publicBase = "" }) {
+function createImageProvider({ repos, publicBase = "", fetchImpl }) {
   async function materialize(job, image, config) {
     let bytes;
     if (image?.b64_json) bytes = Buffer.from(image.b64_json, "base64");
@@ -24,16 +24,23 @@ function createImageProvider({ repos, publicBase = "" }) {
     async submit(job) {
       const config = configOf(job);
       const input = JSON.parse(job.inputSnapshot || "{}");
-      const references = (input.references || []).map((reference) => {
-        if (!publicBase) throw Object.assign(new Error("带参考图的生图需要配置服务器公网地址"), { kind: "rejected" });
-        return `${publicBase.replace(/\/$/, "")}/api/v1/media/${reference.mediaId}`;
-      });
       try {
+        const files = [];
+        let referenceBytes = 0;
+        for (const reference of input.references || []) {
+          const file = repos.content.readReferenceMedia(job.projectId, reference.mediaId, reference.sha256);
+          referenceBytes += file.bytes.length;
+          if (referenceBytes > 50 * 1024 * 1024) throw new Error("参考图总大小超过 50MB，请压缩图片后重新提交");
+          files.push(file);
+        }
+        const references = isApiMart(config.baseUrl) ? files.map(file => `data:${file.mime};base64,${file.bytes.toString("base64")}`) : [];
         const posted = await postImageGeneration({
           config,
+          fetchImpl,
           prompt: input.promptSubmitted || input.promptOriginal,
           apiKey: repos.accounts.imageApiKey(),
           references,
+          referenceFiles: isApiMart(config.baseUrl) ? [] : files,
         });
         if (posted.task?.id) return { outcome: "remote", remoteTaskId: posted.task.id };
         const image = imageItem(posted.payload);
@@ -48,7 +55,7 @@ function createImageProvider({ repos, publicBase = "" }) {
     async query(job) {
       const config = configOf(job);
       try {
-        const polled = await fetchImageTask({ config, apiKey: repos.accounts.imageApiKey(), taskId: job.remoteTaskId });
+        const polled = await fetchImageTask({ config, fetchImpl, apiKey: repos.accounts.imageApiKey(), taskId: job.remoteTaskId });
         if (!polled.image) return { outcome: "pending" };
         const stored = await materialize(job, polled.image, config);
         return { outcome: "succeeded", mediaId: stored.id };

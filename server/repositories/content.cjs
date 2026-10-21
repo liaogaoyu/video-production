@@ -1,3 +1,4 @@
+const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { ApiError } = require("../errors.cjs");
 const { transaction } = require("../db.cjs");
@@ -55,6 +56,7 @@ function createContentRepository(db, { media, record }) {
     const references = assetIds.length
       ? db.prepare(`SELECT * FROM asset_references WHERE asset_id IN (${assetIds.map(() => "?").join(",")}) ORDER BY position, id`).all(...assetIds)
       : [];
+    const projectReferences = db.prepare("SELECT * FROM project_references WHERE project_id=? ORDER BY position,id").all(projectId);
     const shots = db.prepare("SELECT * FROM shots WHERE project_id=? AND deleted_at IS NULL ORDER BY episode, number, id").all(projectId);
     const shotIds = shots.map((shot) => shot.id);
     const shotRefs = shotIds.length
@@ -64,12 +66,13 @@ function createContentRepository(db, { media, record }) {
     const mediaIds = [
       ...versions.map((item) => item.media_id),
       ...references.map((item) => item.media_id),
+      ...projectReferences.map((item) => item.media_id),
       ...jobs.map((item) => item.media_id),
     ].filter(Boolean);
     const mediaRows = mediaIds.length
       ? db.prepare(`SELECT * FROM media WHERE id IN (${[...new Set(mediaIds)].map(() => "?").join(",")})`).all(...new Set(mediaIds))
       : [];
-    return { project, assets, versions, references, shots, shotRefs, jobs, mediaRows };
+    return { project, assets, versions, references, projectReferences, shots, shotRefs, jobs, mediaRows };
   }
 
   function listProjects() {
@@ -254,6 +257,34 @@ function createContentRepository(db, { media, record }) {
     return { deleted: true };
   }
 
+  function readReferenceMedia(projectId, mediaId, expectedSha) {
+    const row = db.prepare("SELECT * FROM media WHERE id=? AND project_id=?").get(mediaId, projectId);
+    if (!row || !row.mime.startsWith("image/") || (expectedSha && row.sha256 !== expectedSha)) throw new ApiError(409,"reference_not_ready","任务中的参考图不存在或已损坏");
+    return { mime: row.mime, bytes: fs.readFileSync(media.locate(row.storage_key)) };
+  }
+  async function addProjectReference(projectId, bytes) {
+    mustProject(projectId);
+    const stored = await saveMedia({ projectId, bytes, source: "project-reference" });
+    return transaction(db, () => {
+      mustProject(projectId);
+      const existing = db.prepare("SELECT id FROM project_references WHERE project_id=? AND media_id=?").get(projectId, stored.id);
+      if (existing) return { id: existing.id, mediaId: stored.id, duplicate: true };
+      const rows = db.prepare("SELECT position FROM project_references WHERE project_id=?").all(projectId);
+      if (rows.length >= 15) throw new ApiError(400, "too_many_references", "公共参考图最多 15 张");
+      const id = crypto.randomUUID();
+      db.prepare("INSERT INTO project_references(id,project_id,media_id,position) VALUES(?,?,?,?)").run(id, projectId, stored.id, Math.max(0,...rows.map(r=>r.position))+1);
+      record("project.reference", { projectId });
+      return { id, mediaId: stored.id };
+    });
+  }
+  function deleteProjectReference(projectId, referenceId) {
+    mustProject(projectId);
+    const result = db.prepare("DELETE FROM project_references WHERE id=? AND project_id=?").run(referenceId, projectId);
+    if (!result.changes) throw new ApiError(404, "reference_not_found", "公共参考图不存在");
+    record("project.reference.removed", { projectId });
+    return { deleted: true };
+  }
+
   function setLockedVersion(assetId, versionId) {
     const asset = mustAsset(assetId);
     if (!versionId) {
@@ -396,7 +427,7 @@ function createContentRepository(db, { media, record }) {
 
   return {
     graph, listProjects, createProject, updateProject, deleteProject, createAsset, updateAsset, deleteAsset,
-    saveMedia, addVersion, addReference, deleteReference, setLockedVersion, createShot, updateShot, deleteShot,
+    readReferenceMedia, addProjectReference, deleteProjectReference, saveMedia, addVersion, addReference, deleteReference, setLockedVersion, createShot, updateShot, deleteShot,
     deleteAllShots, importAssets, importShots, mustProject, mustAsset, liveAssets,
   };
 }

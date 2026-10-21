@@ -124,12 +124,13 @@ async function postImageGeneration({
   prompt,
   apiKey,
   references = [],
+  referenceFiles = [],
   fetchImpl = fetch,
 }) {
   if (!config?.baseUrl || !config?.model || !prompt?.trim())
     throw new Error("生图配置或提示词不完整");
   if (!apiKey?.trim()) throw new Error("请先保存 API Key");
-  if (!Array.isArray(references) || references.length > 15)
+  if (!Array.isArray(references) || !Array.isArray(referenceFiles) || references.length + referenceFiles.length > 15)
     throw new Error("参考图数量必须在 0–15 张之间");
   const apiMart = isApiMart(config.baseUrl);
   const body = apiMart
@@ -154,11 +155,24 @@ async function postImageGeneration({
     "content-type": "application/json",
     authorization: `Bearer ${apiKey}`,
   };
-  const endpoint = endpointFor(config.baseUrl);
+  let endpoint = endpointFor(config.baseUrl);
+  let requestBody = JSON.stringify(body);
+  if (referenceFiles.length) {
+    if (apiMart) throw new Error("APIMart 参考图应使用 image_urls 格式");
+    endpoint = endpoint.replace(/\/images\/generations(?=\?|$)/, "/images/edits");
+    const form = new FormData();
+    for (const [key, value] of Object.entries(body)) form.set(key, String(value));
+    referenceFiles.forEach((file, index) => {
+      if (!file.bytes?.length || !/^image\/(png|jpeg|webp)$/.test(file.mime)) throw new Error("参考图文件不正确");
+      form.append(referenceFiles.length === 1 ? "image" : "image[]", new Blob([file.bytes], { type: file.mime }), `reference-${index + 1}.${file.mime.split("/")[1]}`);
+    });
+    delete headers["content-type"];
+    requestBody = form;
+  }
   const response = await fetchOrThrow(fetchImpl, endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body: requestBody,
   }, "生图接口");
   if (!response.ok) {
     const text = (await response.text())

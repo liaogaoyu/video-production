@@ -102,6 +102,13 @@ async function createHttpApp(services) {
   app.patch("/api/v1/projects/:id", async (request) => ({ project: presentProject(repos.content.updateProject(request.params.id, request.body || {})) }));
   app.delete("/api/v1/projects/:id", async (request) => repos.content.deleteProject(request.params.id));
 
+  app.post("/api/v1/projects/:id/references", async (request, reply) => {
+    const upload = await readUpload(request);
+    reply.code(201);
+    return repos.content.addProjectReference(request.params.id, upload.bytes);
+  });
+  app.delete("/api/v1/projects/:id/references/:referenceId", async request => repos.content.deleteProjectReference(request.params.id, request.params.referenceId));
+
   app.post("/api/v1/projects/:id/assets", async (request, reply) => {
     reply.code(201);
     return repos.content.createAsset({ ...(request.body || {}), projectId: request.params.id });

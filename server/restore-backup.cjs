@@ -42,6 +42,10 @@ async function restoreBackup(services, manifest, files) {
     style: source.style || "",
     ratio: source.data.settings?.ratio || "16:9",
   }).project;
+  for (const reference of source.data.projectReferences || []) {
+    const file = packed(reference.url);
+    if (file) await repos.content.addProjectReference(project.id, file.data);
+  }
   for (const a of source.data.assets || []) {
     const created = repos.content.createAsset({
       projectId: project.id,
