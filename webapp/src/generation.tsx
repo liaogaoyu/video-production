@@ -152,7 +152,7 @@ export function Generation({
         type="info"
         title={
           kind === "image"
-            ? "使用已保存的生图配置及参考图"
+            ? `使用已保存的生图配置，自动携带 ${project!.data.projectReferences?.length || 0} 张公共参考图及各资产专属参考图`
             : "按分镜时长生成，携带已绑定资产的固定图片；生成将消耗账号积分。"
         }
       />

@@ -27,6 +27,7 @@ import { useWorkspace } from "./context";
 import { Action, Blank, FileUpload, Thumb } from "./common";
 import { Importer } from "./importer";
 import { Generation } from "./generation";
+import { ProjectReferences } from "./project-references";
 import type { Asset } from "./types";
 export function AssetsPage() {
   const { project, refreshProject } = useWorkspace(),
@@ -108,6 +109,7 @@ export function AssetsPage() {
           </Button>
         </Space>
       </div>
+      <ProjectReferences />
       <div className="toolbar">
         <Space wrap>
           <Input.Search
@@ -359,13 +361,18 @@ export function AssetsPage() {
         {asset && (
           <section className="drawer-section">
             <div className="section-heading">
-              <h3>生成参考图</h3>
+              <h3>资产专属参考图</h3>
               <FileUpload
                 url={`assets/${asset.id}/references`}
                 onDone={refreshProject}
                 label="添加参考图"
               />
             </div>
+            <Typography.Paragraph type="secondary">
+              自动继承项目公共参考图{" "}
+              {project!.data.projectReferences?.length || 0}{" "}
+              张，以下图片仅用于此资产。
+            </Typography.Paragraph>
             <div className="reference-strip">
               {asset.references.map((r) => (
                 <div key={r.id}>

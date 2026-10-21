@@ -650,3 +650,10 @@ select {
   background: #edf3ff;
   color: #165dff;
 }
+
+.project-reference-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}

@@ -54,6 +54,7 @@ export interface Project {
   runningJobs: number;
   data: {
     settings: { ratio: string };
+    projectReferences?: { id: string; mediaId: string; url: string }[];
     assets: Asset[];
     shots: Shot[];
     jobs: Job[];
