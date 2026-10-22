@@ -101,6 +101,7 @@ app.whenReady().then(() => {
     assertLocal(event);
     if (!validAccount(account)) throw new Error("账号格式不正确");
     const auth = await jimengCli.beginAuth(account.id);
+    if (auth.alreadyAuthorized) return auth;
     await navigateAccount(account, auth.authorizationUrl);
     return { ok: true, expiresAt: auth.expiresAt };
   });

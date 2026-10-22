@@ -39,6 +39,41 @@ test('OAuth success and CLI membership permission are separate states', async ()
   assert.equal(result.ok, false);
 });
 
+test('reused OAuth login is checked without requiring a new device flow URL', async () => {
+  const {pool,calls}=setup([
+    {stdout:'已复用当前本地 OAuth 登录态。\n'},
+    {stdout:'{"total_credit":120,"user_id":"existing-account"}'},
+  ]);
+  const result=await pool.beginAuth('22222222-2222-2222-2222-222222222222');
+  assert.equal(result.alreadyAuthorized,true);
+  assert.equal(result.authorized,true);
+  assert.equal(result.totalCredit,120);
+  assert.equal(result.authorizationUrl,undefined);
+  assert.ok(calls[1].args.includes('user_credit'));
+});
+
+test('reused login is not marked authorized when its independent check fails', async () => {
+  const {pool}=setup([{stdout:'已复用当前本地 OAuth 登录态。\n'},{code:1,stderr:'login fail'}]);
+  await assert.rejects(()=>pool.beginAuth('22222222-2222-2222-2222-222222222222'),/检查未通过/);
+});
+
+test('resubmitting the same job stages fresh reference bytes without overwriting sealed inputs', async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'storydock-retry-'));
+  const source=path.join(root,'reference.png');
+  const {pool,calls}=setup([{stdout:'submit_id: remote-first\ngen_status: querying\n'},{stdout:'submit_id: remote-second\ngen_status: querying\n'}]);
+  const request={jobId:'same-job',prompt:'p',images:[source],referenceNames:['道具'],model:'seedance2.0',ratio:'16:9',duration:15,resolution:'720p'};
+  fs.writeFileSync(source,'first');
+  await pool.submitVideo('22222222-2222-2222-2222-222222222222',request);
+  fs.writeFileSync(source,'second');
+  await pool.submitVideo('22222222-2222-2222-2222-222222222222',request);
+  const inputs=calls.map(c=>c.args.find(a=>a.includes('target=/work/input'))?.match(/source=(.*),target=/)?.[1]);
+  assert.notEqual(inputs[0],inputs[1]);
+  assert.equal(fs.readFileSync(path.join(inputs[0],'01.png'),'utf8'),'first');
+  assert.equal(fs.readFileSync(path.join(inputs[1],'01.png'),'utf8'),'second');
+  assert.equal(fs.statSync(inputs[1]).mode & 0o777,0o555);
+  assert.equal(fs.statSync(path.join(inputs[1],'01.png')).mode & 0o777,0o444);
+});
+
 test('superseding an authorization stops its CLI container', async () => {
   let removed = false, finishRun;
   const {pool} = setup([], {
