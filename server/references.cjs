@@ -1,5 +1,6 @@
 const { ApiError } = require("./errors.cjs");
 const { bindPromptReferences } = require("../jimeng-cli.cjs");
+const { withVideoReferenceGuidance } = require("../video-reference-guidance.cjs");
 
 const SEPARATOR = /[\s，。！？、；：,.!?:;]/;
 
@@ -36,7 +37,7 @@ function findMentions(prompt, assets) {
 function freezePrompt(prompt, names) {
   return {
     promptOriginal: String(prompt || ""),
-    promptSubmitted: bindPromptReferences(prompt, names),
+    promptSubmitted: withVideoReferenceGuidance(bindPromptReferences(prompt, names), names),
   };
 }
 

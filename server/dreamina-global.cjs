@@ -5,6 +5,7 @@ const { ApiError, publicMessage } = require("./errors.cjs");
 const { transaction } = require("./db.cjs");
 const { createGlobalRunner } = require("../worker/dreamina-global/runner.cjs");
 const PROVIDER = "dreamina_global_canvas";
+const { withVideoReferenceGuidance } = require("../video-reference-guidance.cjs");
 const now = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 const hash = (value) =>
@@ -545,7 +546,7 @@ function createGlobalService(
       const g = {
         ...item,
         references: refs,
-        promptSubmitted: bindReferences(item.promptOriginal, refs),
+        promptSubmitted: withVideoReferenceGuidance(bindReferences(item.promptOriginal, refs), refs),
       };
       validateGeneration({ ...g, prompt: g.promptSubmitted }, catalog);
       const nid = nodeId(),
