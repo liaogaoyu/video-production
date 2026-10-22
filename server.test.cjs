@@ -617,6 +617,17 @@ test('Jianying export freezes shot order and video versions, requires explicit m
  }finally{await c.close();}
 });
 
+test('video reference submission preserves multiline source and explains multi-view identity without duplicating subjects',()=>{
+ const {freezePrompt}=require('./server/references.cjs');
+ const text='【首帧】@主角 右手握着手机。\n\n【时间轴】\n0–15秒：右手保持握稳，手机停在耳侧。';
+ const result=freezePrompt(text,['主角']);
+ assert.equal(result.promptOriginal,text);
+ assert.ok(result.promptSubmitted.includes('【首帧】参考图1 右手握着手机。\n\n【时间轴】\n0–15秒：'));
+ assert.match(result.promptSubmitted,/同一资产的不同角度/);
+ assert.match(result.promptSubmitted,/不将每格重复成一组/);
+ assert.equal(freezePrompt(text,[]).promptSubmitted,text);
+});
+
 test('new image jobs freeze type-specific four-view prompts while preserving editable originals',async()=>{
  const c=await start();try{
   const {repos}=c.services,p=repos.content.createProject({name:'四视图验收'}).project;
@@ -632,7 +643,7 @@ test('new image jobs freeze type-specific four-view prompts while preserving edi
   assert.match(inputs[0].promptSubmitted,/完整全身/);
   assert.match(inputs[1].promptSubmitted,/同一剧情时段/);
   assert.match(inputs[2].promptSubmitted,/不额外加入手持人物/);
-  assert.equal(repos.content.graph(p.id).assets[0].prompt,'原始描述0');
+  assert.equal(repos.content.graph(p.id).assets.find(a=>a.id===assets[0].id).prompt,'原始描述0');
   repos.content.updateAsset(assets[0].id,{revision:assets[0].revision,prompt:'后来修改'});
   assert.equal(JSON.parse(repos.jobs.getJob(batch.jobIds[0]).inputSnapshot).promptSubmitted,inputs[0].promptSubmitted);
   let received;

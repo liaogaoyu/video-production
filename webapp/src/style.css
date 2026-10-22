@@ -269,6 +269,11 @@ select {
   align-items: flex-end;
   gap: 10px;
 }
+.shot-prompt.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
 .play-overlay {
   position: absolute;
   inset: 0;
