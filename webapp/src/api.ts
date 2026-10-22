@@ -61,30 +61,7 @@ export async function upload(url: string, file: File) {
   f.append("file", file);
   return api(url, "POST", f);
 }
-export async function copy(text: string) {
-  const previous = document.activeElement as HTMLElement | null;
-  const field = document.createElement("textarea");
-  field.value = text;
-  field.style.cssText = "position:fixed;left:-9999px;opacity:0";
-  document.body.append(field);
-  let copied = false;
-  try {
-    field.focus();
-    field.select();
-    copied = document.execCommand("copy");
-  } finally {
-    field.remove();
-    previous?.focus({ preventScroll: true });
-  }
-  if (copied) return;
-  if (!navigator.clipboard) throw Error("浏览器未允许复制");
-  await Promise.race([
-    navigator.clipboard.writeText(text),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(Error("复制超时，请检查剪贴板权限")), 2000),
-    ),
-  ]);
-}
+export { copyText as copy } from "./clipboard.mjs";
 export const time = (value?: string) =>
   value
     ? new Date(value).toLocaleString("zh-CN", {
