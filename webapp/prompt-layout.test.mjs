@@ -6,7 +6,7 @@ test('legacy prompts gain readable sections without changing words, references o
   const result=formatPromptForReading(source);
   assert.equal(result.replaceAll('\n',''),source);
   assert.ok(result.includes('。\n0–5秒：'));
-  assert.ok(result.includes('”5–15秒：')); // no delimiter: don't guess a boundary
+  assert.ok(result.includes('”\n5–15秒：')); // quote has ended: next time block is outside dialogue
   assert.ok(result.includes('“不要。5–9秒：这几个字是原台词。”'));
   assert.ok(result.includes('；\n光影：'));
 });
