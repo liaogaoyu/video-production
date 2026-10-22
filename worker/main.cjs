@@ -78,7 +78,10 @@ function createWorker(services = openServices()) {
             services.repos.accounts.markAuth(session.id, "expired", "授权已过期，请重新开始");
           } else if (session.status === "queued") {
             services.repos.accounts.markAuth(session.id, "starting");
-            await pool.beginAuth(session.account_id);
+            const result = await pool.beginAuth(session.account_id);
+            if (result.alreadyAuthorized && services.repos.accounts.markAuth(session.id, "authorized", result.message)) {
+              services.repos.accounts.applyCheck(session.account_id, result);
+            }
           } else {
             const result = await pool.finishAuth(session.account_id);
             if (result.authorized) {

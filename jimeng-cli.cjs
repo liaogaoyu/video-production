@@ -186,6 +186,11 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       const output = `${result.stdout}\n${result.stderr}`;
       const authorizationUrl = output.match(/https:\/\/jimeng\.jianying\.com\/ai-tool\/cli-auth\?[^\s]+/)?.[0];
       const deviceCode = match(output, 'device_code');
+      if (result.code === 0 && /已复用当前本地 OAuth 登录态/.test(output)) {
+        const checked = await this.inspect(accountId);
+        if (!checked.authorized) throw new Error('CLI 复用了本地登录态，但账号检查未通过，请稍后检查账号状态');
+        return { ...checked, alreadyAuthorized: true };
+      }
       if (!authorizationUrl || !deviceCode) {
         if (result.code !== 0) throw new Error(runtimeFailure(result).message);
         throw new Error('官方 CLI 没有返回有效授权地址，请更新 CLI 运行环境');
@@ -226,8 +231,9 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       const submittedPrompt = request.promptAlreadyBound ? request.prompt.trim() : bindPromptReferences(request.prompt, request.referenceNames);
       if (submittedPrompt.length > 20000) throw new Error('绑定参考图后的提示词过长');
       const runRoot = path.join(accountDirectory(accountId), 'runs', request.jobId);
-      const input = path.join(runRoot, 'input');
-      await fsp.mkdir(input, { recursive: true, mode: 0o700 });
+      await fsp.mkdir(runRoot, { recursive: true, mode: 0o700 });
+      // Each attempt gets a fresh directory: prior attempts are intentionally read-only.
+      const input = await fsp.mkdtemp(path.join(runRoot, 'input-'));
       const command = [request.images.length ? 'multimodal2video' : 'text2video'];
       for (const [index, source] of request.images.entries()) {
         const extension = path.extname(source).toLowerCase();

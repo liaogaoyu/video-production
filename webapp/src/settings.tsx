@@ -563,7 +563,7 @@ function CliAuth({
           打开即梦授权页
         </Button>
       ) : (
-        !error && <Spin />
+        !error && !["failed", "expired", "cancelled", "authorized"].includes(session.status) && <Spin />
       )}
       <p className="spaced">
         {session.message ||
