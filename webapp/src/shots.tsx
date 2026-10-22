@@ -24,6 +24,7 @@ import { Importer } from "./importer";
 import { Generation } from "./generation";
 import { ProjectExport } from "./project-export";
 import { PromptMentions } from "./prompt-mentions";
+import { formatPromptForReading } from "./prompt-layout.mjs";
 import type { Shot } from "./types";
 export function ShotsPage() {
   const { project, refreshProject } = useWorkspace(),
@@ -37,6 +38,7 @@ export function ShotsPage() {
     [preview, setPreview] = useState(""),
     [form] = Form.useForm(),
     [saving, setSaving] = useState(false),
+    [expanded, setExpanded] = useState<Set<string>>(() => new Set()),
     { message, modal } = App.useApp();
   const latest = (shot: Shot) =>
       [...jobs].reverse().find((j) => j.sourceId === shot.id),
@@ -200,7 +202,12 @@ export function ShotsPage() {
                         : "待生成"}
                   </Tag>
                 </div>
-                <p className="shot-prompt">{s.prompt}</p>
+                <p id={`prompt-${s.id}`} className={`shot-prompt${expanded.has(s.id) ? " expanded" : ""}`}>{formatPromptForReading(s.prompt)}</p>
+                <Button type="link" size="small" aria-expanded={expanded.has(s.id)} aria-controls={`prompt-${s.id}`} onClick={() => setExpanded(current => {
+                  const next = new Set(current);
+                  if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
+                  return next;
+                })}>{expanded.has(s.id) ? "收起提示词" : "展开提示词"}</Button>
                 <div>
                   {s.refs.map((name, i) => (
                     <Tag
@@ -293,6 +300,9 @@ export function ShotsPage() {
           >
             <PromptMentions assets={assets} />
           </Form.Item>
+          <Button type="link" onClick={() => {
+            form.setFieldValue("prompt", formatPromptForReading(form.getFieldValue("prompt")));
+          }}>整理换行</Button>
         </Form>
       </Modal>
       {importing && (
