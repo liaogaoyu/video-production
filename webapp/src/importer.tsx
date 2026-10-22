@@ -5,20 +5,10 @@ import { api, copy } from "./api";
 import { useWorkspace } from "./context";
 import storyboardSkill from "../../skills/coherent-storyboard/SKILL.md?raw";
 import { buildShotInstructions, shotTemplate } from "./storyboard-instructions.mjs";
+import assetSkill from "../../skills/consistent-assets/SKILL.md?raw";
+import { buildAssetInstructions, assetTemplate } from "./asset-instructions.mjs";
 const templates = {
-  assets: {
-    schemaVersion: 1,
-    kind: "assets",
-    assets: [
-      {
-        key: "character-1",
-        name: "角色名称",
-        type: "character",
-        description: "外观特征",
-        prompt: "完整的生图提示词",
-      },
-    ],
-  },
+  assets: assetTemplate,
   shots: shotTemplate,
 };
 export function Importer({
@@ -114,7 +104,7 @@ export function Importer({
               await copy(
                 kind === "shots"
                   ? buildShotInstructions(storyboardSkill, project)
-                  : `请根据我提供的剧本输出全部角色、场景、道具资产。只输出 JSON，不要 Markdown 围栏。以我的原始提示词为准。结构：\n${JSON.stringify(templates.assets, null, 2)}`,
+                  : buildAssetInstructions(assetSkill, project),
                 anchor,
               );
               setCopied(true);
@@ -131,6 +121,9 @@ export function Importer({
       </Space>
       {kind === "shots" && (
         <Alert className="spaced" type="info" title="Codex 指令已包含连贯分镜规则：优先 15 秒，其次 14 秒；连续动作合并，必要时自然拆分。" />
+      )}
+      {kind === "assets" && (
+        <Alert className="spaced" type="info" title="提取指令先统一年代、时间线与美术基准，再编写每项资产；日夜按剧情区分，角色统一展示方式。" />
       )}
       <Input.TextArea
         value={text}
