@@ -617,6 +617,31 @@ test('Jianying export freezes shot order and video versions, requires explicit m
  }finally{await c.close();}
 });
 
+test('new image jobs freeze type-specific four-view prompts while preserving editable originals',async()=>{
+ const c=await start();try{
+  const {repos}=c.services,p=repos.content.createProject({name:'四视图验收'}).project;
+  await c.app.inject({method:'PUT',url:'/api/v1/connections/image',payload:{name:'four-view',baseUrl:'https://example.com/v1',model:'gpt-image-2',apiKey:'test-key'}});
+  const assets=['角色','场景','道具'].map((type,i)=>repos.content.createAsset({projectId:p.id,name:type,type,prompt:`原始描述${i}`}));
+  const batch=repos.jobs.createBatch({projectId:p.id,body:{kind:'image',sourceIds:assets.map(a=>a.id)},idempotencyKey:crypto.randomUUID()});
+  const inputs=batch.jobIds.map(id=>JSON.parse(repos.jobs.getJob(id).inputSnapshot));
+  for(let i=0;i<inputs.length;i++){
+   assert.equal(inputs[i].promptOriginal,`原始描述${i}`);
+   assert.match(inputs[i].promptSubmitted,/2×2等大四宫格/);
+   assert.equal(inputs[i].promptSubmitted.split('【默认资产四视图版式】').length,2);
+  }
+  assert.match(inputs[0].promptSubmitted,/完整全身/);
+  assert.match(inputs[1].promptSubmitted,/同一剧情时段/);
+  assert.match(inputs[2].promptSubmitted,/不额外加入手持人物/);
+  assert.equal(repos.content.graph(p.id).assets[0].prompt,'原始描述0');
+  repos.content.updateAsset(assets[0].id,{revision:assets[0].revision,prompt:'后来修改'});
+  assert.equal(JSON.parse(repos.jobs.getJob(batch.jobIds[0]).inputSnapshot).promptSubmitted,inputs[0].promptSubmitted);
+  let received;
+  const provider=require('./worker/providers/image.cjs').createImageProvider({repos,fetchImpl:async(url,options)=>{received=JSON.parse(options.body);return {ok:true,json:async()=>({data:[{b64_json:PNG.toString('base64')}]})};}});
+  await provider.submit(repos.jobs.getJob(batch.jobIds[0]));
+  assert.equal(received.prompt,inputs[0].promptSubmitted);
+ }finally{await c.close();}
+});
+
 test('project references apply to every asset, deduplicate own images, stay frozen and remain isolated',async()=>{
  const c=await start();try{
   const {repos}=c.services,p=repos.content.createProject({name:'公共参考验收'}).project,other=repos.content.createProject({name:'另一个项目'}).project;
