@@ -3,6 +3,8 @@ import { App, Alert, Button, Input, Modal, Space, Table, Upload } from "antd";
 import { CopyOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { api, copy } from "./api";
 import { useWorkspace } from "./context";
+import storyboardSkill from "../../skills/coherent-storyboard/SKILL.md?raw";
+import { buildShotInstructions, shotTemplate } from "./storyboard-instructions.mjs";
 const templates = {
   assets: {
     schemaVersion: 1,
@@ -17,21 +19,7 @@ const templates = {
       },
     ],
   },
-  shots: {
-    schemaVersion: 1,
-    kind: "shots",
-    shots: [
-      {
-        key: "shot-1",
-        episode: 1,
-        number: 1,
-        title: "镜头名称",
-        duration: 5,
-        prompt: "@角色名称 的动作、场景和运镜",
-        refs: [{ assetKey: "character-1" }],
-      },
-    ],
-  },
+  shots: shotTemplate,
 };
 export function Importer({
   kind,
@@ -124,7 +112,9 @@ export function Importer({
             setCopied(false);
             try {
               await copy(
-                `请根据我提供的剧本输出${kind === "assets" ? "全部角色、场景、道具资产" : "全部分镜"}。只输出 JSON，不要 Markdown 围栏。以我的原始提示词为准。结构：\n${JSON.stringify(templates[kind], null, 2)}`,
+                kind === "shots"
+                  ? buildShotInstructions(storyboardSkill, project)
+                  : `请根据我提供的剧本输出全部角色、场景、道具资产。只输出 JSON，不要 Markdown 围栏。以我的原始提示词为准。结构：\n${JSON.stringify(templates.assets, null, 2)}`,
                 anchor,
               );
               setCopied(true);
@@ -139,6 +129,9 @@ export function Importer({
           {copied ? "已复制 Codex 指令" : "复制 Codex 指令"}
         </Button>
       </Space>
+      {kind === "shots" && (
+        <Alert className="spaced" type="info" title="Codex 指令已包含连贯分镜规则：优先 15 秒，其次 14 秒；连续动作合并，必要时自然拆分。" />
+      )}
       <Input.TextArea
         value={text}
         onChange={(e) => {
