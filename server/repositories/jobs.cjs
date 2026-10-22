@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const { ApiError, publicMessage } = require("../errors.cjs");
 const { transaction } = require("../db.cjs");
 const { freezePrompt } = require("../references.cjs");
+const { buildAssetImagePrompt } = require("../asset-prompt.cjs");
 
 const VIDEO_MODELS = new Set(["seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance2.5"]);
 const VIDEO_RATIOS = new Set(["1:1", "3:4", "16:9", "4:3", "9:16", "21:9"]);
@@ -91,7 +92,7 @@ function createJobRepository(db, { record }) {
         assetId: asset.id,
         title: asset.name,
         promptOriginal: asset.prompt,
-        promptSubmitted: asset.prompt,
+        promptSubmitted: buildAssetImagePrompt(asset.prompt, asset.type),
         references: references.map((item, index) => ({ mediaId: item.media_id, index: index + 1, sha256: item.sha256, scope: item.scope })),
         ratio,
       },

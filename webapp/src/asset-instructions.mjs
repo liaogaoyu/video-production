@@ -1,7 +1,7 @@
 export const assetTemplate = {
   schemaVersion: 1,
   kind: "assets",
-  assets: [{key:"character-1",name:"角色名称",type:"character",description:"时间线、首次出现场次/时段、原文外观事实；统一设计另行标明",prompt:"完整共同美术基准；所属年代；主体外观与固定服装；统一单人全身展示构图；布光材质；限制。"}],
+  assets: [{key:"character-1",name:"角色名称",type:"character",description:"时间线、首次出现场次/时段、原文外观事实；统一设计另行标明",prompt:"完整共同美术基准；所属年代；主体外观与固定服装；一张2×2四视图：正面、背面、左侧、右侧，同一人物每格完整全身；布光材质；限制。"}],
 };
 
 export function buildAssetInstructions(skillSource, project) {
