@@ -44,6 +44,8 @@ export function Importer({
     [text, setText] = useState(""),
     [preview, setPreview] = useState<any[] | null>(null),
     [busy, setBusy] = useState(false),
+    [copying, setCopying] = useState(false),
+    [copied, setCopied] = useState(false),
     { message } = App.useApp();
   const parse = () => JSON.parse(text);
   const check = async () => {
@@ -115,15 +117,26 @@ export function Importer({
         </Upload>
         <Button
           icon={<CopyOutlined />}
-          onClick={() =>
-            copy(
-              `请根据我提供的剧本输出${kind === "assets" ? "全部角色、场景、道具资产" : "全部分镜"}。只输出 JSON，不要 Markdown 围栏。以我的原始提示词为准。结构：\n${JSON.stringify(templates[kind], null, 2)}`,
-            )
-              .then(() => message.success("已复制 Codex 指令"))
-              .catch((e) => message.error(e.message))
-          }
+          loading={copying}
+          onClick={async (event) => {
+            const anchor = event.currentTarget;
+            setCopying(true);
+            setCopied(false);
+            try {
+              await copy(
+                `请根据我提供的剧本输出${kind === "assets" ? "全部角色、场景、道具资产" : "全部分镜"}。只输出 JSON，不要 Markdown 围栏。以我的原始提示词为准。结构：\n${JSON.stringify(templates[kind], null, 2)}`,
+                anchor,
+              );
+              setCopied(true);
+              message.success("已复制，可粘贴到 Codex 使用");
+            } catch (error) {
+              message.error((error as Error).message);
+            } finally {
+              setCopying(false);
+            }
+          }}
         >
-          复制 Codex 指令
+          {copied ? "已复制 Codex 指令" : "复制 Codex 指令"}
         </Button>
       </Space>
       <Input.TextArea

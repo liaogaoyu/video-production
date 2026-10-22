@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test prompt-document.test.mjs ../prompt-tokens.test.mjs"
+    "test": "node --test *.test.mjs ../prompt-tokens.test.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
