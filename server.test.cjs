@@ -628,7 +628,7 @@ test('video reference submission preserves multiline source and explains multi-v
  assert.equal(freezePrompt(text,[]).promptSubmitted,text);
 });
 
-test('new image jobs freeze type-specific four-view prompts while preserving editable originals',async()=>{
+test('image jobs freeze character sheets, scene four views and single props while preserving editable originals',async()=>{
  const c=await start();try{
   const {repos}=c.services,p=repos.content.createProject({name:'四视图验收'}).project;
   await c.app.inject({method:'PUT',url:'/api/v1/connections/image',payload:{name:'four-view',baseUrl:'https://example.com/v1',model:'gpt-image-2',apiKey:'test-key'}});
@@ -637,11 +637,17 @@ test('new image jobs freeze type-specific four-view prompts while preserving edi
   const inputs=batch.jobIds.map(id=>JSON.parse(repos.jobs.getJob(id).inputSnapshot));
   for(let i=0;i<inputs.length;i++){
    assert.equal(inputs[i].promptOriginal,`原始描述${i}`);
-   assert.match(inputs[i].promptSubmitted,/2×2等大四宫格/);
-   assert.equal(inputs[i].promptSubmitted.split('【默认资产四视图版式】').length,2);
+   assert.equal(inputs[i].promptSubmitted.split('【资产最终展示版式】').length,2);
   }
   assert.match(inputs[0].promptSubmitted,/完整全身/);
+  assert.match(inputs[0].promptSubmitted,/左侧三列等宽/);
+  assert.match(inputs[0].promptSubmitted,/共五个展示区域/);
+  assert.match(inputs[0].promptSubmitted,/面部及肩部特写/);
+  assert.match(inputs[0].promptSubmitted,/人物仍自然直立/);
+  assert.match(inputs[1].promptSubmitted,/左上正面视角、右上侧面视角、左下背面视角、右下高位俯拍全景/);
   assert.match(inputs[1].promptSubmitted,/同一剧情时段/);
+  assert.match(inputs[2].promptSubmitted,/单幅道具主体展示图/);
+  assert.match(inputs[2].promptSubmitted,/不做四视图、不做四宫格/);
   assert.match(inputs[2].promptSubmitted,/不额外加入手持人物/);
   assert.equal(repos.content.graph(p.id).assets.find(a=>a.id===assets[0].id).prompt,'原始描述0');
   repos.content.updateAsset(assets[0].id,{revision:assets[0].revision,prompt:'后来修改'});
@@ -651,6 +657,18 @@ test('new image jobs freeze type-specific four-view prompts while preserving edi
   await provider.submit(repos.jobs.getJob(batch.jobIds[0]));
   assert.equal(received.prompt,inputs[0].promptSubmitted);
  }finally{await c.close();}
+});
+
+test('asset presentation handles imported English types and overrides stale four-view prop instructions',()=>{
+ const {buildAssetImagePrompt}=require('./server/asset-prompt.cjs');
+ for(const [english,chinese] of [['character','角色'],['scene','场景'],['prop','道具']]){
+  assert.equal(buildAssetImagePrompt('主体设计',english),buildAssetImagePrompt('主体设计',chinese));
+ }
+ const original='红色邀请函，一张2×2四视图，正面、背面、左侧、右侧。';
+ const submitted=buildAssetImagePrompt(original,'prop');
+ assert.ok(submitted.startsWith(original));
+ assert.match(submitted,/替代正文中旧的2×2人物四视图或道具四视图要求/);
+ assert.match(submitted,/单幅道具主体展示图/);
 });
 
 test('project references apply to every asset, deduplicate own images, stay frozen and remain isolated',async()=>{
