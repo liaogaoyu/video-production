@@ -6,7 +6,7 @@ import { useWorkspace } from "./context";
 import storyboardSkill from "../../skills/coherent-storyboard/SKILL.md?raw";
 import { buildShotInstructions, shotTemplate } from "./storyboard-instructions.mjs";
 import assetSkill from "../../skills/consistent-assets/SKILL.md?raw";
-import { buildAssetInstructions, assetTemplate } from "./asset-instructions.mjs";
+import { buildAssetInstructions, assetTemplate, assetInstructionVersion } from "./asset-instructions.mjs";
 const templates = {
   assets: assetTemplate,
   shots: shotTemplate,
@@ -123,7 +123,7 @@ export function Importer({
         <Alert className="spaced" type="info" title="Codex 指令已包含连贯分镜规则：优先 15 秒，其次 14 秒；连续动作合并，必要时自然拆分。" />
       )}
       {kind === "assets" && (
-        <Alert className="spaced" type="info" title="剧情忠于原文，外观主动设计：按角色定位塑造气质与辨识度，统一美术风格；人物三列全身＋面部/俯视，场景四视角，道具单图。" />
+        <Alert className="spaced" type="info" title={`指令版本：${assetInstructionVersion}。角色五区域设定板；场景四视角均无人，人物用途只写描述；道具单图。`} />
       )}
       <Input.TextArea
         value={text}
