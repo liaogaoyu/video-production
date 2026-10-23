@@ -123,7 +123,7 @@ export function Importer({
         <Alert className="spaced" type="info" title="Codex 指令已包含连贯分镜规则：优先 15 秒，其次 14 秒；连续动作合并，必要时自然拆分。" />
       )}
       {kind === "assets" && (
-        <Alert className="spaced" type="info" title="先统一年代、时间线与美术基准；资产默认生成一张 2×2 四视图，四格保持同一主体及风格。" />
+        <Alert className="spaced" type="info" title="剧情忠于原文，外观主动设计：按角色定位塑造气质与辨识度，统一美术风格，默认输出 2×2 四视图。" />
       )}
       <Input.TextArea
         value={text}
