@@ -3,6 +3,7 @@ const crypto = require("node:crypto");
 const { ApiError } = require("../errors.cjs");
 const { transaction } = require("../db.cjs");
 const { findMentions } = require("../references.cjs");
+const { findScenePeopleClause } = require("../scene-prompt-check.cjs");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RATIOS = new Set(["16:9", "9:16", "1:1"]);
@@ -374,6 +375,11 @@ function createContentRepository(db, { media, record }) {
       const prompt = text(item?.prompt, "提示词", 20000);
       if (!name || !type || !prompt) {
         preview.push({ name, accepted: false, reason: "名称、类型或提示词不正确" });
+        continue;
+      }
+      const peopleClause = type === "场景" ? findScenePeopleClause(prompt) : "";
+      if (peopleClause) {
+        preview.push({ name, accepted: false, reason: `场景提示词包含人物出镜描述：“${peopleClause.slice(0, 100)}”。请改成无人环境，人物用途移至描述后再检查。` });
         continue;
       }
       if (existing.has(name)) {

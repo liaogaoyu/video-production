@@ -4,3 +4,5 @@ export const assetTemplate: {
   assets: {key:string;name:string;type:string;description:string;prompt:string}[];
 };
 export function buildAssetInstructions(skillSource: string, project?: Project | null): string;
+
+export const assetInstructionVersion: string;

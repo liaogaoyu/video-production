@@ -718,3 +718,19 @@ test('project reference upload API persists in backups and combined reference ca
   assert.throws(()=>repos.jobs.createBatch({projectId:p.id,body:{kind:'image',sourceIds:[asset.id]},idempotencyKey:crypto.randomUUID()}),/合计超过 15/);
  }finally{await c.close();}
 });
+
+test('asset import rejects scene actors even when followed by a no-people disclaimer',async()=>{
+ const c=await start();try{
+  const {repos}=c.services,p=repos.content.createProject({name:'无人场景导入验收'}).project;
+  const bad='【功能层次】表演者穿红白当代国潮服饰分布台上，两侧黑色音箱靠边摆放；台前留观看空地，市民呈松散弧形聚集。\n【风格布光】舞台与观众面部明亮。\n【展示版式】四格舞台结构、设备、表演者及观众一致。禁止添加人物。';
+  const assets=[{name:'问题舞台',type:'scene',prompt:bad},{name:'无人舞台',type:'场景',description:'原文中表演者与市民在此互动',prompt:'无人舞台，观众区空置，工作人员通道开阔，不出现人物、人群或人影。'},{name:'表演者群体',type:'character',prompt:bad}];
+  for(const mode of ['preview','commit']){
+   const r=repos.content.importAssets(p.id,{assets,mode});
+   assert.equal(r.preview[0].accepted,false);
+   assert.match(r.preview[0].reason,/场景.*人物/);
+   assert.equal(r.preview[1].accepted,true);assert.equal(r.preview[2].accepted,true);
+   if(mode==='commit')assert.equal(r.created.length,2);
+  }
+  assert.equal(repos.content.graph(p.id).assets.some(a=>a.name==='问题舞台'),false);
+ }finally{await c.close();}
+});
