@@ -646,6 +646,8 @@ test('image jobs freeze character sheets, scene four views and single props whil
   assert.match(inputs[0].promptSubmitted,/人物仍自然直立/);
   assert.match(inputs[1].promptSubmitted,/左上正面视角、右上侧面视角、左下背面视角、右下高位俯拍全景/);
   assert.match(inputs[1].promptSubmitted,/同一剧情时段/);
+  assert.ok(inputs[1].promptSubmitted.startsWith('【场景资产范围】'));
+  assert.match(inputs[1].promptSubmitted,/座椅空置、通道空置/);
   assert.match(inputs[2].promptSubmitted,/单幅道具主体展示图/);
   assert.match(inputs[2].promptSubmitted,/不做四视图、不做四宫格/);
   assert.match(inputs[2].promptSubmitted,/不额外加入手持人物/);
@@ -669,6 +671,10 @@ test('asset presentation handles imported English types and overrides stale four
  assert.ok(submitted.startsWith(original));
  assert.match(submitted,/替代正文中旧的2×2人物四视图或道具四视图要求/);
  assert.match(submitted,/单幅道具主体展示图/);
+ const polluted=buildAssetImagePrompt('红衣女主播与企业代表形成画面中心，背景有来往市民。','scene');
+ assert.ok(polluted.startsWith('【场景资产范围】'));
+ assert.match(polluted,/本范围要求优先于正文中的人物出镜描述/);
+ assert.match(polluted,/前景、背景、远处、倒影及屏幕中均不新增人物或人群/);
 });
 
 test('project references apply to every asset, deduplicate own images, stay frozen and remain isolated',async()=>{
