@@ -152,7 +152,7 @@ export function Generation({
         type="info"
         title={
           kind === "image"
-            ? `默认生成一张 2×2 四视图设定图，使用已保存的生图配置，自动携带 ${project!.data.projectReferences?.length || 0} 张公共参考图及各资产专属参考图`
+            ? `人物生成三列全身＋面部/俯视设定板，场景生成正面/侧面/背面/俯拍四视角，道具生成单张主体图，使用已保存的生图配置，自动携带 ${project!.data.projectReferences?.length || 0} 张公共参考图及各资产专属参考图`
             : "按分镜时长生成，携带已绑定资产的固定图片；生成将消耗账号积分。"
         }
       />
