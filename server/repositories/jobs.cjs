@@ -200,6 +200,22 @@ function createJobRepository(db, { record }) {
     const job = db.prepare("SELECT * FROM jobs WHERE id=?").get(id);
     if (!job) throw new ApiError(404, "job_not_found", "任务不存在");
     if (job.lease_until && job.lease_until > iso()) throw new ApiError(409, "job_busy", "任务正在执行");
+    // A terminal official failure cannot be repaired by polling the same task.
+    // Only an explicit retry creates a new attempt, which uploads local refs again.
+    if (job.provider === "jimeng" && job.status === "failed" && job.remote_task_id) {
+      return transaction(db, () => {
+        const original = db.prepare("SELECT * FROM jobs WHERE id=?").get(id);
+        const result = JSON.parse(original.result_json || "{}");
+        if (result.resubmittedJobId) return getJob(result.resubmittedJobId);
+        const nextId = crypto.randomUUID(), batchId = crypto.randomUUID(), created = iso();
+        db.prepare("INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,account_id,provider,model,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?,?,?,?,?,?)")
+          .run(nextId, original.project_id, original.source_id, batchId, original.kind, original.account_id, original.provider, original.model, original.config_snapshot, original.input_snapshot, created, created);
+        db.prepare("UPDATE jobs SET result_json=?,version=version+1,updated_at=? WHERE id=?")
+          .run(JSON.stringify({ ...result, resubmittedJobId: nextId }), created, id);
+        record("job.resubmitted", { jobId: id, newJobId: nextId, projectId: original.project_id });
+        return getJob(nextId);
+      });
+    }
     if (job.provider === "dreamina_global_canvas") {
       const run=db.prepare("SELECT * FROM global_runs WHERE job_id=?").get(id);
       if (run?.run_attempted) {
