@@ -249,3 +249,18 @@ test('scoped download directory allows a different container UID to save video',
  assert.equal(result.kind,'succeeded');
  assert.equal(fs.readFileSync(result.files[0],'utf8'),'video');
 });
+
+test('resource recovery uploads RGB JPEG copies while preserving original PNGs and reference ordering',async()=>{
+ const sharp=require('sharp'),root=fs.mkdtempSync(path.join(os.tmpdir(),'cli-jpeg-'));
+ const source=path.join(root,'reference.png');await sharp({create:{width:48,height:32,channels:4,background:{r:120,g:80,b:40,alpha:0.5}}}).png().toFile(source);
+ const original=fs.readFileSync(source),{pool,calls}=setup([{stdout:'submit_id: new-jpeg-task\ngen_status: querying'}]);
+ try{
+  await pool.submitVideo('22222222-2222-2222-2222-222222222222',{jobId:'jpeg-recovery',prompt:'p',images:[source],referenceNames:['成品碗'],model:'seedance2.0fast_vip',ratio:'16:9',duration:9,resolution:'720p',referenceImageFormat:'jpeg'});
+  const args=calls[0].args,folder=args.find(a=>a.includes('target=/work/input')).match(/source=(.*),target=/)[1];
+  assert.ok(args.includes('/work/input/01.jpg'));const staged=path.join(folder,'01.jpg'),meta=await sharp(staged).metadata();
+  assert.equal(meta.format,'jpeg');assert.equal(meta.width,48);assert.equal(meta.height,32);assert.equal(meta.channels,3);assert.equal(meta.hasAlpha,false);
+  assert.deepEqual(fs.readFileSync(source),original);assert.equal(fs.statSync(staged).mode&0o777,0o444);
+  fs.writeFileSync(source,'invalid image');await assert.rejects(()=>pool.submitVideo('22222222-2222-2222-2222-222222222222',{jobId:'bad-jpeg',prompt:'p',images:[source],referenceNames:['成品碗'],model:'seedance2.0fast_vip',ratio:'16:9',duration:9,resolution:'720p',referenceImageFormat:'jpeg'}));
+  assert.equal(calls.length,1,'invalid images must not reach the generation CLI');
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});

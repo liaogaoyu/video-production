@@ -208,8 +208,12 @@ function createJobRepository(db, { record }) {
         const result = JSON.parse(original.result_json || "{}");
         if (result.resubmittedJobId) return getJob(result.resubmittedJobId);
         const nextId = crypto.randomUUID(), batchId = crypto.randomUUID(), created = iso();
+        let nextInput = original.input_snapshot;
+        if (/18005|ParamImageResourceUnavailable/i.test(original.error_message || "")) {
+          nextInput = JSON.stringify({ ...JSON.parse(nextInput), referenceImageFormat: "jpeg" });
+        }
         db.prepare("INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,account_id,provider,model,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?,?,?,?,?,?)")
-          .run(nextId, original.project_id, original.source_id, batchId, original.kind, original.account_id, original.provider, original.model, original.config_snapshot, original.input_snapshot, created, created);
+          .run(nextId, original.project_id, original.source_id, batchId, original.kind, original.account_id, original.provider, original.model, original.config_snapshot, nextInput, created, created);
         db.prepare("UPDATE jobs SET result_json=?,version=version+1,updated_at=? WHERE id=?")
           .run(JSON.stringify({ ...result, resubmittedJobId: nextId }), created, id);
         record("job.resubmitted", { jobId: id, newJobId: nextId, projectId: original.project_id });
