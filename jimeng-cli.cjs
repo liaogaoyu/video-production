@@ -234,14 +234,20 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
       await fsp.mkdir(runRoot, { recursive: true, mode: 0o700 });
       // Each attempt gets a fresh directory: prior attempts are intentionally read-only.
       const input = await fsp.mkdtemp(path.join(runRoot, 'input-'));
+      const jpegRecovery = request.referenceImageFormat === 'jpeg';
       const command = [request.images.length ? 'multimodal2video' : 'text2video'];
       for (const [index, source] of request.images.entries()) {
         const extension = path.extname(source).toLowerCase();
         if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) throw new Error('参考图格式不正确');
         const stat = await fsp.stat(source);
         if (!stat.isFile() || stat.size < 1 || stat.size > 50 * 1024 * 1024) throw new Error('参考图为空或超过 50MB');
-        const name = `${String(index + 1).padStart(2, '0')}${extension}`;
-        await fsp.copyFile(source, path.join(input, name));
+        const name = `${String(index + 1).padStart(2, '0')}${jpegRecovery ? '.jpg' : extension}`;
+        const target = path.join(input, name);
+        if (jpegRecovery) {
+          // Explicit recovery for 18005: re-encode an upload copy, never the asset.
+          await require('sharp')(source).rotate().flatten({ background: '#ffffff' })
+            .toColourspace('srgb').jpeg({ quality: 92, chromaSubsampling: '4:4:4' }).toFile(target);
+        } else await fsp.copyFile(source, target);
         await fsp.chmod(path.join(input, name), 0o444);
         command.push('--image', `/work/input/${name}`);
       }

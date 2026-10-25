@@ -741,7 +741,7 @@ test('explicit retry of a terminal domestic video creates a new upload attempt i
   const id=crypto.randomUUID(),stamp=new Date().toISOString(),input=JSON.stringify({promptSubmitted:'浇卤汁',references:[{name:'成品碗',mediaId:'original-image'}]});
   db.prepare("INSERT INTO jobs(id,project_id,source_id,kind,status,provider,model,config_snapshot,input_snapshot,remote_task_id,error_message,created_at,updated_at) VALUES(?,?,?,'video','failed','jimeng','seedance2.0fast_vip','{}',?,'failed-official-task','ParamImageResourceUnavailable',?,?)").run(id,p.id,crypto.randomUUID(),input,stamp,stamp);
   const next=repos.jobs.retryJob(id);
-  assert.notEqual(next.id,id);assert.equal(next.status,'queued');assert.equal(next.remoteTaskId,null);assert.equal(next.inputSnapshot,input);
+  assert.notEqual(next.id,id);assert.equal(next.status,'queued');assert.equal(next.remoteTaskId,null);assert.deepEqual(JSON.parse(next.inputSnapshot),{...JSON.parse(input),referenceImageFormat:'jpeg'});
   assert.equal(repos.jobs.getJob(id).status,'failed');assert.equal(repos.jobs.getJob(id).remoteTaskId,'failed-official-task');
   assert.equal(repos.jobs.retryJob(id).id,next.id,'duplicate clicks must not submit multiple paid jobs');
   assert.equal(db.prepare('select count(*) n from jobs where project_id=?').get(p.id).n,2);

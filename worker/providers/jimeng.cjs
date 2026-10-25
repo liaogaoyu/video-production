@@ -35,6 +35,7 @@ function createJimengProvider({ repos, pool, media, db, owner }) {
             promptAlreadyBound: true,
             images: imagePaths(job),
             referenceNames: input.references.map((reference) => reference.name),
+            referenceImageFormat: input.referenceImageFormat,
             model: input.model,
             ratio: input.ratio,
             duration: input.duration,
