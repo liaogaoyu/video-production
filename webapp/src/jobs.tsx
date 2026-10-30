@@ -5,6 +5,7 @@ import {
   Card,
   Input,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Tag,
@@ -20,14 +21,16 @@ import { useWorkspace } from "./context";
 import { Action, Blank, Thumb } from "./common";
 import { ProjectExport } from "./project-export";
 import type { Job } from "./types";
+import {Generation} from './generation';
 export function JobsPage() {
-  const { project, refreshProject } = useWorkspace(),
+  const { project, refreshProject,user } = useWorkspace(),
     jobs = project!.data.jobs,
     [kind, setKind] = useState("all"),
     [status, setStatus] = useState("all"),
     [query, setQuery] = useState(""),
     [preview, setPreview] = useState<Job | null>(null),
     [exporting, setExporting] = useState(false),
+    [regenerate,setRegenerate]=useState<Job|null>(null),
     { message, modal } = App.useApp();
   const latest = (job: Job): Job => {
     const seen = new Set<string>();
@@ -53,6 +56,8 @@ export function JobsPage() {
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const retry = async (j: Job) => {
+    if(user&&j.status==='submit_unknown'){message.warning('原提交结果尚未确认，请联系管理员核对，暂不重新生成');return;}
+    if(user&&j.status!=='download_failed'){setRegenerate(j);return;}
     await api("jobs/" + j.id + "/retry", "POST", { confirm: true });
     await refreshProject();
     message.success(
@@ -196,6 +201,7 @@ export function JobsPage() {
                   {j.kind === "asset" ? "资产图片" : "分镜视频"}
                   {j.queueNote ? " · " + j.queueNote : ""}
                 </p>
+                {j.billing&&<p className="muted">平台积分：{j.billing.status==='settled'?`已扣 ${j.billing.charged}`:j.billing.status==='refunded'?'已退回':`冻结 ${j.billing.reserved}`} · {j.billing.basis==='official_actual'?'官方实际消耗':'配置计价'}</p>}
                 {j.error && <p className="job-error">{j.error}</p>}
                 <div className="job-times">
                   <span>提交 {time(j.submittedAt || j.createdAt)}</span>
@@ -212,11 +218,12 @@ export function JobsPage() {
                   {labels[j.status] || j.status}
                 </Tag>
                 <Space>
+                  {j.status==='queued'&&<Popconfirm title="取消此任务并退回冻结积分？" onConfirm={async()=>{await api('jobs/'+j.id+'/cancel','POST',{});await refreshProject();window.dispatchEvent(new Event('billing-changed'));}}><Button>取消任务</Button></Popconfirm>}
                   {failed && (
                     <Action
                       run={async () => {
                         if (
-                          j.status === "submit_unknown" &&
+                          !user && j.status === "submit_unknown" &&
                           j.provider !== "dreamina_web_api"
                         ) {
                           modal.confirm({
@@ -250,6 +257,7 @@ export function JobsPage() {
         })}
       </div>
       {!filtered.length && <Blank text="暂无任务" />}
+      {regenerate&&<Generation kind={regenerate.kind==='asset'?'image':'video'} sourceIds={[regenerate.sourceId]} retryJobId={regenerate.id} onClose={()=>setRegenerate(null)}/>}
       <Modal
         title={preview?.title || "预览"}
         open={!!preview}

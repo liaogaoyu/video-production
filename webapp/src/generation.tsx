@@ -1,164 +1,154 @@
-import { useRef, useState } from "react";
-import { App, Alert, Form, Modal, Select, Typography } from "antd";
-import { api, id } from "./api";
+import { LegacyGeneration } from "./legacy-generation";
+import { useEffect, useState } from "react";
+import { App, Alert, Modal, Select, Space, Table, Typography } from "antd";
+import { api } from "./api";
 import { useWorkspace } from "./context";
-import type { Account } from "./types";
 export function Generation({
   kind,
   sourceIds,
   onClose,
+  retryJobId,
 }: {
   kind: "image" | "video";
   sourceIds: string[];
   onClose: () => void;
+  retryJobId?: string;
 }) {
-  const { project, refreshProject, go } = useWorkspace(),
+  const { project, refreshProject, go, user } = useWorkspace(),
     { message } = App.useApp(),
-    [form] = Form.useForm(),
+    [offers, setOffers] = useState<any[]>([]),
+    [offer, setOffer] = useState(""),
+    [quote, setQuote] = useState<any>(null),
+    [billingEnabled, setBillingEnabled] = useState<boolean | null>(null),
     [busy, setBusy] = useState(false),
-    [accounts, setAccounts] = useState<Account[]>([]),
-    [error, setError] = useState(""),
-    key = useRef(id()),
-    channel = Form.useWatch("channel", form) || "jimeng";
-  const loadAccounts = () =>
-    api("dreamina-web/accounts")
-      .then((r) =>
-        setAccounts(
-          r.accounts.filter((a: Account) => a.authorized && a.enabled),
-        ),
-      )
+    [error, setError] = useState("");
+  useEffect(() => {
+    api("model-offers")
+      .then((r) => {
+        setBillingEnabled(r.enabled);
+        const items = r.items.filter((o: any) => o.kind === kind);
+        setOffers(items);
+        setOffer(
+          items.find((o: any) => o.priceReady)?.id || items[0]?.id || "",
+        );
+      })
       .catch((e) => setError(e.message));
+  }, [kind]);
+  if (billingEnabled === false && (!user || user.role === "admin"))
+    return (
+      <LegacyGeneration kind={kind} sourceIds={sourceIds} onClose={onClose} />
+    );
   return (
     <Modal
       open
-      title={kind === "image" ? "提交生图任务" : "生成分镜视频"}
+      title={kind === "image" ? "生成资产图片" : "生成分镜视频"}
       onCancel={onClose}
       confirmLoading={busy}
-      okText="确认并提交"
-      onOk={() => form.submit()}
-      width={560}
-    >
-      <Typography.Paragraph>
-        共 {sourceIds.length} 个任务 · {project!.data.settings.ratio}
-      </Typography.Paragraph>
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          channel: "jimeng",
-          model: "seedance2.0",
-          resolution: "720p",
-          webModel: "jimeng-video-seedance-2.0-fast",
-          accountId: "auto",
-        }}
-        onFinish={async (v) => {
-          setBusy(true);
-          setError("");
-          try {
-            const web = kind === "video" && v.channel === "web";
-            await api(
-              `projects/${project!.id}/${web ? "web-video-jobs" : "jobs/batch"}`,
-              "POST",
-              {
-                kind,
+      okButtonProps={{ disabled: !offer || busy }}
+      okText={quote ? `确认并冻结 ${quote.amount} 积分` : "获取生成报价"}
+      width={660}
+      onOk={async () => {
+        setBusy(true);
+        setError("");
+        try {
+          if (!quote) {
+            setQuote(
+              await api(`projects/${project!.id}/generation-quotes`, "POST", {
+                offerId: offer,
                 sourceIds,
+                retryJobId,
                 ratio: project!.data.settings.ratio,
-                ...(web
-                  ? { model: v.webModel, accountId: v.accountId }
-                  : {
-                      model: kind === "video" ? v.model : undefined,
-                      resolution: v.resolution,
-                    }),
-              },
-              key.current,
+              }),
             );
+          } else {
+            await api(`generation-quotes/${quote.id}/confirm`, "POST", {});
+            window.dispatchEvent(new Event("billing-changed"));
             await refreshProject();
             onClose();
             go("jobs", project!.id);
-            message.success("任务已提交，关闭页面后仍会继续执行");
-          } catch (e) {
-            setError((e as Error).message);
-          } finally {
-            setBusy(false);
+            message.success("积分已冻结，任务已提交");
           }
-        }}
-      >
-        {kind === "video" && (
-          <>
-            <Form.Item name="channel" label="视频渠道">
-              <Select
-                onChange={(v) => v === "web" && loadAccounts()}
-                options={[
-                  { value: "jimeng", label: "即梦国内 CLI" },
-                  { value: "web", label: "Dreamina 国际网页" },
-                ]}
-              />
-            </Form.Item>
-            {channel === "web" ? (
-              <>
-                <Form.Item name="accountId" label="账号">
-                  <Select
-                    options={[
-                      { value: "auto", label: "账号池自动分配" },
-                      ...accounts.map((a) => ({
-                        value: a.id,
-                        label: `${a.name} · ${a.totalCredit ?? "余额未知"}`,
-                      })),
-                    ]}
-                  />
-                </Form.Item>
-                <Form.Item name="webModel" label="模型">
-                  <Select
-                    options={[
-                      {
-                        value: "jimeng-video-seedance-2.0-fast",
-                        label: "Seedance 2.0 Fast",
-                      },
-                      {
-                        value: "jimeng-video-seedance-2.0",
-                        label: "Seedance 2.0",
-                      },
-                    ]}
-                  />
-                </Form.Item>
-              </>
-            ) : (
-              <>
-                <Form.Item name="model" label="模型">
-                  <Select
-                    options={[
-                      "seedance2.0",
-                      "seedance2.0fast",
-                      "seedance2.0_vip",
-                      "seedance2.0fast_vip",
-                      "seedance2.5",
-                    ].map((value) => ({ value, label: value }))}
-                  />
-                </Form.Item>
-                <Form.Item name="resolution" label="分辨率">
-                  <Select
-                    options={["720p", "1080p"].map((value) => ({
-                      value,
-                      label: value,
-                    }))}
-                  />
-                </Form.Item>
-              </>
-            )}
-          </>
-        )}
-      </Form>
+        } catch (e) {
+          setError((e as Error).message);
+          if (quote && Date.now() > quote.expiresAt) setQuote(null);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Typography.Paragraph>
+        {sourceIds.length} 个任务 · {project!.data.settings.ratio}
+        {kind === "video" ? " · 按分镜时长生成 · 720p" : ""}
+      </Typography.Paragraph>
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Typography.Text>选择模型</Typography.Text>
+        <Select
+          aria-label="选择生成模型"
+          style={{ width: "100%" }}
+          value={offer || undefined}
+          onChange={(v) => {
+            setOffer(v);
+            setQuote(null);
+            setError("");
+          }}
+          options={offers.map((o) => ({
+            value: o.id,
+            label: o.name + (o.priceReady ? "" : " · 待配置报价"),
+          }))}
+        />
+      </Space>
+      {quote && (
+        <>
+          <Alert
+            className="spaced"
+            type="info"
+            title={`本次最多 ${quote.ceiling} 平台积分；可用 ${quote.wallet.available} 积分`}
+            description={`报价有效至 ${new Date(quote.expiresAt).toLocaleTimeString()}。${quote.basis}。成功交付后结算，失败释放冻结积分。`}
+          />
+          <Table
+            rowKey="sourceId"
+            size="small"
+            pagination={{ pageSize: 5 }}
+            expandable={
+              kind === "image"
+                ? {
+                    expandedRowRender: (r: any) => (
+                      <pre
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          maxHeight: 260,
+                          overflow: "auto",
+                        }}
+                      >
+                        {r.promptPreview}
+                      </pre>
+                    ),
+                  }
+                : undefined
+            }
+            dataSource={quote.items}
+            columns={[
+              { title: "任务", dataIndex: "title" },
+              {
+                title: "预计上游积分",
+                dataIndex: "officialCredits",
+                render: (v) => (v === null ? "按张计价" : v),
+              },
+              { title: "平台积分", dataIndex: "amount" },
+            ]}
+          />
+        </>
+      )}
       <Alert
+        className="spaced"
         type="info"
         title={
           kind === "image"
-            ? `人物生成三列全身＋面部/俯视设定板，场景生成正面/侧面/背面/俯拍四视角，道具生成单张主体图，使用已保存的生图配置，自动携带 ${project!.data.projectReferences?.length || 0} 张公共参考图及各资产专属参考图`
-            : "按分镜时长生成，携带已绑定资产的固定图片；生成将消耗账号积分。"
+            ? "自动使用项目公共提示词、公共参考图及资产专属参考图。人物设定板、场景无人四视角、道具单图。"
+            : "账号由服务器自动分配。查询和重试下载不重复计费；重新生成需要新报价。"
         }
       />
-      {error && (
-        <Alert className="spaced" type="error" showIcon title={error} />
-      )}
+      {error && <Alert className="spaced" type="error" title={error} />}
     </Modal>
   );
 }

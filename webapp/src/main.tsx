@@ -52,12 +52,16 @@ const SettingsPage = lazy(() =>
   import("./settings").then((m) => ({ default: m.SettingsPage })),
 );
 import "./style.css";
+import {Login,WalletPage} from './account-ui';
+const CommercialAdminPage=lazy(()=>import('./commercial-admin').then(m=>({default:m.CommercialAdminPage})));
 const pages: Record<string, string> = {
   projects: "我的项目",
   assets: "资产库",
   shots: "分镜脚本",
   jobs: "生成队列",
   settings: "模型与账号",
+  wallet: "积分与账号",
+  admin: "运营管理",
 };
 function route() {
   const [name, query = ""] = location.hash.replace(/^#\/?/, "").split("?");
@@ -65,62 +69,6 @@ function route() {
     page: pages[name] ? name : "projects",
     project: new URLSearchParams(query).get("project") || "",
   };
-}
-function Login({ onLogin }: { onLogin: (u: User) => void }) {
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  return (
-    <main className="login-page">
-      <section className="login-card">
-        <div className="login-mark">
-          <VideoCameraOutlined />
-        </div>
-        <Typography.Title level={2}>登录工作台</Typography.Title>
-        <Typography.Paragraph type="secondary">
-          继续你的短剧创作
-        </Typography.Paragraph>
-        {error && <Alert type="error" showIcon title={error} />}
-        <Form
-          layout="vertical"
-          size="large"
-          onFinish={async (values) => {
-            setError("");
-            setBusy(true);
-            try {
-              const r = await api("auth/login", "POST", values);
-              onLogin(r.user);
-            } catch (e) {
-              setError((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <Form.Item
-            label="账号"
-            name="username"
-            rules={[{ required: true, message: "请输入账号" }]}
-          >
-            <Input
-              autoComplete="username"
-              autoFocus
-              prefix={<UserOutlined />}
-            />
-          </Form.Item>
-          <Form.Item
-            label="密码"
-            name="password"
-            rules={[{ required: true, message: "请输入密码" }]}
-          >
-            <Input.Password autoComplete="current-password" />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block loading={busy}>
-            登录
-          </Button>
-        </Form>
-      </section>
-    </main>
-  );
 }
 function Workspace({
   user,
@@ -271,14 +219,16 @@ function Workspace({
             <Menu
               mode="inline"
               selectedKeys={[where.page]}
-              onClick={() => go("settings")}
+              onClick={(e) => go(e.key)}
               items={[
                 {
                   key: "settings",
                   icon: <SettingOutlined />,
                   label: "模型与账号",
                 },
-              ]}
+                {key:'admin',label:'运营管理',icon:<SettingOutlined/>},
+                {key:'wallet',label:'积分与账号',icon:<UserOutlined/>},
+              ].filter(i=>i.key==='wallet'||!user||user.role==='admin')}
             />
           </div>
         </Layout.Sider>
@@ -298,7 +248,7 @@ function Workspace({
                     key: "account",
                     label: "账号设置",
                     icon: <SettingOutlined />,
-                    onClick: () => go("settings"),
+                    onClick: () => go("wallet"),
                   },
                   {
                     key: "logout",
@@ -351,8 +301,12 @@ function Workspace({
                 />
               ) : where.page === "projects" ? (
                 <ProjectsPage />
+              ) : where.page === "wallet" ? (
+                <WalletPage />
+              ) : where.page === "admin" ? (
+                user?.role==='admin'?<CommercialAdminPage/>:<Alert type="error" title="仅限管理员"/>
               ) : where.page === "settings" ? (
-                <SettingsPage />
+                !user||user.role==='admin'?<SettingsPage />:<WalletPage/>
               ) : !project ? (
                 <Alert
                   type="info"

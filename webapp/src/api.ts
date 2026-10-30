@@ -70,6 +70,7 @@ export const time = (value?: string) =>
       })
     : "—";
 export const labels: Record<string, string> = {
+  cancelled: '已取消',
   queued: "等待提交",
   preparing: "准备中",
   submitting: "提交中",
