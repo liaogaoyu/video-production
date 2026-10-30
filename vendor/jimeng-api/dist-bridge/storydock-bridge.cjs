@@ -3189,9 +3189,13 @@ async function generateVideo(_model, prompt, {
 
 // src/storydock-bridge.ts
 async function execute(m) {
-  var _a2, _b2, _c, _d, _e;
+  var _a2, _b2, _c, _d, _e, _f;
   const b = m.body || {};
   if (m.method === "runtime") return { available: true, models: ["jimeng-video-seedance-2.0", "jimeng-video-seedance-2.0-fast"] };
+  if (m.method === "usage") {
+    const r = await request("post", "/commerce/v1/benefits/user_credit_history", m.token, { data: { cursor: b.cursor || "", count: 50 }, noDefaultParams: true, headers: { Referer: "https://dreamina.capcut.com/" } });
+    return { records: (_a2 = r.records) == null ? void 0 : _a2.map((x) => ({ amount: x.amount, submit_id: x.submit_id, history_id: x.history_id, history_type: x.history_type, status: x.status })), hasMore: r.has_more, cursor: r.new_cursor };
+  }
   if (m.method === "credit") return getCredit(m.token);
   if (m.method === "check-upload") {
     const image = await uploadImageBuffer(await import_promises.default.readFile(b.file), m.token, parseRegionFromToken(m.token));
@@ -3207,9 +3211,9 @@ async function execute(m) {
       return ((_a3 = v == null ? void 0 : v.task) == null ? void 0 : _a3.submit_id) === b.submitId;
     });
     if (!h) return { status: "pending", found: false };
-    const url = ((_a2 = h.item_list) == null ? void 0 : _a2[0]) && extractVideoUrl(h.item_list[0]);
-    if (url) return { status: "succeeded", historyId: h.history_record_id || id, url, model: ((_c = (_b2 = h.task) == null ? void 0 : _b2.original_input) == null ? void 0 : _c.model_req_key) || null };
-    if (h.status === 30 || ((_d = h.task) == null ? void 0 : _d.status) === 30 || h.fail_code) return { status: "failed", code: h.fail_code || ((_e = h.task) == null ? void 0 : _e.fail_code) };
+    const url = ((_b2 = h.item_list) == null ? void 0 : _b2[0]) && extractVideoUrl(h.item_list[0]);
+    if (url) return { status: "succeeded", historyId: h.history_record_id || id, url, model: ((_d = (_c = h.task) == null ? void 0 : _c.original_input) == null ? void 0 : _d.model_req_key) || null };
+    if (h.status === 30 || ((_e = h.task) == null ? void 0 : _e.status) === 30 || h.fail_code) return { status: "failed", code: h.fail_code || ((_f = h.task) == null ? void 0 : _f.fail_code) };
     return { status: "pending", found: true };
   }
   if (m.method === "download") {

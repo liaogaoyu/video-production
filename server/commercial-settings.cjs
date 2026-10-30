@@ -17,7 +17,7 @@ function settingsService(s) {
       smtpConfigured: !!get().smtpSecret,
       officialQuotesSupported: { jimeng: false, dreamina_web_api: false },
       billingBasis:
-        "官方单任务报价/消耗尚未验证；当前使用管理员配置价格，不使用账号余额差计费",
+        "人民币预扣，按官方任务实际积分多退少补；未取得实际消耗不结算",
     };
   }
   function save(b) {
@@ -47,6 +47,12 @@ function settingsService(s) {
       !/^data:image\/(png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(c.qrDataUrl)
     )
       throw new ApiError(400, "invalid_qr", "二维码只支持PNG、JPEG、WebP图片");
+    if (b.pointsPerYuan !== undefined && b.pointsPerYuan !== 100)
+      throw new ApiError(
+        409,
+        "rate_locked",
+        "人民币金额以分存储，不能修改面值",
+      );
     if (b.pointsPerYuan !== undefined) {
       if (
         !Number.isInteger(b.pointsPerYuan) ||
@@ -86,7 +92,27 @@ function settingsService(s) {
           c.rates[group] = {
             costFen: r.costFen,
             markupPercent: r.markupPercent,
+            estimateCreditsPerSecond: r.estimateCreditsPerSecond ?? null,
           };
+          if (
+            r.estimateCreditsPerSecond !== undefined &&
+            r.estimateCreditsPerSecond !== null
+          ) {
+            if (
+              typeof r.estimateCreditsPerSecond !== "number" ||
+              !Number.isFinite(r.estimateCreditsPerSecond) ||
+              r.estimateCreditsPerSecond < 0 ||
+              r.estimateCreditsPerSecond > 100000 ||
+              !/^(?:0|[1-9]\d*)(?:\.\d{1,3})?$/.test(
+                String(r.estimateCreditsPerSecond),
+              )
+            )
+              throw new ApiError(
+                400,
+                "invalid_rate",
+                "预估每秒积分最多三位小数",
+              );
+          }
         } else {
           if (
             !Number.isInteger(r.purchaseFen) ||
@@ -101,7 +127,27 @@ function settingsService(s) {
             purchaseFen: r.purchaseFen,
             purchaseCredits: r.purchaseCredits,
             markupPercent: r.markupPercent,
+            estimateCreditsPerSecond: r.estimateCreditsPerSecond ?? null,
           };
+          if (
+            r.estimateCreditsPerSecond !== undefined &&
+            r.estimateCreditsPerSecond !== null
+          ) {
+            if (
+              typeof r.estimateCreditsPerSecond !== "number" ||
+              !Number.isFinite(r.estimateCreditsPerSecond) ||
+              r.estimateCreditsPerSecond < 0 ||
+              r.estimateCreditsPerSecond > 100000 ||
+              !/^(?:0|[1-9]\d*)(?:\.\d{1,3})?$/.test(
+                String(r.estimateCreditsPerSecond),
+              )
+            )
+              throw new ApiError(
+                400,
+                "invalid_rate",
+                "预估每秒积分最多三位小数",
+              );
+          }
         }
       }
     }

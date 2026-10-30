@@ -405,10 +405,10 @@ async function createHttpApp(services) {
 
   app.addHook('onSend',async(request,reply,payload)=>{
     if(request.url.startsWith('/api/'))reply.header('Cache-Control','private, no-store');
-    if(request.appUser?.role!=='user'||typeof payload!=='string'||!String(reply.getHeader('content-type')||'').includes('application/json'))return payload;
+    if(!request.appUser||typeof payload!=='string'||!String(reply.getHeader('content-type')||'').includes('application/json'))return payload;
     if(!/\/(?:projects|jobs)(?:\/|$)/.test(request.url))return payload;
     let data;try{data=JSON.parse(payload);}catch{return payload;}
-    const clean=(value)=>{if(!value||typeof value!=='object')return;if(value.id&&value.sourceId&&value.status){const b=services.db.prepare('SELECT reserved,charged,status,snapshot,usage_json FROM job_billing WHERE job_id=?').get(value.id);if(b){const snap=JSON.parse(b.snapshot);value.model=snap.modelName;value.billing={reserved:b.reserved,charged:b.charged,status:b.status,basis:JSON.parse(b.usage_json||'{}').source||snap.source};}}for(const k of Object.keys(value)){if(['accountId','submitId','provider'].includes(k))delete value[k];else clean(value[k]);}};
+    const clean=(value)=>{if(!value||typeof value!=='object')return;if(value.id&&value.sourceId&&value.status){const b=services.db.prepare('SELECT reserved,charged,due,actual_amount,status,snapshot,usage_json FROM job_billing WHERE job_id=?').get(value.id);if(b){const snap=JSON.parse(b.snapshot);value.model=snap.modelName;value.billing={currency:"CNY",reserved:b.reserved,charged:b.charged,due:b.due,actualAmount:b.actual_amount,status:b.status,basis:JSON.parse(b.usage_json||'{}').source||snap.source};}}for(const k of Object.keys(value)){if(request.appUser.role==='user'&&['accountId','submitId','provider'].includes(k))delete value[k];else clean(value[k]);}};
     clean(data);return JSON.stringify(data);
   });
   app.get("/*", async (request, reply) => {

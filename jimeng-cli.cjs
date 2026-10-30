@@ -145,7 +145,7 @@ function createJimengCliPool({ directory, safeStorage, execFileImpl = execFile, 
         : "",
     ].filter(Boolean).join("，");
     if (submitId && (!status || status === 'querying')) return { kind: 'accepted', submitId, status: status || 'querying', message: queueNote };
-    if (status === 'success') return { kind: 'succeeded', submitId };
+    if (status === 'success') return { kind: 'succeeded', submitId, officialUsage: require('./server/actual-usage.cjs').cliUsage(result.stdout,submitId) };
     if (/AigcComplianceConfirmationRequired/.test(output)) return { kind: 'blocked', code: 'web_confirmation_required', submitId, message: '请先用这个即梦账号在网页里打开 Seedance，完成首次使用确认后再提交' };
     if (/没有 dreamina_cli 使用权限|仅限会员用户使用/.test(output)) return { kind: 'blocked', code: 'permission_denied', submitId, message: '账号没有官方 CLI 生成权限' };
     if (status === 'fail') return { kind: 'failed', code: /upload resource/i.test(reason || '') ? 'resource_upload_failed' : undefined, submitId, message: String(reason || '即梦生成失败').slice(0, 500) };

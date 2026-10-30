@@ -30,6 +30,7 @@ function registerCommercialApi(app, s) {
   app.get("/api/v1/me/wallet", async (r) => {
     const u = user(r);
     b.reconcile();
+    b.collectDue(u.id);
     return { wallet: b.wallet(u.id) };
   });
   app.get("/api/v1/me/ledger", async (r) => ({ items: b.ledger(user(r).id) }));
@@ -74,7 +75,7 @@ function registerCommercialApi(app, s) {
       offset = Math.max(0, Math.min(100000, Number(r.query.offset) || 0));
     const items = db
       .prepare(
-        "SELECT u.id,u.username,u.email,u.role,u.status,u.email_verified_at,u.created_at,COALESCE(w.available,0) available,COALESCE(w.frozen,0) frozen FROM app_users u LEFT JOIN wallets w ON w.user_id=u.id WHERE u.username LIKE ? OR u.email LIKE ? OR u.id=? ORDER BY u.created_at DESC LIMIT 100 OFFSET ?",
+        "SELECT u.id,u.username,u.email,u.role,u.status,u.email_verified_at,u.created_at,COALESCE(w.available,0) available,COALESCE(w.frozen,0) frozen,(SELECT COALESCE(SUM(b.due),0) FROM job_billing b WHERE b.user_id=u.id) due FROM app_users u LEFT JOIN wallets w ON w.user_id=u.id WHERE u.username LIKE ? OR u.email LIKE ? OR u.id=? ORDER BY u.created_at DESC LIMIT 100 OFFSET ?",
       )
       .all("%" + q + "%", "%" + q + "%", q, offset);
     return { items };
@@ -115,7 +116,7 @@ function registerCommercialApi(app, s) {
   );
   app.post("/api/v1/admin/users/:id/adjustments", async (r) => {
     const actor = admin(r),
-      v = r.body?.points,
+      v = r.body?.deltaFen ?? r.body?.points,
       note = r.body?.note,
       key = String(r.headers["idempotency-key"] || "");
     if (
@@ -131,7 +132,7 @@ function registerCommercialApi(app, s) {
       throw new ApiError(
         400,
         "invalid_adjustment",
-        "请填写有效调整积分、原因和唯一标识",
+        "请填写有效调整金额、原因和唯一标识",
       );
     return transaction(db, () => {
       if (!db.prepare("SELECT id FROM app_users WHERE id=?").get(r.params.id))
@@ -156,6 +157,7 @@ function registerCommercialApi(app, s) {
         operatorId: actor.id,
         note,
       });
+      b.collectDue(r.params.id);
       return { wallet: b.wallet(r.params.id) };
     });
   });

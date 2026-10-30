@@ -33,7 +33,11 @@ function price(unitsMilli, rate, points, kind) {
 }
 function wallet(db, userId) {
   db.prepare("INSERT OR IGNORE INTO wallets(user_id) VALUES(?)").run(userId);
-  return db.prepare("SELECT * FROM wallets WHERE user_id=?").get(userId);
+  return {
+    ...db.prepare("SELECT * FROM wallets WHERE user_id=?").get(userId),
+    due: due(db, userId),
+    currency: "CNY",
+  };
 }
 function movement(
   db,
@@ -60,7 +64,7 @@ function movement(
     )
     .run(available, frozen, userId, available, frozen);
   if (!r.changes)
-    throw new ApiError(409, "insufficient_points", "可用积分不足");
+    throw new ApiError(409, "insufficient_points", "可用余额不足");
   const id = crypto.randomUUID();
   db.prepare("INSERT INTO wallet_ledger VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(
     id,
@@ -77,6 +81,36 @@ function movement(
   );
   return db.prepare("SELECT * FROM wallet_ledger WHERE id=?").get(id);
 }
+function due(db, userId) {
+  return db
+    .prepare("SELECT COALESCE(SUM(due),0) n FROM job_billing WHERE user_id=?")
+    .get(userId).n;
+}
+function collectDue(db, userId) {
+  return transaction(db, () => {
+    for (const b of db
+      .prepare(
+        "SELECT * FROM job_billing WHERE user_id=? AND status='due' ORDER BY created_at,job_id",
+      )
+      .all(userId)) {
+      const paid = Math.min(b.due, wallet(db, userId).available);
+      if (!paid) break;
+      movement(db, {
+        userId,
+        key: `supplement:${b.job_id}:${b.charged}`,
+        action: "supplement",
+        available: -paid,
+        frozen: 0,
+        amount: paid,
+        jobId: b.job_id,
+        note: "实际消耗补扣",
+      });
+      db.prepare(
+        "UPDATE job_billing SET charged=charged+?,due=due-?,status=?,updated_at=? WHERE job_id=?",
+      ).run(paid, paid, paid === b.due ? "settled" : "due", now(), b.job_id);
+    }
+  });
+}
 function reconcileJob(db, id) {
   return transaction(db, () => {
     const b = db
@@ -89,64 +123,66 @@ function reconcileJob(db, id) {
       !["succeeded", "failed", "auth_expired", "cancelled"].includes(job.status)
     )
       return;
-    let charge = 0,
-      usage = null;
     const snap = JSON.parse(b.snapshot);
+    let final = 0,
+      usage = null;
     if (job.status === "succeeded") {
-      charge = b.reserved;
-      let result;
-      try {
-        result = JSON.parse(job.result_json || "{}");
-      } catch {
-        result = {};
-      }
-      const u = result.officialUsage;
-      if (
-        u?.source === "official_actual" &&
-        u.taskId === job.remote_task_id &&
-        u.credits !== undefined
-      ) {
+      if (snap.kind === "image") {
+        // A job delivers one saved image. Charge the delivered count, never an image request estimate.
+        if (!job.media_id) return;
+        final = price(1000, snap.rate, 100, "image");
+        usage = { source: "delivered_image", count: 1, mediaId: job.media_id };
+      } else {
+        let result;
         try {
-          const units = milli(u.credits);
-          charge = Math.min(
-            b.reserved,
-            price(units, snap.rate, snap.pointsPerYuan, snap.kind),
-          );
-          usage = {
-            source: "official_actual",
-            credits: u.credits,
-            taskId: u.taskId,
-            chargedAtCap:
-              price(units, snap.rate, snap.pointsPerYuan, snap.kind) >
-              b.reserved,
-          };
+          result = JSON.parse(job.result_json || "{}");
         } catch {
-          usage = { source: "configured", reason: "invalid_official_usage" };
+          result = {};
         }
+        const u = result.officialUsage;
+        if (
+          !u ||
+          u.source !== "official_actual" ||
+          !job.remote_task_id ||
+          u.taskId !== job.remote_task_id ||
+          u.credits === undefined
+        )
+          return;
+        try {
+          final = price(milli(u.credits), snap.rate, 100, snap.kind);
+        } catch {
+          return;
+        }
+        usage = { ...u };
       }
     }
+    const extra = Math.max(0, final - b.reserved),
+      paidExtra = Math.min(extra, wallet(db, b.user_id).available);
+    const remaining = extra - paidExtra,
+      paid = final - remaining;
     movement(db, {
       userId: b.user_id,
       key: "settle:" + id,
       action: job.status === "succeeded" ? "settle" : "refund",
-      available: b.reserved - charge,
+      available: Math.max(0, b.reserved - final) - paidExtra,
       frozen: -b.reserved,
-      amount: charge,
+      amount: paid,
       jobId: id,
       note:
         job.status === "succeeded"
-          ? (usage?.source || snap.source) + "计价，成功交付"
-          : "生成失败，释放全部冻结积分",
+          ? "按实际消耗结算，多退少补"
+          : "生成失败，退回预扣金额",
     });
     db.prepare(
-      "UPDATE job_billing SET status=?,charged=?,usage_json=?,updated_at=? WHERE job_id=? AND status=?",
+      "UPDATE job_billing SET status=?,charged=?,actual_amount=?,due=?,usage_json=?,updated_at=? WHERE job_id=? AND status='frozen'",
     ).run(
-      job.status === "succeeded" ? "settled" : "refunded",
-      charge,
-      JSON.stringify(usage || { source: snap.source }),
+      job.status === "succeeded" ? (remaining ? "due" : "settled") : "refunded",
+      paid,
+      final,
+      remaining,
+      JSON.stringify(usage || { source: "failed_refund" }),
       now(),
       id,
-      "frozen",
     );
   });
 }
@@ -192,6 +228,8 @@ function createBilling(s) {
               resolutions: ["720p"],
               priceReady:
                 o.kind === "image" ||
+                cfg.get().rates[o.group_key]?.estimateCreditsPerSecond !=
+                  null ||
                 (JSON.parse(o.pricing_json).perSecondCredits !== undefined &&
                   JSON.parse(o.pricing_json).perSecondCredits !== null) ||
                 !!JSON.parse(o.pricing_json).rateCards?.length,
@@ -311,7 +349,9 @@ function createBilling(s) {
               r.resolution === resolution &&
               r.referenceMode === "any",
           );
-        if (entry) units = milli(entry.credits);
+        if (rate.estimateCreditsPerSecond != null)
+          units = milli(rate.estimateCreditsPerSecond) * row.duration;
+        else if (entry) units = milli(entry.credits);
         else if (
           rules.perSecondCredits !== undefined &&
           rules.perSecondCredits !== null
@@ -365,7 +405,8 @@ function createBilling(s) {
       },
       items,
       rate,
-      pointsPerYuan: settings.pointsPerYuan,
+      pointsPerYuan: 100,
+      currency: "CNY",
       pricingRevision: settings.revision,
     };
     const id = crypto.randomUUID(),
@@ -390,7 +431,8 @@ function createBilling(s) {
       ceiling: amount,
       items,
       expiresAt,
-      basis: "配置计价；官方单任务报价/实际消耗接口尚未验证",
+      basis:
+        "配置预估仅用于预扣；成功后按官方实际消耗多退少补，缺少实际记录时待结算",
       wallet: wallet(db, user.id),
     };
   }
@@ -402,7 +444,7 @@ function createBilling(s) {
       if (!q) throw new ApiError(404, "quote_missing", "报价不存在");
       require("./tenant.cjs").own(db, q.project_id, user);
       if (q.status === "confirmed") return JSON.parse(q.result_json);
-      if (q.expires_at < Date.now())
+      if (q.status !== "open" || q.expires_at < Date.now())
         throw new ApiError(409, "quote_expired", "报价已过期，请重新报价");
       if (!cfg.get().enabled && user.role !== "admin")
         throw new ApiError(403, "billing_closed", "生成服务暂未开放");
@@ -420,11 +462,14 @@ function createBilling(s) {
           "quote_changed",
           "模型或生成内容已变化，请重新报价",
         );
+      collectDue(db, user.id);
+      if (due(db, user.id))
+        throw new ApiError(409, "unpaid_balance", "有待补扣费用，请先充值补齐");
       if (wallet(db, user.id).available < q.amount)
         throw new ApiError(
           409,
           "insufficient_points",
-          "可用积分不足，请添加微信充值",
+          "可用余额不足，请添加微信充值",
         );
       if (
         offer.provider === "jimeng" &&
@@ -511,7 +556,7 @@ function createBilling(s) {
           frozen: item.amount,
           amount: item.amount,
           jobId,
-          note: "生成前冻结",
+          note: "生成前预扣，按实际消耗多退少补",
         });
         db.prepare(
           "INSERT INTO job_billing(job_id,user_id,quote_id,reserved,snapshot,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
@@ -533,7 +578,8 @@ function createBilling(s) {
   }
   function topup(actor, id, b, key) {
     integer(b.amountFen, "充值金额", 1, 1e8);
-    integer(b.giftPoints ?? 0, "赠送积分", 0, 1e8);
+    b = { ...b, giftPoints: b.giftFen ?? b.giftPoints ?? 0 };
+    integer(b.giftPoints, "赠送金额（分）", 0, 1e8);
     if (
       typeof key !== "string" ||
       key.length < 8 ||
@@ -559,11 +605,7 @@ function createBilling(s) {
           throw new ApiError(409, "key_conflict", "这个充值标识已用于其他内容");
         return { topupId: old.id, wallet: wallet(db, id) };
       }
-      const points = integer(
-          Math.floor((b.amountFen * cfg.get().pointsPerYuan) / 100),
-          "充值积分",
-          1,
-        ),
+      const points = integer(b.amountFen, "充值金额（分）", 1),
         gift = b.giftPoints || 0,
         topupId = crypto.randomUUID();
       db.prepare("INSERT INTO manual_topups VALUES(?,?,?,?,?,?,?,?,?)").run(
@@ -587,6 +629,7 @@ function createBilling(s) {
         operatorId: actor.id,
         note: b.note,
       });
+      collectDue(db, id);
       return { topupId, wallet: wallet(db, id) };
     });
   }
@@ -605,6 +648,7 @@ function createBilling(s) {
     updateOffer,
     topup,
     reconcile,
+    collectDue: (id) => collectDue(db, id),
     wallet: (id) => wallet(db, id),
     ledger: (id) =>
       db

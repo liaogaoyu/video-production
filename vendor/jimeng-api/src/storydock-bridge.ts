@@ -11,6 +11,10 @@ import { closeAllBrowserSessions } from './lib/abogus-browser.ts';
 async function execute(m:any) {
  const b=m.body||{};
  if(m.method==='runtime') return {available:true,models:['jimeng-video-seedance-2.0','jimeng-video-seedance-2.0-fast']};
+ if(m.method==='usage') {
+  const r=await request('post','/commerce/v1/benefits/user_credit_history',m.token,{data:{cursor:b.cursor||'',count:50},noDefaultParams:true,headers:{Referer:'https://dreamina.capcut.com/'}});
+  return {records:r.records?.map((x:any)=>({amount:x.amount,submit_id:x.submit_id,history_id:x.history_id,history_type:x.history_type,status:x.status})),hasMore:r.has_more,cursor:r.new_cursor};
+ }
  if(m.method==='credit') return getCredit(m.token);
  if(m.method==='check-upload'){const image=await uploadImageBuffer(await fs.readFile(b.file),m.token,parseRegionFromToken(m.token));await checkImageContent(image.uri,m.token,parseRegionFromToken(m.token));return {uploaded:true,width:image.width,height:image.height};}
  if(m.method==='submit') return generateVideo(b.model,b.prompt,{ratio:b.ratio,resolution:'720p',duration:b.duration,files:b.files||{},functionMode:b.references?'omni_reference':'first_last_frames',submitOnly:true,clientSubmitId:b.submitId},m.token);

@@ -9,10 +9,11 @@ function createJimengProvider({ repos, pool, media, db, owner }) {
   }
   async function withLease(accountId, purpose, work) {
     if (!repos.accounts.runtime("cli")?.available) return { outcome: "retry", message: "即梦 CLI 运行环境正在准备，请稍候" };
-    const locked = repos.accounts.tryLease(accountId, owner, purpose, 240000);
+    const leaseOwner=purpose==="billing"?owner+"-billing":owner;
+    const locked = repos.accounts.tryLease(accountId, leaseOwner, purpose, 240000);
     if (!locked) return { outcome: "retry", message: "账号正在执行其他 CLI 操作" };
     try { return await work(); }
-    finally { repos.accounts.releaseLease(accountId, owner); }
+    finally { repos.accounts.releaseLease(accountId, leaseOwner); }
   }
   function mapSubmit(result) {
     if (result.kind === "accepted" && result.submitId) return { outcome: "remote", remoteTaskId: result.submitId, queueNote: result.message || "" };
@@ -22,6 +23,12 @@ function createJimengProvider({ repos, pool, media, db, owner }) {
     return { outcome: "unknown", message: result.message || "提交结果未确认" };
   }
   return {
+    async usage(job) {
+      return withLease(job.accountId, "billing", async () => {
+        const result=await pool.queryVideo(job.accountId,job.remoteTaskId,false);
+        return result.officialUsage || null;
+      }).then(r=>r?.source==='official_actual'?r:null);
+    },
     async prepare(job) {
       imagePaths(job);
     },
@@ -69,7 +76,7 @@ function createJimengProvider({ repos, pool, media, db, owner }) {
           if (result.kind !== "succeeded" || !result.files?.length) return mapSubmit(result);
           const bytes = require("node:fs").readFileSync(result.files[0]);
           const stored = await repos.content.saveMedia({ projectId: job.projectId, bytes, source: "jimeng", video: true, jobId: job.id });
-          return { outcome: "succeeded", mediaId: stored.id };
+          return { outcome: "succeeded", mediaId: stored.id, accounting: result.officialUsage ? {officialUsage:result.officialUsage} : undefined };
         } catch (error) {
           return { outcome: "download_failed", message: error.message };
         }
