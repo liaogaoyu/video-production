@@ -109,6 +109,7 @@ function createWorker(services = openServices()) {
         }
       }
       await services.global.tick();
+      services.billing.reconcile();
       await scheduler.tick({ backgroundImages: true });
     } catch (error) {
       console.error(error.message);

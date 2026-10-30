@@ -69,9 +69,10 @@ async function createHttpApp(services) {
     try { tenant.checkRoute(services.db,request); tenant.scope.run({user:request.appUser},done); }
     catch(error){done(error);}
   });
-  app.get('/api/v1/admin/settings',async()=>commercialSettings.publicSettings());
-  app.put('/api/v1/admin/settings',async r=>commercialSettings.save(r.body||{}));
-  app.post('/api/v1/admin/settings/test-email',async r=>{const to=String(r.body?.email||'');if(!/^\S+@\S+\.\S+$/.test(to))throw new ApiError(400,'invalid_email','请输入测试邮箱');await commercialSettings.mail(to,'工作台邮件测试','邮件配置测试成功。');return {sent:true};});
+  app.get('/api/v1/admin/settings',async r=>{if(r.appUser?.role!=='admin')throw new ApiError(403,'admin_required','仅限管理员');return commercialSettings.publicSettings();});
+  app.put('/api/v1/admin/settings',async r=>{if(r.appUser?.role!=='admin')throw new ApiError(403,'admin_required','仅限管理员');return commercialSettings.save(r.body||{});});
+  app.post('/api/v1/admin/settings/test-email',async r=>{if(r.appUser?.role!=='admin')throw new ApiError(403,'admin_required','仅限管理员');const to=String(r.body?.email||'');if(!/^\S+@\S+\.\S+$/.test(to))throw new ApiError(400,'invalid_email','请输入测试邮箱');await commercialSettings.mail(to,'工作台邮件测试','邮件配置测试成功。');return {sent:true};});
+  require('./commercial-api.cjs').registerCommercialApi(app,services);
   const web=services.web;
   app.addHook("onClose",async()=>{await web.close();});
   app.addHook("onSend",async(request,reply,payload)=>{if(request.url.includes("/dreamina-web/"))reply.header("Cache-Control","no-store");return payload;});
@@ -403,7 +404,7 @@ async function createHttpApp(services) {
     if(request.appUser?.role!=='user'||typeof payload!=='string'||!String(reply.getHeader('content-type')||'').includes('application/json'))return payload;
     if(!/\/(?:projects|jobs)(?:\/|$)/.test(request.url))return payload;
     let data;try{data=JSON.parse(payload);}catch{return payload;}
-    const clean=(value)=>{if(!value||typeof value!=='object')return;for(const k of Object.keys(value)){if(['accountId','submitId','provider'].includes(k))delete value[k];else clean(value[k]);}};
+    const clean=(value)=>{if(!value||typeof value!=='object')return;if(value.id&&value.sourceId&&value.status){const b=services.db.prepare('SELECT reserved,charged,status,snapshot,usage_json FROM job_billing WHERE job_id=?').get(value.id);if(b){const snap=JSON.parse(b.snapshot);value.model=snap.modelName;value.billing={reserved:b.reserved,charged:b.charged,status:b.status,basis:JSON.parse(b.usage_json||'{}').source||snap.source};}}for(const k of Object.keys(value)){if(['accountId','submitId','provider'].includes(k))delete value[k];else clean(value[k]);}};
     clean(data);return JSON.stringify(data);
   });
   app.get("/*", async (request, reply) => {
