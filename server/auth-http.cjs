@@ -126,7 +126,7 @@ function createAuth(services) {
           throw new ApiError(400, "invalid_login", "请输入账号和密码");
         const u = db
           .prepare("SELECT * FROM app_users WHERE username=?")
-          .get(username.trim().toLowerCase());
+          .get(username.trim()) || db.prepare("SELECT * FROM app_users WHERE username=?").get(username.trim().toLowerCase());
         if (!u || u.status!=='active' || (u.role!=='admin'&&!u.email_verified_at) || !(await verify(password, u.password_hash))) {
           if (attempts.size > 1000) attempts.clear();
           attempts.set(key, {
@@ -196,7 +196,7 @@ function createAuth(services) {
         ).run(username.trim(), await hashPassword(password), u.id);
         db.prepare("DELETE FROM app_sessions WHERE user_id=?").run(u.id);
         issue(request, reply, u.id);
-        return { user: { id: u.id, username: username.trim() } };
+        return { user: { id: u.id, username: username.trim(),role:u.role,email:u.email } };
       });
     },
   };

@@ -92,7 +92,7 @@ function createJobRepository(db, { record }) {
         assetId: asset.id,
         title: asset.name,
         promptOriginal: asset.prompt,
-        promptSubmitted: buildAssetImagePrompt([db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt,asset.prompt].filter(Boolean).join('\n\n'), asset.type),
+        promptSubmitted: buildAssetImagePrompt(asset.prompt,asset.type,db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt),
         projectPromptOriginal: db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt || '',
         references: references.map((item, index) => ({ mediaId: item.media_id, index: index + 1, sha256: item.sha256, scope: item.scope })),
         ratio,

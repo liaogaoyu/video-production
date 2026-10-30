@@ -1,5 +1,7 @@
-function buildAssetImagePrompt(prompt, type) {
-  const source = String(prompt || '').trim();
+function buildAssetImagePrompt(prompt, type, commonPrompt = '') {
+  const assetSource = String(prompt || '').trim();
+  const common = String(commonPrompt || '').trim();
+  const source = common ? `【项目公共风格】\n${common}\n公共风格统一媒介、配色与质感；不新增人物，不覆盖资产身份、剧情年代及类型展示规则。\n\n【当前资产】\n${assetSource}` : assetSource;
   const heading = '【资产最终展示版式】';
   const layout = type === '角色' || type === 'character'
     ? '生成一张人物多视角设定板，左侧占整图宽度约65%、右侧约35%。左侧三列等宽，从左到右依次为正面全身、侧面全身、背面全身，人物站立，三列头顶与脚底对齐、身高比例一致、完整全身不裁切。右侧上下两格：上格为清晰的正面面部及肩部特写，下格为摄像机从头顶向下拍摄的俯视图，人物仍自然直立，不用低头鞠躬替代俯视机位。共五个展示区域，左侧三列不切成上下两排；浅灰或中性背景、统一柔光，所有区域保持同一人物的脸、发型、服装与配饰；群体资产各区域沿用同一群体。版式只规定展示方式，人物外观与画风按正文设计。'

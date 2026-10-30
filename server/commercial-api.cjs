@@ -1,19 +1,230 @@
-const {ApiError}=require('./errors.cjs'),{transaction}=require('./db.cjs'),{movement,reconcileJob}=require('./billing.cjs');
-function registerCommercialApi(app,s){const b=s.billing,db=s.db;const user=r=>{if(!r.appUser)throw new ApiError(401,'unauthorized','请先登录');return r.appUser;},admin=r=>{const u=user(r);if(u.role!=='admin')throw new ApiError(403,'admin_required','仅限管理员');return u;};
- app.get('/api/v1/model-offers',async()=>({items:b.listOffers()}));
- app.get('/api/v1/recharge-instructions',async()=>{const c=b.pricing.get();return {wechat:c.wechat,qrDataUrl:c.qrDataUrl,note:c.rechargeNote,pointsPerYuan:c.pointsPerYuan};});
- app.get('/api/v1/me/wallet',async r=>{const u=user(r);b.reconcile();return {wallet:b.wallet(u.id)};});
- app.get('/api/v1/me/ledger',async r=>({items:b.ledger(user(r).id)}));
- app.post('/api/v1/projects/:id/generation-quotes',async r=>b.quote(user(r),r.params.id,r.body||{}));
- app.post('/api/v1/generation-quotes/:id/confirm',async(r,reply)=>{reply.code(202);return b.confirm(user(r),r.params.id);});
- app.get('/api/v1/admin/model-offers',async r=>{admin(r);return {items:b.listOffers(true)};});
- app.patch('/api/v1/admin/model-offers/:id',async r=>{admin(r);return {items:b.updateOffer(r.params.id,r.body||{})};});
- app.get('/api/v1/admin/users',async r=>{admin(r);const q=String(r.query.q||'').slice(0,254),offset=Math.max(0,Math.min(100000,Number(r.query.offset)||0));const items=db.prepare("SELECT u.id,u.username,u.email,u.role,u.status,u.email_verified_at,u.created_at,COALESCE(w.available,0) available,COALESCE(w.frozen,0) frozen FROM app_users u LEFT JOIN wallets w ON w.user_id=u.id WHERE u.username LIKE ? OR u.email LIKE ? OR u.id=? ORDER BY u.created_at DESC LIMIT 100 OFFSET ?").all('%'+q+'%','%'+q+'%',q,offset);return {items};});
- app.patch('/api/v1/admin/users/:id',async r=>{const actor=admin(r),status=r.body?.status;if(!['active','disabled'].includes(status))throw new ApiError(400,'invalid_status','账号状态无效');if(actor.id===r.params.id)throw new ApiError(409,'self_disable','不能停用当前管理员');if(db.prepare("SELECT id FROM app_users WHERE id=? AND role='admin'").get(r.params.id))throw new ApiError(403,'admin_user','不能在此停用其他管理员');const result=db.prepare('UPDATE app_users SET status=? WHERE id=?').run(status,r.params.id);if(!result.changes)throw new ApiError(404,'user_missing','用户不存在');if(status==='disabled')db.prepare('DELETE FROM app_sessions WHERE user_id=?').run(r.params.id);s.repos.record('admin.user.status',{userId:r.params.id,status,operatorId:actor.id});return {ok:true};});
- app.post('/api/v1/admin/users/:id/topups',async r=>b.topup(admin(r),r.params.id,r.body||{},String(r.headers['idempotency-key']||'')));
- app.post('/api/v1/admin/users/:id/adjustments',async r=>{const actor=admin(r),v=r.body?.points,note=r.body?.note,key=String(r.headers['idempotency-key']||'');if(!Number.isSafeInteger(v)||!v||Math.abs(v)>1e8||typeof note!=='string'||!note.trim()||note.length>500||key.length<8||key.length>150)throw new ApiError(400,'invalid_adjustment','请填写有效调整积分、原因和唯一标识');return transaction(db,()=>{if(!db.prepare('SELECT id FROM app_users WHERE id=?').get(r.params.id))throw new ApiError(404,'user_missing','用户不存在');const old=db.prepare('SELECT * FROM wallet_ledger WHERE business_key=?').get('adjust:'+key);if(old&&(old.user_id!==r.params.id||old.available_delta!==v||old.note!==note))throw new ApiError(409,'key_conflict','调整标识已用于其他内容');movement(db,{userId:r.params.id,key:'adjust:'+key,action:'adjust',available:v,frozen:0,amount:Math.abs(v),operatorId:actor.id,note});return {wallet:b.wallet(r.params.id)};});});
- app.get('/api/v1/admin/ledger',async r=>{admin(r);const id=String(r.query.userId||'');return {items:id?b.ledger(id):db.prepare('SELECT l.*,u.username FROM wallet_ledger l JOIN app_users u ON u.id=l.user_id ORDER BY l.created_at DESC LIMIT 500').all()};});
- app.get('/api/v1/admin/billing',async r=>{admin(r);b.reconcile();return {items:db.prepare('SELECT b.*,u.username,j.status job_status,j.error_message,j.remote_task_id,j.account_id FROM job_billing b JOIN app_users u ON u.id=b.user_id JOIN jobs j ON j.id=b.job_id ORDER BY b.created_at DESC LIMIT 500').all().map(x=>({...x,snapshot:JSON.parse(x.snapshot),usage:x.usage_json?JSON.parse(x.usage_json):null}))};});
- app.post('/api/v1/admin/billing/:id/refund',async r=>{const actor=admin(r);if(r.body?.confirmedNoDelivery!==true||typeof r.body?.note!=='string'||!r.body.note.trim()||r.body.note.length>500)throw new ApiError(400,'confirmation_required','请确认无法交付并填写原因');return transaction(db,()=>{const j=db.prepare('SELECT * FROM jobs WHERE id=?').get(r.params.id),billing=db.prepare('SELECT * FROM job_billing WHERE job_id=?').get(r.params.id);if(!j||!billing)throw new ApiError(404,'not_found','收费任务不存在');if(billing.status==='refunded')return {ok:true};if(j.status==='succeeded')throw new ApiError(409,'delivered','任务已交付，不可标记交付失败');if(j.lease_until&&j.lease_until>new Date().toISOString())throw new ApiError(409,'job_busy','任务操作正在执行，请稍后重试');db.prepare("UPDATE jobs SET status='failed',paused=1,error_message=?,version=version+1,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run('人工确认未交付：'+r.body.note,new Date().toISOString(),j.id);reconcileJob(db,j.id);s.repos.record('admin.job.refunded',{jobId:j.id,projectId:j.project_id,operatorId:actor.id,note:r.body.note});return {ok:true};});});
+const { ApiError } = require("./errors.cjs"),
+  { transaction } = require("./db.cjs"),
+  { movement, reconcileJob } = require("./billing.cjs");
+function registerCommercialApi(app, s) {
+  const b = s.billing,
+    db = s.db;
+  const user = (r) => {
+      if (!r.appUser) throw new ApiError(401, "unauthorized", "请先登录");
+      return r.appUser;
+    },
+    admin = (r) => {
+      const u = user(r);
+      if (u.role !== "admin")
+        throw new ApiError(403, "admin_required", "仅限管理员");
+      return u;
+    };
+  app.get("/api/v1/model-offers", async () => ({
+    items: b.listOffers(),
+    enabled: b.pricing.get().enabled,
+  }));
+  app.get("/api/v1/recharge-instructions", async () => {
+    const c = b.pricing.get();
+    return {
+      wechat: c.wechat,
+      qrDataUrl: c.qrDataUrl,
+      note: c.rechargeNote,
+      pointsPerYuan: c.pointsPerYuan,
+    };
+  });
+  app.get("/api/v1/me/wallet", async (r) => {
+    const u = user(r);
+    b.reconcile();
+    return { wallet: b.wallet(u.id) };
+  });
+  app.get("/api/v1/me/ledger", async (r) => ({ items: b.ledger(user(r).id) }));
+  app.post("/api/v1/jobs/:id/cancel", async (r) => {
+    const u = user(r);
+    return transaction(db, () => {
+      const j = db.prepare("SELECT * FROM jobs WHERE id=?").get(r.params.id);
+      if (!j) throw new ApiError(404, "not_found", "任务不存在");
+      require("./tenant.cjs").own(db, j.project_id, u);
+      if (j.status === "cancelled") return { ok: true };
+      if (
+        j.status !== "queued" ||
+        (j.lease_until && j.lease_until > new Date().toISOString())
+      )
+        throw new ApiError(409, "job_started", "任务已开始，不能直接取消");
+      db.prepare(
+        "UPDATE jobs SET status='cancelled',paused=1,version=version+1,updated_at=? WHERE id=?",
+      ).run(new Date().toISOString(), j.id);
+      reconcileJob(db, j.id);
+      s.repos.record("job.cancelled", { jobId: j.id, projectId: j.project_id });
+      return { ok: true };
+    });
+  });
+  app.post("/api/v1/projects/:id/generation-quotes", async (r) =>
+    b.quote(user(r), r.params.id, r.body || {}),
+  );
+  app.post("/api/v1/generation-quotes/:id/confirm", async (r, reply) => {
+    reply.code(202);
+    return b.confirm(user(r), r.params.id);
+  });
+  app.get("/api/v1/admin/model-offers", async (r) => {
+    admin(r);
+    return { items: b.listOffers(true) };
+  });
+  app.patch("/api/v1/admin/model-offers/:id", async (r) => {
+    admin(r);
+    return { items: b.updateOffer(r.params.id, r.body || {}) };
+  });
+  app.get("/api/v1/admin/users", async (r) => {
+    admin(r);
+    const q = String(r.query.q || "").slice(0, 254),
+      offset = Math.max(0, Math.min(100000, Number(r.query.offset) || 0));
+    const items = db
+      .prepare(
+        "SELECT u.id,u.username,u.email,u.role,u.status,u.email_verified_at,u.created_at,COALESCE(w.available,0) available,COALESCE(w.frozen,0) frozen FROM app_users u LEFT JOIN wallets w ON w.user_id=u.id WHERE u.username LIKE ? OR u.email LIKE ? OR u.id=? ORDER BY u.created_at DESC LIMIT 100 OFFSET ?",
+      )
+      .all("%" + q + "%", "%" + q + "%", q, offset);
+    return { items };
+  });
+  app.patch("/api/v1/admin/users/:id", async (r) => {
+    const actor = admin(r),
+      status = r.body?.status;
+    if (!["active", "disabled"].includes(status))
+      throw new ApiError(400, "invalid_status", "账号状态无效");
+    if (actor.id === r.params.id)
+      throw new ApiError(409, "self_disable", "不能停用当前管理员");
+    if (
+      db
+        .prepare("SELECT id FROM app_users WHERE id=? AND role='admin'")
+        .get(r.params.id)
+    )
+      throw new ApiError(403, "admin_user", "不能在此停用其他管理员");
+    const result = db
+      .prepare("UPDATE app_users SET status=? WHERE id=?")
+      .run(status, r.params.id);
+    if (!result.changes) throw new ApiError(404, "user_missing", "用户不存在");
+    if (status === "disabled")
+      db.prepare("DELETE FROM app_sessions WHERE user_id=?").run(r.params.id);
+    s.repos.record("admin.user.status", {
+      userId: r.params.id,
+      status,
+      operatorId: actor.id,
+    });
+    return { ok: true };
+  });
+  app.post("/api/v1/admin/users/:id/topups", async (r) =>
+    b.topup(
+      admin(r),
+      r.params.id,
+      r.body || {},
+      String(r.headers["idempotency-key"] || ""),
+    ),
+  );
+  app.post("/api/v1/admin/users/:id/adjustments", async (r) => {
+    const actor = admin(r),
+      v = r.body?.points,
+      note = r.body?.note,
+      key = String(r.headers["idempotency-key"] || "");
+    if (
+      !Number.isSafeInteger(v) ||
+      !v ||
+      Math.abs(v) > 1e8 ||
+      typeof note !== "string" ||
+      !note.trim() ||
+      note.length > 500 ||
+      key.length < 8 ||
+      key.length > 150
+    )
+      throw new ApiError(
+        400,
+        "invalid_adjustment",
+        "请填写有效调整积分、原因和唯一标识",
+      );
+    return transaction(db, () => {
+      if (!db.prepare("SELECT id FROM app_users WHERE id=?").get(r.params.id))
+        throw new ApiError(404, "user_missing", "用户不存在");
+      const old = db
+        .prepare("SELECT * FROM wallet_ledger WHERE business_key=?")
+        .get("adjust:" + key);
+      if (
+        old &&
+        (old.user_id !== r.params.id ||
+          old.available_delta !== v ||
+          old.note !== note)
+      )
+        throw new ApiError(409, "key_conflict", "调整标识已用于其他内容");
+      movement(db, {
+        userId: r.params.id,
+        key: "adjust:" + key,
+        action: "adjust",
+        available: v,
+        frozen: 0,
+        amount: Math.abs(v),
+        operatorId: actor.id,
+        note,
+      });
+      return { wallet: b.wallet(r.params.id) };
+    });
+  });
+  app.get("/api/v1/admin/ledger", async (r) => {
+    admin(r);
+    const id = String(r.query.userId || "");
+    return {
+      items: id
+        ? b.ledger(id)
+        : db
+            .prepare(
+              "SELECT l.*,u.username FROM wallet_ledger l JOIN app_users u ON u.id=l.user_id ORDER BY l.created_at DESC LIMIT 500",
+            )
+            .all(),
+    };
+  });
+  app.get("/api/v1/admin/billing", async (r) => {
+    admin(r);
+    b.reconcile();
+    return {
+      items: db
+        .prepare(
+          "SELECT b.*,u.username,j.status job_status,j.error_message,j.remote_task_id,j.account_id FROM job_billing b JOIN app_users u ON u.id=b.user_id JOIN jobs j ON j.id=b.job_id ORDER BY b.created_at DESC LIMIT 500",
+        )
+        .all()
+        .map((x) => ({
+          ...x,
+          snapshot: JSON.parse(x.snapshot),
+          usage: x.usage_json ? JSON.parse(x.usage_json) : null,
+        })),
+    };
+  });
+  app.post("/api/v1/admin/billing/:id/refund", async (r) => {
+    const actor = admin(r);
+    if (
+      r.body?.confirmedNoDelivery !== true ||
+      typeof r.body?.note !== "string" ||
+      !r.body.note.trim() ||
+      r.body.note.length > 500
+    )
+      throw new ApiError(
+        400,
+        "confirmation_required",
+        "请确认无法交付并填写原因",
+      );
+    return transaction(db, () => {
+      const j = db.prepare("SELECT * FROM jobs WHERE id=?").get(r.params.id),
+        billing = db
+          .prepare("SELECT * FROM job_billing WHERE job_id=?")
+          .get(r.params.id);
+      if (!j || !billing)
+        throw new ApiError(404, "not_found", "收费任务不存在");
+      if (billing.status === "refunded") return { ok: true };
+      if (j.status === "succeeded")
+        throw new ApiError(409, "delivered", "任务已交付，不可标记交付失败");
+      if (j.lease_until && j.lease_until > new Date().toISOString())
+        throw new ApiError(409, "job_busy", "任务操作正在执行，请稍后重试");
+      db.prepare(
+        "UPDATE jobs SET status='failed',paused=1,error_message=?,version=version+1,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=?",
+      ).run("人工确认未交付：" + r.body.note, new Date().toISOString(), j.id);
+      reconcileJob(db, j.id);
+      s.repos.record("admin.job.refunded", {
+        jobId: j.id,
+        projectId: j.project_id,
+        operatorId: actor.id,
+        note: r.body.note,
+      });
+      return { ok: true };
+    });
+  });
 }
-module.exports={registerCommercialApi};
+module.exports = { registerCommercialApi };

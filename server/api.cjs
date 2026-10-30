@@ -222,6 +222,7 @@ async function createHttpApp(services) {
       reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
     }
     const timer = setInterval(() => {
+      try{if(auth.enabled())auth.guard(request);}catch{clearInterval(timer);reply.raw.end();return;}
       if (++idleTicks % 15 === 0) reply.raw.write(": keepalive\n\n");
       const fetched=repos.accounts.eventsAfter(cursor);
       if(fetched.length)cursor=fetched[fetched.length-1].seq;
@@ -264,7 +265,8 @@ async function createHttpApp(services) {
     const range = media.parseRange(request.headers.range, stat.size);
     reply.header("accept-ranges", "bytes");
     reply.header("content-type", row.mime);
-    reply.header("cache-control", "private, max-age=3600");
+    reply.header("cache-control", "private, no-store");
+    reply.header("vary", "Cookie");
     if (range?.unsatisfiable) {
       reply.code(416).header("content-range", `bytes */${stat.size}`);
       return reply.send();
@@ -303,6 +305,7 @@ async function createHttpApp(services) {
     const row = repos.accounts.getExport(request.params.id);
     if (!row || row.status !== "succeeded" || !row.storage_key) throw new ApiError(404, "export_not_ready", "归档还没有完成");
     const file = media.locate(row.storage_key);
+    reply.header("cache-control", "private, no-store");
     reply.header("content-type", "application/zip");
     reply.header("content-disposition", `attachment; filename="storydock-${row.kind}.zip"`);
     return reply.send(fs.createReadStream(file));
@@ -401,6 +404,7 @@ async function createHttpApp(services) {
   });
 
   app.addHook('onSend',async(request,reply,payload)=>{
+    if(request.url.startsWith('/api/'))reply.header('Cache-Control','private, no-store');
     if(request.appUser?.role!=='user'||typeof payload!=='string'||!String(reply.getHeader('content-type')||'').includes('application/json'))return payload;
     if(!/\/(?:projects|jobs)(?:\/|$)/.test(request.url))return payload;
     let data;try{data=JSON.parse(payload);}catch{return payload;}
