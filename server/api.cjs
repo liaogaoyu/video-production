@@ -55,14 +55,23 @@ async function createHttpApp(services) {
   });
   const auth = require("./auth-http.cjs").createAuth(services);
   auth.register(app);
+  const commercialSettings=require('./registration.cjs').registerRegistration(app,services);
   app.addHook("onRequest", async (request) => {
     if (!request.url.startsWith("/api/")) return;
     const endpoint=request.url.split("?")[0];
-    if (["/api/v1/auth/session","/api/v1/auth/login","/api/v1/auth/logout"].includes(endpoint)) return;
+    if (["session","login","logout","registration","register","email/verify","email/resend","password/forgot","password/reset"].some(p=>endpoint==='/api/v1/auth/'+p)) {if(!['GET','HEAD'].includes(request.method))auth.sameOrigin(request);return;}
     if (auth.enabled()) { auth.guard(request); if(!["GET","HEAD"].includes(request.method)) auth.sameOrigin(request); }
     else authorize(paths.accessPassword, request);
   });
 
+  const tenant=require('./tenant.cjs');
+  app.addHook('preHandler',(request,reply,done)=>{
+    try { tenant.checkRoute(services.db,request); tenant.scope.run({user:request.appUser},done); }
+    catch(error){done(error);}
+  });
+  app.get('/api/v1/admin/settings',async()=>commercialSettings.publicSettings());
+  app.put('/api/v1/admin/settings',async r=>commercialSettings.save(r.body||{}));
+  app.post('/api/v1/admin/settings/test-email',async r=>{const to=String(r.body?.email||'');if(!/^\S+@\S+\.\S+$/.test(to))throw new ApiError(400,'invalid_email','请输入测试邮箱');await commercialSettings.mail(to,'工作台邮件测试','邮件配置测试成功。');return {sent:true};});
   const web=services.web;
   app.addHook("onClose",async()=>{await web.close();});
   app.addHook("onSend",async(request,reply,payload)=>{if(request.url.includes("/dreamina-web/"))reply.header("Cache-Control","no-store");return payload;});
@@ -197,7 +206,7 @@ async function createHttpApp(services) {
     const supplied = request.query.after ?? request.headers["last-event-id"];
     const after = supplied !== undefined ? Math.max(0, Number(supplied) || 0)
       : stream ? services.db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM job_events").get().seq : 0;
-    const events = repos.accounts.eventsAfter(after);
+    const events = tenant.filterEvents(services.db,repos.accounts.eventsAfter(after),request.appUser);
     if (!stream) return { events };
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -213,8 +222,9 @@ async function createHttpApp(services) {
     }
     const timer = setInterval(() => {
       if (++idleTicks % 15 === 0) reply.raw.write(": keepalive\n\n");
-      for (const event of repos.accounts.eventsAfter(cursor)) {
-        cursor = event.seq;
+      const fetched=repos.accounts.eventsAfter(cursor);
+      if(fetched.length)cursor=fetched[fetched.length-1].seq;
+      for (const event of tenant.filterEvents(services.db,fetched,request.appUser)) {
         reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
       }
     }, 1000);
@@ -315,6 +325,7 @@ async function createHttpApp(services) {
     const source = manifest.project;
     const graph = repos.content.createProject({
       name: `${source.name || "未命名项目"}（恢复）`.slice(0, 80),
+      assetCommonPrompt: source.assetCommonPrompt || '',
       description: source.description || "",
       style: source.style || "",
       ratio: source.data.settings?.ratio || "16:9",
@@ -388,6 +399,13 @@ async function createHttpApp(services) {
     };
   });
 
+  app.addHook('onSend',async(request,reply,payload)=>{
+    if(request.appUser?.role!=='user'||typeof payload!=='string'||!String(reply.getHeader('content-type')||'').includes('application/json'))return payload;
+    if(!/\/(?:projects|jobs)(?:\/|$)/.test(request.url))return payload;
+    let data;try{data=JSON.parse(payload);}catch{return payload;}
+    const clean=(value)=>{if(!value||typeof value!=='object')return;for(const k of Object.keys(value)){if(['accountId','submitId','provider'].includes(k))delete value[k];else clean(value[k]);}};
+    clean(data);return JSON.stringify(data);
+  });
   app.get("/*", async (request, reply) => {
     const raw = decodeURIComponent(request.url.split("?")[0]);
     const relative = raw === "/" ? "index.html" : raw.replace(/^\/+/, "");

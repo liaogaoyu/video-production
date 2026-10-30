@@ -37,6 +37,7 @@ async function restoreBackup(services, manifest, files) {
     return f;
   };
   const project = repos.content.createProject({
+    assetCommonPrompt: source.assetCommonPrompt || '',
     name: `${source.name || "未命名项目"}（恢复）`.slice(0, 80),
     description: source.description || "",
     style: source.style || "",

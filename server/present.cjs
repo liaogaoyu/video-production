@@ -124,6 +124,7 @@ function presentProject(graph) {
   const runningJobs = jobs.filter((job) => ["submitting", "remote_running", "downloading", "submit_unknown"].includes(job.status)).length;
   return {
     id: project.id,
+    assetCommonPrompt: project.asset_common_prompt || '',
     name: project.name,
     description: project.description,
     style: project.style,
