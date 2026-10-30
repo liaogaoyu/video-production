@@ -1,3 +1,4 @@
+import { money, billingSource } from "./money";
 import { LegacyGeneration } from "./legacy-generation";
 import { useEffect, useState } from "react";
 import { App, Alert, Modal, Select, Space, Table, Typography } from "antd";
@@ -45,7 +46,7 @@ export function Generation({
       onCancel={onClose}
       confirmLoading={busy}
       okButtonProps={{ disabled: !offer || busy }}
-      okText={quote ? `确认并冻结 ${quote.amount} 积分` : "获取生成报价"}
+      okText={quote ? `确认预扣 ${money(quote.amount)}` : "获取生成报价"}
       width={660}
       onOk={async () => {
         setBusy(true);
@@ -66,7 +67,7 @@ export function Generation({
             await refreshProject();
             onClose();
             go("jobs", project!.id);
-            message.success("积分已冻结，任务已提交");
+            message.success("费用已预扣，任务已提交");
           }
         } catch (e) {
           setError((e as Error).message);
@@ -102,8 +103,8 @@ export function Generation({
           <Alert
             className="spaced"
             type="info"
-            title={`本次最多 ${quote.ceiling} 平台积分；可用 ${quote.wallet.available} 积分`}
-            description={`报价有效至 ${new Date(quote.expiresAt).toLocaleTimeString()}。${quote.basis}。成功交付后结算，失败释放冻结积分。`}
+            title={`预计预扣 ${money(quote.amount)}；可用余额 ${money(quote.wallet.available)}`}
+            description={`报价有效至 ${new Date(quote.expiresAt).toLocaleTimeString()}。${quote.basis}。成功后按实际消耗多退少补；余额不足的差额会记为待补款，充值后自动补齐。失败退回预扣费用。`}
           />
           <Table
             rowKey="sourceId"
@@ -134,7 +135,7 @@ export function Generation({
                 dataIndex: "officialCredits",
                 render: (v) => (v === null ? "按张计价" : v),
               },
-              { title: "平台积分", dataIndex: "amount" },
+              { title: "预计费用", dataIndex: "amount", render: money },
             ]}
           />
         </>

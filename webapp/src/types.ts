@@ -39,7 +39,7 @@ export interface Job {
   image: string;
   submitId: string;
   resubmittedJobId: string;
-  billing?: {reserved:number;charged:number;status:string;basis:string};
+  billing?: {reserved:number;charged:number;due:number;actualAmount:number|null;status:string;basis:string};
   submittedAt: string;
   createdAt: string;
   completedAt: string;

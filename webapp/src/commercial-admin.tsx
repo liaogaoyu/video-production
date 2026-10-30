@@ -1,3 +1,4 @@
+import { money, billingSource } from "./money";
 import { useEffect, useRef, useState } from "react";
 import {
   App,
@@ -41,7 +42,7 @@ export function CommercialAdminPage() {
     { message } = App.useApp(),
     key = useRef(id());
   const watchedRates = Form.useWatch("rates", form),
-    watchedPoints = Form.useWatch("pointsPerYuan", form) || 100;
+    watchedPoints = 1;
   const run = async (work: () => Promise<any>) => {
     setBusy(true);
     setError("");
@@ -118,8 +119,9 @@ export function CommercialAdminPage() {
             dataIndex: "email_verified_at",
             render: (v) => (v ? "已验证" : "未验证"),
           },
-          { title: "可用", dataIndex: "available" },
-          { title: "冻结", dataIndex: "frozen" },
+          { title: "可用余额", dataIndex: "available", render: money },
+          { title: "预扣待结算", dataIndex: "frozen", render: money },
+          { title: "待补款", dataIndex: "due", render: money },
           { title: "状态", dataIndex: "status" },
           {
             title: "操作",
@@ -192,7 +194,7 @@ export function CommercialAdminPage() {
         <Space align="start" wrap>
           <Form.Item
             name="enabled"
-            label="开放积分生成"
+            label="开放付费生成"
             valuePropName="checked"
           >
             <Switch />
@@ -204,18 +206,9 @@ export function CommercialAdminPage() {
           >
             <Switch />
           </Form.Item>
-          <Form.Item
-            name="pointsPerYuan"
-            label="1元对应平台积分（已有流水后锁定）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              disabled={settings?.pointsUnitLocked}
-              min={1}
-              max={100000}
-              precision={0}
-            />
-          </Form.Item>
+          <Typography.Text>
+            人民币余额，所有金额以元显示、以分记账。
+          </Typography.Text>
         </Space>
         <Alert
           type="info"
@@ -263,6 +256,14 @@ export function CommercialAdminPage() {
               >
                 <InputNumber min={0} max={10000} precision={0} />
               </Form.Item>
+              {g !== "image" && (
+                <Form.Item
+                  name={["rates", g, "estimateCreditsPerSecond"]}
+                  label="预扣用：每秒预估官方积分（非最终扣费）"
+                >
+                  <InputNumber min={0} max={100000} precision={3} />
+                </Form.Item>
+              )}
               <Typography.Text type="secondary">
                 {(() => {
                   const r = watchedRates?.[g];
@@ -274,7 +275,7 @@ export function CommercialAdminPage() {
                       100) *
                     watchedPoints *
                     (1 + r.markupPercent / 100);
-                  return `${Number.isFinite(n) ? n.toFixed(5) : "—"} 平台积分 / ${g === "image" ? "张" : "官方积分"}，任务独立向上取整`;
+                  return `¥${Number.isFinite(n) ? n.toFixed(5) : "—"} 元 / ${g === "image" ? "张" : "官方积分"}，任务独立向上取整`;
                 })()}
               </Typography.Text>
             </Card>
@@ -389,7 +390,7 @@ export function CommercialAdminPage() {
       <Alert
         className="spaced"
         type="info"
-        title="预测优先匹配模型、时长、分辨率和参考模式的精确价格；未匹配时使用手动配置的每秒官方积分。此处是配置计价，不是已验证的官方实时报价。"
+        title="模型只配置展示与上架。人民币价格由渠道兑换成本和加价比例决定；渠道每秒预估积分只用于预扣，最终按官方实际积分多退少补。"
       />
       <Table
         rowKey="id"
@@ -403,11 +404,9 @@ export function CommercialAdminPage() {
             render: (v) => (v ? "是" : "否"),
           },
           {
-            title: "每秒上游积分",
+            title: "价格依据",
             render: (_, o) =>
-              o.kind === "image"
-                ? "按张"
-                : (o.pricing.perSecondCredits ?? "未配置"),
+              o.kind === "image" ? "按张" : "官方实际积分 × 渠道费率",
           },
           {
             title: "操作",
@@ -447,7 +446,7 @@ export function CommercialAdminPage() {
           { key: "offers", label: "公开模型与预测", children: offerTable },
           {
             key: "ledger",
-            label: "积分流水",
+            label: "余额流水",
             children: (
               <Table
                 rowKey="id"
@@ -458,9 +457,21 @@ export function CommercialAdminPage() {
                   { title: "时间", dataIndex: "created_at", render: time },
                   { title: "用户", dataIndex: "username" },
                   { title: "类型", dataIndex: "action" },
-                  { title: "可用变动", dataIndex: "available_delta" },
-                  { title: "冻结变动", dataIndex: "frozen_delta" },
-                  { title: "扣费/入账积分", dataIndex: "amount" },
+                  {
+                    title: "余额变动",
+                    dataIndex: "available_delta",
+                    render: money,
+                  },
+                  {
+                    title: "预扣变动",
+                    dataIndex: "frozen_delta",
+                    render: money,
+                  },
+                  {
+                    title: "扣费/入账金额",
+                    dataIndex: "amount",
+                    render: money,
+                  },
                   { title: "备注", dataIndex: "note" },
                 ]}
               />
@@ -474,7 +485,7 @@ export function CommercialAdminPage() {
                 <Alert
                   className="spaced"
                   type="info"
-                  title="成功交付才扣费，失败退回。未知提交/下载暂时失败保留冻结；无法交付时需管理员核对后终止退款。成本和费率按报价快照保存。"
+                  title="生成前预扣，成功交付后按官方实际消耗多退少补。未取得实际消耗时待核账，失败退款；余额不足的补款充值后自动扣回。成本和费率按报价快照保存。"
                 />
                 <Table
                   rowKey="job_id"
@@ -495,22 +506,29 @@ export function CommercialAdminPage() {
                     { title: "模型", render: (_, r) => r.snapshot.modelName },
                     { title: "任务状态", dataIndex: "job_status" },
                     { title: "账务状态", dataIndex: "status" },
-                    { title: "冻结", dataIndex: "reserved" },
-                    { title: "扣费", dataIndex: "charged" },
+                    { title: "预扣", dataIndex: "reserved", render: money },
+                    { title: "已付", dataIndex: "charged", render: money },
+                    {
+                      title: "实际费用",
+                      dataIndex: "actual_amount",
+                      render: money,
+                    },
+                    { title: "待补", dataIndex: "due", render: money },
                     {
                       title: "上游积分/张数",
                       render: (_, r) =>
-                        r.usage?.credits ?? r.snapshot.unitsMilli / 1000,
+                        r.usage?.credits ?? r.usage?.count ?? "待核账",
                     },
                     {
                       title: "计量来源",
-                      render: (_, r) => r.usage?.source || r.snapshot.source,
+                      render: (_, r) => billingSource(r.usage?.source),
                     },
                     {
                       title: "原始成本（元）",
                       render: (_, r) => {
                         const x = r.snapshot,
-                          units = r.usage?.credits ?? x.unitsMilli / 1000;
+                          units = r.usage?.credits ?? r.usage?.count;
+                        if (units == null) return "待核账";
                         return (
                           x.kind === "image"
                             ? (units * x.rate.costFen) / 100
@@ -557,7 +575,7 @@ export function CommercialAdminPage() {
         <Form
           form={topupForm}
           layout="vertical"
-          initialValues={{ giftPoints: 0 }}
+          initialValues={{ giftYuan: 0 }}
           onFinish={(v) =>
             void run(async () => {
               await api(
@@ -565,26 +583,26 @@ export function CommercialAdminPage() {
                 "POST",
                 {
                   amountFen: Math.round(v.yuan * 100),
-                  giftPoints: v.giftPoints || 0,
+                  giftFen: Math.round((v.giftYuan || 0) * 100),
                   note: v.note,
                 },
                 key.current,
               );
               setTopup(null);
               await refresh();
-              message.success("积分已到账");
+              message.success("余额已到账");
             })
           }
         >
           <Form.Item
             name="yuan"
-            label={`实收金额（元，1元＝${settings?.pointsPerYuan || 100}积分）`}
+            label="实收金额（元）"
             rules={[{ required: true }]}
           >
             <InputNumber min={0.01} max={1000000} precision={2} />
           </Form.Item>
-          <Form.Item name="giftPoints" label="赠送积分">
-            <InputNumber min={0} precision={0} />
+          <Form.Item name="giftYuan" label="赠送金额（元）">
+            <InputNumber min={0} precision={2} />
           </Form.Item>
           <Form.Item
             name="note"
@@ -597,7 +615,7 @@ export function CommercialAdminPage() {
       </Modal>
       <Modal
         open={!!adjust}
-        title="积分调整（不修改历史流水）"
+        title="余额调整（不修改历史流水）"
         onCancel={() => setAdjust(null)}
         onOk={() => adjustForm.submit()}
         confirmLoading={busy}
@@ -610,7 +628,7 @@ export function CommercialAdminPage() {
               await api(
                 "admin/users/" + adjust.id + "/adjustments",
                 "POST",
-                v,
+                { deltaFen: Math.round(v.yuan * 100), note: v.note },
                 key.current,
               );
               setAdjust(null);
@@ -620,11 +638,11 @@ export function CommercialAdminPage() {
           }
         >
           <Form.Item
-            name="points"
-            label="调整积分：正数增加，负数减少"
+            name="yuan"
+            label="调整金额（元）：正数增加，负数减少"
             rules={[{ required: true }]}
           >
-            <InputNumber precision={0} />
+            <InputNumber precision={2} />
           </Form.Item>
           <Form.Item name="note" label="原因" rules={[{ required: true }]}>
             <Input.TextArea maxLength={500} />
@@ -648,8 +666,7 @@ export function CommercialAdminPage() {
                 name: v.name,
                 enabled: v.enabled,
                 pricing: {
-                  perSecondCredits: v.perSecondCredits ?? null,
-                  rateCards: v.rateCards || [],
+                  ...editing.pricing,
                 },
               });
               setEditing(null);
@@ -668,81 +685,6 @@ export function CommercialAdminPage() {
           <Form.Item name="enabled" label="上架" valuePropName="checked">
             <Switch />
           </Form.Item>
-          {editing?.kind === "video" && (
-            <>
-              <Form.Item
-                name="perSecondCredits"
-                label="回退预测：每秒消耗官方积分（可留空，仅使用精确价格表）"
-              >
-                <InputNumber min={0} precision={3} />
-              </Form.Item>
-              <Form.List name="rateCards">
-                {(fields, { add, remove }) => (
-                  <>
-                    <Typography.Paragraph>
-                      精确预测价格：同一时长、720p、参考模式匹配时优先使用。
-                    </Typography.Paragraph>
-                    {fields.map((f) => (
-                      <Space key={f.key} align="start" wrap>
-                        <Form.Item
-                          name={[f.name, "duration"]}
-                          label="秒"
-                          rules={[{ required: true }]}
-                        >
-                          <InputNumber min={4} max={15} precision={0} />
-                        </Form.Item>
-                        <Form.Item
-                          name={[f.name, "resolution"]}
-                          label="分辨率"
-                          initialValue="720p"
-                        >
-                          <Select
-                            style={{ width: 95 }}
-                            options={[{ value: "720p", label: "720p" }]}
-                          />
-                        </Form.Item>
-                        <Form.Item
-                          name={[f.name, "referenceMode"]}
-                          label="参考模式"
-                          initialValue="any"
-                        >
-                          <Select
-                            style={{ width: 120 }}
-                            options={[
-                              { value: "any", label: "任意" },
-                              { value: "text", label: "纯文" },
-                              { value: "reference", label: "有参考图" },
-                            ]}
-                          />
-                        </Form.Item>
-                        <Form.Item
-                          name={[f.name, "credits"]}
-                          label="官方积分"
-                          rules={[{ required: true }]}
-                        >
-                          <InputNumber min={0} precision={3} />
-                        </Form.Item>
-                        <Button danger onClick={() => remove(f.name)}>
-                          删除
-                        </Button>
-                      </Space>
-                    ))}
-                    <Button
-                      onClick={() =>
-                        add({
-                          duration: 15,
-                          resolution: "720p",
-                          referenceMode: "any",
-                        })
-                      }
-                    >
-                      添加精确价格
-                    </Button>
-                  </>
-                )}
-              </Form.List>
-            </>
-          )}
         </Form>
       </Modal>
       <Modal
@@ -751,11 +693,11 @@ export function CommercialAdminPage() {
         onCancel={() => setRefund(null)}
         onOk={() => refundForm.submit()}
         confirmLoading={busy}
-        okText="确认无法交付并退回冻结积分"
+        okText="确认无法交付并退回预扣费用"
       >
         <Alert
           type="warning"
-          title="先核对官网和下载记录。该操作会停止此尝试的继续查询，退回用户冻结积分，上游成本由平台承担。"
+          title="先核对官网和下载记录。该操作会停止此尝试的继续查询，退回用户预扣费用，上游成本由平台承担。"
         />
         <Form
           form={refundForm}
@@ -768,7 +710,7 @@ export function CommercialAdminPage() {
               });
               setRefund(null);
               await refresh();
-              message.success("已终止并退回冻结积分");
+              message.success("已终止并退回预扣费用");
             })
           }
         >
