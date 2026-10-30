@@ -38,7 +38,7 @@ function importLegacyUsers(db, file) {
     !fs.existsSync(file)
   )
     return;
-  const insert = db.prepare("INSERT OR IGNORE INTO app_users VALUES(?,?,?,?)");
+  const insert = db.prepare("INSERT OR IGNORE INTO app_users(id,username,password_hash,created_at,role) VALUES(?,?,?,?,'admin')");
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
     const index = line.indexOf(":");
     if (index < 1) continue;
@@ -52,6 +52,7 @@ function createAuth(services) {
   const { db } = services;
   installAuth(db);
   importLegacyUsers(db, process.env.STORYDOCK_LEGACY_HTPASSWD);
+  require('./commercial-schema.cjs').installCommercialSchema(db);
   const attempts = new Map(),
     cookie = "storydock_session";
   const enabled = () =>
@@ -67,7 +68,7 @@ function createAuth(services) {
     return (
       db
         .prepare(
-          "SELECT u.id,u.username FROM app_sessions s JOIN app_users u ON u.id=s.user_id WHERE token_hash=? AND expires_at>?",
+          "SELECT u.id,u.username,u.email,u.role,u.status FROM app_sessions s JOIN app_users u ON u.id=s.user_id WHERE token_hash=? AND expires_at>? AND u.status='active'",
         )
         .get(digest(token), Date.now()) || null
     );
@@ -125,8 +126,8 @@ function createAuth(services) {
           throw new ApiError(400, "invalid_login", "请输入账号和密码");
         const u = db
           .prepare("SELECT * FROM app_users WHERE username=?")
-          .get(username.trim());
-        if (!u || !(await verify(password, u.password_hash))) {
+          .get(username.trim()) || db.prepare("SELECT * FROM app_users WHERE username=?").get(username.trim().toLowerCase());
+        if (!u || u.status!=='active' || (u.role!=='admin'&&!u.email_verified_at) || !(await verify(password, u.password_hash))) {
           if (attempts.size > 1000) attempts.clear();
           attempts.set(key, {
             count: record && record.until > Date.now() ? record.count + 1 : 1,
@@ -141,7 +142,7 @@ function createAuth(services) {
             u.id,
           );
         issue(request, reply, u.id);
-        return { user: { id: u.id, username: u.username } };
+        return { user: { id: u.id, username: u.username, email: u.email, role: u.role } };
       });
       app.post("/api/v1/auth/logout", async (request, reply) => {
         sameOrigin(request);
@@ -195,7 +196,7 @@ function createAuth(services) {
         ).run(username.trim(), await hashPassword(password), u.id);
         db.prepare("DELETE FROM app_sessions WHERE user_id=?").run(u.id);
         issue(request, reply, u.id);
-        return { user: { id: u.id, username: username.trim() } };
+        return { user: { id: u.id, username: username.trim(),role:u.role,email:u.email } };
       });
     },
   };

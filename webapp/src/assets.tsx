@@ -1,3 +1,4 @@
+import {ProjectStyle} from './project-style';
 import { useState } from "react";
 import {
   App,
@@ -109,6 +110,7 @@ export function AssetsPage() {
           </Button>
         </Space>
       </div>
+      <ProjectStyle/>
       <ProjectReferences />
       <div className="toolbar">
         <Space wrap>

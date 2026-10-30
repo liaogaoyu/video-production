@@ -31,6 +31,7 @@ function createContentRepository(db, { media, record }) {
   function mustProject(id, { writable = false } = {}) {
     const row = db.prepare("SELECT * FROM projects WHERE id=?").get(uuid(id, "项目"));
     if (!row || row.deleted_at) throw new ApiError(404, "project_not_found", "项目不存在");
+    require('../tenant.cjs').own(db, id);
     if (writable && row.deleted_at) throw new ApiError(409, "project_deleted", "项目已删除");
     return row;
   }
@@ -83,7 +84,7 @@ function createContentRepository(db, { media, record }) {
         (SELECT count(*) FROM shots s WHERE s.project_id=p.id AND s.deleted_at IS NULL) AS shot_count,
         (SELECT count(*) FROM jobs j WHERE j.project_id=p.id AND j.status IN ('submitting','remote_running','downloading','submit_unknown')) AS running_jobs
       FROM projects p WHERE p.deleted_at IS NULL ORDER BY p.created_at DESC, p.id
-    `).all();
+    `).all().filter(p => { const u=require('../tenant.cjs').current();return !u||u.role==='admin'||p.owner_user_id===u.id; });
   }
 
   function createProject(input) {
@@ -95,6 +96,9 @@ function createContentRepository(db, { media, record }) {
     transaction(db, () => {
       db.prepare("INSERT INTO projects(id,name,description,ratio,style,script_text,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)")
         .run(id, name, text(input.description, "项目简介", 500), ratio, text(input.style, "风格备注", 120), text(input.scriptText, "剧本", 200000), now, now);
+      const actor=require('../tenant.cjs').current();
+      const admin=db.prepare("SELECT id FROM app_users WHERE role='admin' ORDER BY created_at LIMIT 1").get();
+      db.prepare('UPDATE projects SET owner_user_id=?,asset_common_prompt=? WHERE id=?').run(actor?.id||admin?.id||null,text(input.assetCommonPrompt,'公共提示词',10000),id);
       record("project.created", { projectId: id });
     });
     return graph(id);
@@ -119,6 +123,7 @@ function createContentRepository(db, { media, record }) {
           current.revision,
         );
       if (result.changes !== 1) conflict();
+      if(patch.assetCommonPrompt!==undefined)db.prepare('UPDATE projects SET asset_common_prompt=? WHERE id=?').run(text(patch.assetCommonPrompt,'公共提示词',10000),current.id);
       record("project.updated", { projectId: current.id });
     });
     return graph(current.id);

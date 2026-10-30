@@ -92,7 +92,8 @@ function createJobRepository(db, { record }) {
         assetId: asset.id,
         title: asset.name,
         promptOriginal: asset.prompt,
-        promptSubmitted: buildAssetImagePrompt(asset.prompt, asset.type),
+        promptSubmitted: buildAssetImagePrompt(asset.prompt,asset.type,db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt),
+        projectPromptOriginal: db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt || '',
         references: references.map((item, index) => ({ mediaId: item.media_id, index: index + 1, sha256: item.sha256, scope: item.scope })),
         ratio,
       },
@@ -318,6 +319,7 @@ function createJobRepository(db, { record }) {
   }
 
   function commitJob(job, fields) {
+    return transaction(db,()=>{
     const now = iso();
     fields = {...fields};
     if(fields.status === 'succeeded' && job.status !== 'succeeded')fields.completed_at = now;
@@ -334,7 +336,9 @@ function createJobRepository(db, { record }) {
     if (result.changes !== 1) throw new ApiError(409, "lease_lost", "任务租约已失效");
     const next = getJob(job.id);
     record("job.updated", { jobId: next.id, projectId: next.projectId, status: next.status });
+    require('../billing.cjs').reconcileJob(db,next.id);
     return next;
+    });
   }
 
   function releaseLease(job) {

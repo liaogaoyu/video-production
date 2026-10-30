@@ -1,0 +1,182 @@
+const crypto = require("node:crypto"),
+  { ApiError } = require("./errors.cjs"),
+  { hashPassword } = require("./auth-http.cjs"),
+  { transaction } = require("./db.cjs");
+function registerRegistration(app, s) {
+  const cfg = require("./commercial-settings.cjs").settingsService(s),
+    db = s.db,
+    limits = new Map();
+  const digest = (x) => crypto.createHash("sha256").update(x).digest("hex");
+  function email(v) {
+    if (typeof v !== "string" || v.length > 254 || !/^\S+@\S+\.\S+$/.test(v))
+      throw new ApiError(400, "invalid_email", "请输入有效邮箱");
+    return v.trim().toLowerCase();
+  }
+  function pass(v) {
+    if (typeof v !== "string" || v.length < 8 || v.length > 200)
+      throw new ApiError(400, "invalid_password", "密码需为8至200位");
+    return v;
+  }
+  function limit(request) {
+    const key = request.ip,
+      t = Date.now(),
+      a = limits.get(key);
+    if (a && a.until > t && a.n >= 20)
+      throw new ApiError(429, "rate_limited", "操作过于频繁，请稍后重试");
+    if (limits.size > 10000)
+      for (const [k, v] of limits) if (v.until < t) limits.delete(k);
+    limits.set(key, {
+      n: a?.until > t ? a.n + 1 : 1,
+      until: a?.until > t ? a.until : t + 3600000,
+    });
+  }
+  async function send(u, purpose) {
+    const previous = db
+      .prepare(
+        "SELECT created_at FROM email_challenges WHERE email=? AND purpose=? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(u.email, purpose);
+    if (previous && previous.created_at > Date.now() - 60000)
+      throw new ApiError(429, "resend_limited", "请60秒后重新发送");
+    const id = crypto.randomUUID(),
+      code = String(crypto.randomInt(100000, 1000000));
+    transaction(db, () => {
+      db.prepare(
+        "UPDATE email_challenges SET consumed=1 WHERE email=? AND purpose=?",
+      ).run(u.email, purpose);
+      db.prepare(
+        "INSERT INTO email_challenges(id,user_id,email,purpose,code_hash,expires_at,created_at) VALUES(?,?,?,?,?,?,?)",
+      ).run(
+        id,
+        u.id,
+        u.email,
+        purpose,
+        digest(id + code),
+        Date.now() + 600000,
+        Date.now(),
+      );
+    });
+    try {
+      await cfg.mail(
+        u.email,
+        purpose === "verify" ? "验证你的邮箱" : "重置工作台密码",
+        `验证码：${code}。10分钟内有效，请勿向他人提供。`,
+      );
+    } catch (e) {
+      db.prepare("UPDATE email_challenges SET consumed=1 WHERE id=?").run(id);
+      throw e;
+    }
+  }
+  function consume(address, purpose, code, work) {
+    return transaction(db, () => {
+      const c = db
+        .prepare(
+          "SELECT * FROM email_challenges WHERE email=? AND purpose=? AND consumed=0 ORDER BY created_at DESC LIMIT 1",
+        )
+        .get(address, purpose);
+      if (!c || c.expires_at < Date.now() || c.attempts >= 5)
+        throw new ApiError(400, "invalid_code", "验证码无效或已过期");
+      if (typeof code !== "string" || digest(c.id + code) !== c.code_hash)
+        return { invalid: c.id };
+      const result = work(c);
+      db.prepare("UPDATE email_challenges SET consumed=1 WHERE id=?").run(c.id);
+      return result;
+    });
+  }
+  function check(result) {
+    if (result?.invalid) {
+      db.prepare(
+        "UPDATE email_challenges SET attempts=attempts+1 WHERE id=?",
+      ).run(result.invalid);
+      throw new ApiError(400, "invalid_code", "验证码不正确");
+    }
+    return result;
+  }
+  app.get("/api/v1/auth/registration", async () => ({
+    enabled: !!cfg.get().registrationEnabled,
+  }));
+  app.post("/api/v1/auth/register", async (r) => {
+    limit(r);
+    if (!cfg.get().registrationEnabled)
+      throw new ApiError(
+        403,
+        "registration_closed",
+        "注册暂未开放，请联系管理员",
+      );
+    const address = email(r.body?.email),
+      password = pass(r.body?.password);
+    let u = db
+      .prepare(
+        "SELECT * FROM app_users WHERE email=? COLLATE NOCASE OR username=?",
+      )
+      .get(address, address);
+    if (u?.email_verified_at || u?.role === "admin")
+      throw new ApiError(409, "email_taken", "邮箱已注册，请登录或找回密码");
+    if (!u) {
+      const id = crypto.randomUUID();
+      db.prepare(
+        "INSERT INTO app_users(id,username,password_hash,created_at,email,role) VALUES(?,?,?,?,?,'user')",
+      ).run(
+        id,
+        address,
+        await hashPassword(password),
+        new Date().toISOString(),
+        address,
+      );
+      u = db.prepare("SELECT * FROM app_users WHERE id=?").get(id);
+    }
+    await send(u, "verify");
+    return { sent: true };
+  });
+  app.post("/api/v1/auth/email/resend", async (r) => {
+    limit(r);
+    if (!cfg.get().registrationEnabled)
+      throw new ApiError(403, "registration_closed", "注册暂未开放");
+    const address = email(r.body?.email),
+      u = db.prepare("SELECT * FROM app_users WHERE email=?").get(address);
+    if (u && !u.email_verified_at) await send(u, "verify");
+    return { sent: true };
+  });
+  app.post("/api/v1/auth/email/verify", async (r) => {
+    limit(r);
+    const address = email(r.body?.email);
+    check(
+      consume(address, "verify", r.body?.code, (c) => {
+        db.prepare("UPDATE app_users SET email_verified_at=? WHERE id=?").run(
+          new Date().toISOString(),
+          c.user_id,
+        );
+        return { verified: true };
+      }),
+    );
+    return { verified: true };
+  });
+  app.post("/api/v1/auth/password/forgot", async (r) => {
+    limit(r);
+    const address = email(r.body?.email),
+      u = db
+        .prepare(
+          "SELECT * FROM app_users WHERE email=? AND email_verified_at IS NOT NULL AND status='active'",
+        )
+        .get(address);
+    if (u) await send(u, "reset");
+    return { sent: true };
+  });
+  app.post("/api/v1/auth/password/reset", async (r) => {
+    limit(r);
+    const address = email(r.body?.email),
+      hash = await hashPassword(pass(r.body?.password));
+    return check(
+      consume(address, "reset", r.body?.code, (c) => {
+        db.prepare("UPDATE app_users SET password_hash=? WHERE id=?").run(
+          hash,
+          c.user_id,
+        );
+        db.prepare("DELETE FROM app_sessions WHERE user_id=?").run(c.user_id);
+        return { reset: true };
+      }),
+    );
+  });
+  return cfg;
+}
+module.exports = { registerRegistration };

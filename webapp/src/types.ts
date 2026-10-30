@@ -39,6 +39,7 @@ export interface Job {
   image: string;
   submitId: string;
   resubmittedJobId: string;
+  billing?: {reserved:number;charged:number;status:string;basis:string};
   submittedAt: string;
   createdAt: string;
   completedAt: string;
@@ -47,6 +48,7 @@ export interface Job {
 export interface Project {
   id: string;
   name: string;
+  assetCommonPrompt: string;
   description: string;
   style: string;
   revision: number;
@@ -76,4 +78,6 @@ export interface Account {
 export interface User {
   id: string;
   username: string;
+  email?: string;
+  role?: 'admin'|'user';
 }

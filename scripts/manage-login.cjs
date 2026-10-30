@@ -20,7 +20,7 @@ const { installAuth, hashPassword } = require("../server/auth-http.cjs");
     const id = existing?.id || require("node:crypto").randomUUID();
     s.db
       .prepare(
-        "INSERT INTO app_users VALUES(?,?,?,?) ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash",
+        "INSERT INTO app_users(id,username,password_hash,created_at,role) VALUES(?,?,?,?,'admin') ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash",
       )
       .run(
         id,

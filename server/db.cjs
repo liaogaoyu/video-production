@@ -232,6 +232,7 @@ function openDatabase(filename) {
   }
   require("./global-schema.cjs").installGlobalSchema(db);
   require("./job-times.cjs").installJobTimes(db);
+  require("./commercial-schema.cjs").installCommercialSchema(db);
   return db;
 }
 
