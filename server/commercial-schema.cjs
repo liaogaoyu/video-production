@@ -67,6 +67,32 @@ function installCommercialSchema(db) {
       },
     }),
   );
+  add("job_billing", "due", "INTEGER NOT NULL DEFAULT 0");
+  add("job_billing", "actual_amount", "INTEGER");
+  add("job_billing", "usage_next_at", "TEXT");
+  add("job_billing", "usage_error", "TEXT NOT NULL DEFAULT ''");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS billing_pending_usage ON job_billing(status,usage_next_at)",
+  );
+  const pricingRow = db
+    .prepare("SELECT value FROM commercial_settings WHERE id=1")
+    .get();
+  const pricing = JSON.parse(pricingRow.value);
+  if (pricing.currency !== "CNY") {
+    if (
+      pricing.pointsPerYuan !== 100 &&
+      db.prepare("SELECT id FROM wallet_ledger LIMIT 1").get()
+    )
+      throw new Error("历史积分面值不是1分，需先完成显式人民币账务迁移");
+    pricing.currency = "CNY";
+    pricing.pointsPerYuan = 100;
+    db.prepare(
+      "UPDATE commercial_settings SET value=?,revision=revision+1 WHERE id=1",
+    ).run(JSON.stringify(pricing));
+    db.prepare(
+      "UPDATE generation_quotes SET status='expired' WHERE status='open'",
+    ).run();
+  }
   const offers = [
     ["image-default", "资产生图", "image", "image", "", "image"],
     [

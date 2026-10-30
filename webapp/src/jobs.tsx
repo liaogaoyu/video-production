@@ -1,3 +1,4 @@
+import { money, billingSource } from "./money";
 import { useState } from "react";
 import {
   App,
@@ -201,7 +202,7 @@ export function JobsPage() {
                   {j.kind === "asset" ? "资产图片" : "分镜视频"}
                   {j.queueNote ? " · " + j.queueNote : ""}
                 </p>
-                {j.billing&&<p className="muted">平台积分：{j.billing.status==='settled'?`已扣 ${j.billing.charged}`:j.billing.status==='refunded'?'已退回':`冻结 ${j.billing.reserved}`} · {j.billing.basis==='official_actual'?'官方实际消耗':'配置计价'}</p>}
+                {j.billing&&<p className="muted">费用：{j.billing.status==='settled'?`实际 ${money(j.billing.actualAmount)} · 已付 ${money(j.billing.charged)}`:j.billing.status==='refunded'?'已退款':j.billing.status==='due'?`实际 ${money(j.billing.actualAmount)} · 待补 ${money(j.billing.due)}`:`已预扣 ${money(j.billing.reserved)} · 待结算`} · {billingSource(j.billing.basis)}</p>}
                 {j.error && <p className="job-error">{j.error}</p>}
                 <div className="job-times">
                   <span>提交 {time(j.submittedAt || j.createdAt)}</span>
@@ -218,7 +219,7 @@ export function JobsPage() {
                   {labels[j.status] || j.status}
                 </Tag>
                 <Space>
-                  {j.status==='queued'&&<Popconfirm title="取消此任务并退回冻结积分？" onConfirm={async()=>{await api('jobs/'+j.id+'/cancel','POST',{});await refreshProject();window.dispatchEvent(new Event('billing-changed'));}}><Button>取消任务</Button></Popconfirm>}
+                  {j.status==='queued'&&<Popconfirm title="取消此任务并退回预扣费用？" onConfirm={async()=>{await api('jobs/'+j.id+'/cancel','POST',{});await refreshProject();window.dispatchEvent(new Event('billing-changed'));}}><Button>取消任务</Button></Popconfirm>}
                   {failed && (
                     <Action
                       run={async () => {

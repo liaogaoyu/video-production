@@ -60,7 +60,7 @@ const pages: Record<string, string> = {
   shots: "分镜脚本",
   jobs: "生成队列",
   settings: "模型与账号",
-  wallet: "积分与账号",
+  wallet: "余额与账号",
   admin: "运营管理",
 };
 function route() {
@@ -227,7 +227,7 @@ function Workspace({
                   label: "模型与账号",
                 },
                 {key:'admin',label:'运营管理',icon:<SettingOutlined/>},
-                {key:'wallet',label:'积分与账号',icon:<UserOutlined/>},
+                {key:'wallet',label:'余额与账号',icon:<UserOutlined/>},
               ].filter(i=>i.key==='wallet'||!user||user.role==='admin')}
             />
           </div>

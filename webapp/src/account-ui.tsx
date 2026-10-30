@@ -1,3 +1,4 @@
+import { money, billingSource } from "./money";
 import { useEffect, useState } from "react";
 import {
   App,
@@ -41,7 +42,7 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
       <section className="login-card">
         <Typography.Title level={2}>{titles[mode]}</Typography.Title>
         <Typography.Paragraph type="secondary">
-          创作属于你的故事，项目与积分独立保存。
+          创作属于你的故事，项目与余额独立保存。
         </Typography.Paragraph>
         {error && <Alert type="error" title={error} />}
         <Form
@@ -206,9 +207,10 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
 const actions: any = {
   topup: "微信充值",
   adjust: "后台调整",
-  freeze: "生成冻结",
+  freeze: "生成预扣",
   settle: "成功结算",
-  refund: "失败退回",
+  refund: "失败退款",
+  supplement: "实际费用补扣",
 };
 export function WalletPage() {
   const { user, setUser } = useWorkspace(),
@@ -236,7 +238,7 @@ export function WalletPage() {
   return (
     <>
       <div className="page-heading">
-        <h1>积分与账号</h1>
+        <h1>余额与账号</h1>
         <Button onClick={() => void load()}>刷新余额</Button>
       </div>
       {error && <Alert type="error" title={error} />}
@@ -244,23 +246,35 @@ export function WalletPage() {
         items={[
           {
             key: "wallet",
-            label: "积分钱包",
+            label: "人民币钱包",
             children: (
               <>
                 <Space size="large" wrap>
                   <Card>
                     <Statistic
-                      title="可用积分"
-                      value={data.wallet?.available ?? 0}
+                      title="可用余额（元）"
+                      precision={2}
+                      prefix="¥"
+                      value={(data.wallet?.available ?? 0) / 100}
                     />
                   </Card>
                   <Card>
                     <Statistic
-                      title="冻结积分"
-                      value={data.wallet?.frozen ?? 0}
+                      title="预扣待结算（元）"
+                      precision={2}
+                      prefix="¥"
+                      value={(data.wallet?.frozen ?? 0) / 100}
                     />
                   </Card>
                 </Space>
+                {(data.wallet?.due ?? 0) > 0 && (
+                  <Alert
+                    className="spaced"
+                    type="warning"
+                    title={`待补费用 ${money(data.wallet.due)}`}
+                    description="充值后自动补齐。补齐前暂停新的付费生成，已有任务继续查询和下载。"
+                  />
+                )}
                 <Card className="spaced" title="添加微信充值">
                   <Descriptions
                     column={1}
@@ -285,8 +299,8 @@ export function WalletPage() {
                       },
                       {
                         key: "rate",
-                        label: "兑换比例",
-                        children: `1元＝${data.recharge?.pointsPerYuan || 100}平台积分`,
+                        label: "入账方式",
+                        children: "人民币余额，按实收金额入账",
                       },
                     ]}
                   />
@@ -300,10 +314,10 @@ export function WalletPage() {
                   <p>{data.recharge?.note}</p>
                   <Alert
                     type="info"
-                    title="微信付款时备注用户编号，由管理员确认后入账。生成前冻结，成功结算，失败退回。"
+                    title="微信付款时备注用户编号，由管理员确认后入账。生成前预扣，按实际消耗多退少补，失败退款。"
                   />
                 </Card>
-                <Card className="spaced" title="积分流水">
+                <Card className="spaced" title="余额账单">
                   <Table<any>
                     rowKey="id"
                     dataSource={data.items || []}
@@ -316,12 +330,22 @@ export function WalletPage() {
                         dataIndex: "action",
                         render: (v) => actions[v] || v,
                       },
-                      { title: "可用变动", dataIndex: "available_delta" },
-                      { title: "冻结变动", dataIndex: "frozen_delta" },
+                      {
+                        title: "余额变动",
+                        dataIndex: "available_delta",
+                        render: money,
+                      },
+                      {
+                        title: "预扣变动",
+                        dataIndex: "frozen_delta",
+                        render: money,
+                      },
                       {
                         title: "实际扣费",
                         render: (_, r) =>
-                          r.action === "settle" ? r.amount : "—",
+                          ["settle", "supplement"].includes(r.action)
+                            ? money(r.amount)
+                            : "—",
                       },
                       { title: "说明", dataIndex: "note" },
                     ]}

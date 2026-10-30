@@ -260,7 +260,7 @@ test("manual topups, quote freeze, success settlement and failure refund are ato
     assert.equal((await confirm()).json().jobIds[0], id);
     assert.deepEqual(
       { ...c.s.billing.wallet(a.id) },
-      { user_id: a.id, available: 85, frozen: 15 },
+      { user_id: a.id, available: 85, frozen: 15, due: 0, currency:"CNY" },
     );
     c.s.db.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(id);
     c.s.billing.reconcile();
@@ -280,7 +280,8 @@ test("manual topups, quote freeze, success settlement and failure refund are ato
         {},
       )
     ).json().jobIds[0];
-    c.s.db.prepare("UPDATE jobs SET status='succeeded' WHERE id=?").run(done);
+    const media = await c.s.repos.content.saveMedia({projectId:p.id,bytes:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==','base64'),source:'test'});
+    c.s.db.prepare("UPDATE jobs SET status='succeeded',media_id=? WHERE id=?").run(media.id,done);
     c.s.billing.reconcile();
     c.s.billing.reconcile();
     assert.equal(c.s.billing.wallet(a.id).available, 85);
@@ -323,7 +324,7 @@ test("manual topups, quote freeze, success settlement and failure refund are ato
     await c.close();
   }
 });
-test("pricing separates channels and caps actual task charges; account balance never bills a task", () => {
+test("pricing separates channels and computes actual task charges; account balance never bills a task", () => {
   const { price } = require("./server/billing.cjs");
   assert.equal(
     price(
@@ -513,7 +514,7 @@ test("download errors retain reservations, explicit cancellation refunds once, a
           amount: 60,
           jobId: id,
         });
-        db.prepare("INSERT INTO job_billing VALUES(?,?,?,?,0,?,?,?,?,?)").run(
+        db.prepare("INSERT INTO job_billing(job_id,user_id,quote_id,reserved,charged,status,snapshot,usage_json,created_at,updated_at) VALUES(?,?,?,?,0,?,?,?,?,?)").run(
           id,
           a.id,
           "quote-test",
@@ -554,14 +555,14 @@ test("download errors retain reservations, explicit cancellation refunds once, a
     assert.equal(
       db.prepare("SELECT charged FROM job_billing WHERE job_id=?").get(high)
         .charged,
-      60,
+      300,
     );
     const unknown = seed("succeeded");
     billing.reconcile();
     assert.equal(
       db.prepare("SELECT charged FROM job_billing WHERE job_id=?").get(unknown)
         .charged,
-      60,
+      0,
     );
     const cancelled = seed("queued");
     db.prepare("UPDATE projects SET owner_user_id=? WHERE id=?").run(
@@ -576,7 +577,7 @@ test("download errors retain reservations, explicit cancellation refunds once, a
       (await req(c, a, "POST", "jobs/" + cancelled + "/cancel", {})).statusCode,
       200,
     );
-    assert.equal(billing.wallet(a.id).frozen, 0);
+    assert.equal(billing.wallet(a.id).frozen, 60);
     assert.equal(
       db.prepare("SELECT status FROM job_billing WHERE job_id=?").get(cancelled)
         .status,
@@ -665,7 +666,7 @@ test("SMTP secrets are encrypted, member settings are denied, and confirmed quot
     assert.equal(c.s.billing.wallet(a.id).frozen, 10);
     assert.throws(
       () => cfg.save({ ...cfg.publicSettings(), pointsPerYuan: 200 }),
-      /不能改变积分面值/,
+      /不能修改面值/,
     );
   } finally {
     await c.close();

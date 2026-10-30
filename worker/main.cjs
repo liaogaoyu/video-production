@@ -47,18 +47,20 @@ function createWorker(services = openServices()) {
       },
     },
   });
+  const providers={
+    dreamina_web_api: services.web.provider(),
+    dreamina_global_canvas: services.global.provider(),
+    image: createImageProvider({repos:services.repos,publicBase:services.paths.publicBase}),
+    jimeng: createJimengProvider({repos:services.repos,pool,media:services.media,db:services.db,owner}),
+  };
+  const usagePoller=require('./billing-usage.cjs').createUsagePoller(services,providers);
   const scheduler = createScheduler({
     repos: services.repos,
     db: services.db,
     media: services.media,
     owner,
     imageConcurrency: process.env.STORYDOCK_IMAGE_CONCURRENCY || 3,
-    providers: {
-      dreamina_web_api: services.web.provider(),
-      dreamina_global_canvas: services.global.provider(),
-      image: createImageProvider({ repos: services.repos, publicBase: services.paths.publicBase }),
-      jimeng: createJimengProvider({ repos: services.repos, pool, media: services.media, db: services.db, owner }),
-    },
+    providers,
   });
   let stopped = false;
   const runtime = createRuntimeBootstrap({
@@ -110,6 +112,7 @@ function createWorker(services = openServices()) {
       }
       await services.global.tick();
       services.billing.reconcile();
+      usagePoller.tick();
       await scheduler.tick({ backgroundImages: true });
     } catch (error) {
       console.error(error.message);
@@ -119,7 +122,7 @@ function createWorker(services = openServices()) {
   return {
     services,
     start() { loop(); },
-    async stop() { stopped = true; await scheduler.drain(); await services.web.close(); services.db.close(); },
+    async stop() { stopped = true; await scheduler.drain(); await usagePoller.stop(); await services.web.close(); services.db.close(); },
   };
 }
 
