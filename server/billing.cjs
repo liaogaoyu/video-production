@@ -228,6 +228,7 @@ function createBilling(s) {
               resolutions: ["720p"],
               priceReady:
                 o.kind === "image" ||
+                o.provider === "dreamina_web_api" ||
                 cfg.get().rates[o.group_key]?.estimateCreditsPerSecond !=
                   null ||
                 (JSON.parse(o.pricing_json).perSecondCredits !== undefined &&
@@ -274,7 +275,7 @@ function createBilling(s) {
     });
     return listOffers(true);
   }
-  function quote(user, projectId, b) {
+  function quote(user, projectId, b, officialEstimates = null) {
     require("./tenant.cjs").own(db, projectId, user);
     const settings = cfg.get();
     if (!settings.enabled && user.role !== "admin")
@@ -320,9 +321,71 @@ function createBilling(s) {
       ratio = b.ratio || project.ratio;
     if (!["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].includes(ratio))
       throw new ApiError(400, "invalid_ratio", "画幅无效");
+    if (offer.provider === "dreamina_web_api" && !officialEstimates) {
+      const inputHash = fingerprint(projectId, ids);
+      const requested = ids.map((id) => {
+        const row = db
+          .prepare(
+            "SELECT duration FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL",
+          )
+          .get(id, projectId);
+        if (!row) throw new ApiError(404, "source_missing", "分镜不存在");
+        integer(row.duration, "时长", 4, 15);
+        return row;
+      });
+      return (async () => {
+        const estimates = [],
+          cache = new Map();
+        let accountId;
+        for (const row of requested) {
+          const key = String(row.duration);
+          if (!cache.has(key))
+            cache.set(
+              key,
+              await s.web.estimate({
+                model: offer.model,
+                resolution,
+                duration: row.duration,
+                accountId,
+              }),
+            );
+          const estimate = cache.get(key);
+          milli(estimate.credits);
+          if (
+            !estimate.accountId ||
+            estimate.source !== "official_web_reference"
+          )
+            throw new ApiError(502, "invalid_estimate", "官网预估返回不完整");
+          accountId = estimate.accountId;
+          estimates.push(estimate);
+        }
+        require("./tenant.cjs").own(db, projectId, user);
+        if (
+          hash(
+            db
+              .prepare(
+                "SELECT * FROM public_model_offers WHERE id=? AND enabled=1",
+              )
+              .get(offer.id),
+          ) !== hash(offer)
+        )
+          throw new ApiError(
+            409,
+            "quote_changed",
+            "模型已变化，请重新获取报价",
+          );
+        if (fingerprint(projectId, ids) !== inputHash)
+          throw new ApiError(
+            409,
+            "quote_changed",
+            "生成内容已变化，请重新获取报价",
+          );
+        return quote(user, projectId, b, estimates);
+      })();
+    }
     const rules = JSON.parse(offer.pricing_json),
       rate = settings.rates[offer.group_key];
-    const items = ids.map((id) => {
+    const items = ids.map((id, index) => {
       const row = db
         .prepare(
           `SELECT * FROM ${offer.kind === "image" ? "assets" : "shots"} WHERE id=? AND project_id=? AND deleted_at IS NULL`,
@@ -349,7 +412,8 @@ function createBilling(s) {
               r.resolution === resolution &&
               r.referenceMode === "any",
           );
-        if (rate.estimateCreditsPerSecond != null)
+        if (officialEstimates) units = milli(officialEstimates[index].credits);
+        else if (rate.estimateCreditsPerSecond != null)
           units = milli(rate.estimateCreditsPerSecond) * row.duration;
         else if (entry) units = milli(entry.credits);
         else if (
@@ -379,7 +443,10 @@ function createBilling(s) {
         unitsMilli: units,
         officialCredits: offer.kind === "video" ? units / 1000 : null,
         amount: price(units, rate, settings.pointsPerYuan, offer.kind),
-        source: "configured",
+        source: officialEstimates ? "official_web_reference" : "configured",
+        estimateEvidence: officialEstimates
+          ? officialEstimates[index]
+          : undefined,
       };
     });
     const amount = integer(
@@ -401,7 +468,7 @@ function createBilling(s) {
         model: offer.model,
         resolution,
         ratio,
-        accountId: "auto",
+        accountId: officialEstimates ? officialEstimates[0].accountId : "auto",
       },
       items,
       rate,
@@ -431,8 +498,11 @@ function createBilling(s) {
       ceiling: amount,
       items,
       expiresAt,
-      basis:
-        "配置预估仅用于预扣；成功后按官方实际消耗多退少补，缺少实际记录时待结算",
+      basis: officialEstimates
+        ? "官网参考单价预估"
+        : offer.kind === "image"
+          ? "按生成张数预估"
+          : "按国内渠道配置预估",
       wallet: wallet(db, user.id),
     };
   }

@@ -94,7 +94,7 @@ export function Generation({
           }}
           options={offers.map((o) => ({
             value: o.id,
-            label: o.name + (o.priceReady ? "" : " · 待配置报价"),
+            label: o.name,
           }))}
         />
       </Space>

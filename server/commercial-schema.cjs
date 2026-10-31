@@ -93,6 +93,16 @@ function installCommercialSchema(db) {
       "UPDATE generation_quotes SET status='expired' WHERE status='open'",
     ).run();
   }
+  // Seed a channel-wide prepayment estimate from verified domestic Fast tasks (54/9 and 84/14).
+  // This is a configurable estimate shared by models; actual consumption always settles separately.
+  if (!pricing.domesticEstimateSeeded) {
+    if (pricing.rates.domestic.estimateCreditsPerSecond == null)
+      pricing.rates.domestic.estimateCreditsPerSecond = 6;
+    pricing.domesticEstimateSeeded = true;
+    db.prepare(
+      "UPDATE commercial_settings SET value=?,revision=revision+1 WHERE id=1",
+    ).run(JSON.stringify(pricing));
+  }
   const offers = [
     ["image-default", "资产生图", "image", "image", "", "image"],
     [

@@ -1,9 +1,11 @@
 // Internal stdio bridge. Credentials never appear in arguments, URLs or responses.
 import readline from 'node:readline';
+import crypto from 'node:crypto';
+const estimateRules=new Map<string,any>();
 import fs from 'node:fs/promises';
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { generateVideo } from './api/controllers/videos.ts';
+import { generateVideo, getModel } from './api/controllers/videos.ts';
 import { getCredit, request, parseRegionFromToken, checkImageContent } from './api/controllers/core.ts';
 import { uploadImageBuffer } from './lib/image-uploader.ts';
 import { extractVideoUrl } from './lib/image-utils.ts';
@@ -11,6 +13,21 @@ import { closeAllBrowserSessions } from './lib/abogus-browser.ts';
 async function execute(m:any) {
  const b=m.body||{};
  if(m.method==='runtime') return {available:true,models:['jimeng-video-seedance-2.0','jimeng-video-seedance-2.0-fast']};
+ if(m.method==='estimate') {
+  const region=parseRegionFromToken(m.token),model=getModel(b.model,region),headers={Referer:'https://dreamina.capcut.com/'};
+  const {selectBenefit,calculateEstimate}=require(process.env.STORYDOCK_WEB_VENDOR+'/../../server/web-estimate.cjs');
+  const key=crypto.createHash('sha256').update(m.token+'|'+model+'|'+b.resolution).digest('hex');
+  let rules=estimateRules.get(key);
+  if(!rules||rules.expiresAt<Date.now()){
+   const config=await request('post','/mweb/v1/video_generate/get_common_config',m.token,{data:{},headers});
+   const benefit=selectBenefit(config,model,b.resolution||'720p');
+   const meta=await request('post','/commerce/v3/resource/benefit_metadata',m.token,{data:{query_list:[{resource_type:'aigc',resource_id:'generate_video',benefit_type_list:[benefit]}]},noDefaultParams:true,headers});
+   rules={benefit,meta,expiresAt:Date.now()+30000};
+   if(estimateRules.size>=100)estimateRules.clear();
+   estimateRules.set(key,rules);
+  }
+  return {...calculateEstimate(rules.meta,rules.benefit,b.duration),model};
+ }
  if(m.method==='usage') {
   const r=await request('post','/commerce/v1/benefits/user_credit_history',m.token,{data:{cursor:b.cursor||'',count:50},noDefaultParams:true,headers:{Referer:'https://dreamina.capcut.com/'}});
   return {records:r.records?.map((x:any)=>({amount:x.amount,submit_id:x.submit_id,history_id:x.history_id,history_type:x.history_type,status:x.status})),hasMore:r.has_more,cursor:r.new_cursor};

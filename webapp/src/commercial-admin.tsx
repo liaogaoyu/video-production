@@ -212,7 +212,7 @@ export function CommercialAdminPage() {
         </Space>
         <Alert
           type="info"
-          title="未配置邮件服务时不能开放注册；未配置视频预测价格时该模型无法报价。新用户初始余额为0。"
+          title="未配置邮件服务时不能开放注册；国内使用渠道预估，国际自动读取官网参考单价。新用户初始余额为0。"
         />
       </Card>
       <Card className="spaced" title="渠道成本与加价">
@@ -256,7 +256,7 @@ export function CommercialAdminPage() {
               >
                 <InputNumber min={0} max={10000} precision={0} />
               </Form.Item>
-              {g !== "image" && (
+              {g === "domestic" && (
                 <Form.Item
                   name={["rates", g, "estimateCreditsPerSecond"]}
                   label="预扣用：每秒预估官方积分（非最终扣费）"
@@ -390,7 +390,7 @@ export function CommercialAdminPage() {
       <Alert
         className="spaced"
         type="info"
-        title="模型只配置展示与上架。人民币价格由渠道兑换成本和加价比例决定；渠道每秒预估积分只用于预扣，最终按官方实际积分多退少补。"
+        title="模型只配置展示与上架。人民币价格由渠道兑换成本和加价比例决定；国内每秒预估积分只用于预扣，国际渠道自动读取官网参考单价；最终按官方实际积分多退少补。"
       />
       <Table
         rowKey="id"
