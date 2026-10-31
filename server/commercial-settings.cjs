@@ -15,7 +15,7 @@ function settingsService(s) {
         .prepare("SELECT id FROM wallet_ledger LIMIT 1")
         .get(),
       smtpConfigured: !!get().smtpSecret,
-      officialQuotesSupported: { jimeng: false, dreamina_web_api: false },
+      officialQuotesSupported: { jimeng: false, dreamina_web_api: true },
       billingBasis:
         "人民币预扣，按官方任务实际积分多退少补；未取得实际消耗不结算",
     };

@@ -23,6 +23,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // src/storydock-bridge.ts
 var import_node_readline = __toESM(require("readline"), 1);
+var import_node_crypto = __toESM(require("crypto"), 1);
 var import_promises = __toESM(require("fs/promises"), 1);
 var import_axios6 = __toESM(require("axios"), 1);
 var import_https_proxy_agent2 = require("https-proxy-agent");
@@ -3188,10 +3189,26 @@ async function generateVideo(_model, prompt, {
 }
 
 // src/storydock-bridge.ts
+var estimateRules = /* @__PURE__ */ new Map();
 async function execute(m) {
   var _a2, _b2, _c, _d, _e, _f;
   const b = m.body || {};
   if (m.method === "runtime") return { available: true, models: ["jimeng-video-seedance-2.0", "jimeng-video-seedance-2.0-fast"] };
+  if (m.method === "estimate") {
+    const region = parseRegionFromToken(m.token), model = getModel(b.model, region), headers = { Referer: "https://dreamina.capcut.com/" };
+    const { selectBenefit, calculateEstimate } = require(process.env.STORYDOCK_WEB_VENDOR + "/../../server/web-estimate.cjs");
+    const key = import_node_crypto.default.createHash("sha256").update(m.token + "|" + model + "|" + b.resolution).digest("hex");
+    let rules = estimateRules.get(key);
+    if (!rules || rules.expiresAt < Date.now()) {
+      const config = await request("post", "/mweb/v1/video_generate/get_common_config", m.token, { data: {}, headers });
+      const benefit = selectBenefit(config, model, b.resolution || "720p");
+      const meta = await request("post", "/commerce/v3/resource/benefit_metadata", m.token, { data: { query_list: [{ resource_type: "aigc", resource_id: "generate_video", benefit_type_list: [benefit] }] }, noDefaultParams: true, headers });
+      rules = { benefit, meta, expiresAt: Date.now() + 3e4 };
+      if (estimateRules.size >= 100) estimateRules.clear();
+      estimateRules.set(key, rules);
+    }
+    return { ...calculateEstimate(rules.meta, rules.benefit, b.duration), model };
+  }
   if (m.method === "usage") {
     const r = await request("post", "/commerce/v1/benefits/user_credit_history", m.token, { data: { cursor: b.cursor || "", count: 50 }, noDefaultParams: true, headers: { Referer: "https://dreamina.capcut.com/" } });
     return { records: (_a2 = r.records) == null ? void 0 : _a2.map((x) => ({ amount: x.amount, submit_id: x.submit_id, history_id: x.history_id, history_type: x.history_type, status: x.status })), hasMore: r.has_more, cursor: r.new_cursor };
