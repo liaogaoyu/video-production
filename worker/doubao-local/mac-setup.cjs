@@ -59,10 +59,10 @@ function readEnrollment(file) {
   const {deviceId,deviceToken,accounts,ssh}=data||{};
   if(!/^[a-f0-9-]{36}$/i.test(deviceId||'') || !/^[A-Za-z0-9_-]{32,}$/.test(deviceToken||''))
     throw Error('连接配置缺少有效的设备凭据');
-  if(!Array.isArray(accounts)||!accounts.length||accounts.length>50||
+  if(!Array.isArray(accounts)||accounts.length>50||
      accounts.some(account=>typeof account?.label!=='string'||!account.label.trim()||
        typeof account.quotaKey!=='string'||!account.quotaKey.trim()))
-    throw Error('请在连接配置中填写此 Mac 已登录的豆包账号');
+    throw Error('连接配置的账号列表格式不正确');
   if(!/^[a-z0-9][a-z0-9.-]*$/i.test(ssh?.host||'')||!/^\w[\w-]*$/.test(ssh?.user||'')||
      !/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/.test(ssh?.hostKey||''))
     throw Error('连接配置缺少服务器地址或已验证的 SSH 主机公钥');
@@ -74,7 +74,10 @@ async function activate(file) {
   const configPath=path.join(directory,'config.json');
   const config={deviceId,deviceToken,accounts,serverUrl:localServer,stateDirectory:'state'};
   const previous=fs.existsSync(configPath)?JSON.parse(fs.readFileSync(configPath,'utf8')):null;
-  if(previous&&JSON.stringify(previous)!==JSON.stringify(config)) throw Error('此 Mac 已有执行器配置，请保留原配置');
+  const enablingAccounts=previous?.accounts?.length===0 && accounts.length>0 &&
+    JSON.stringify({...previous,accounts})===JSON.stringify(config);
+  if(previous && JSON.stringify(previous)!==JSON.stringify(config) && !enablingAccounts)
+    throw Error('此 Mac 已有执行器配置，请保留原配置');
   const key=path.join(directory,'tunnel-ed25519');
   if(!fs.existsSync(key+'.pub')||!fs.existsSync(key)) throw Error('请先运行安装程序生成此 Mac 的公钥');
   const knownHosts=path.join(directory,'tunnel-known-hosts');
@@ -107,9 +110,18 @@ async function activate(file) {
   }
   if(!connected) throw Error('未能建立已授权的 SSH 隧道，请核对新 Mac 的公钥是否已登记');
   if(!previous) fs.writeFileSync(configPath,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});
+  if(enablingAccounts) {
+    const temp=configPath+'.'+randomUUID()+'.tmp';
+    try {
+      fs.writeFileSync(temp,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});
+      fs.renameSync(temp,configPath);
+    } finally {fs.rmSync(temp,{force:true});}
+  }
   startService(labels.worker,[process.execPath,path.join(installed,'worker','doubao-local','mac-setup.cjs'),'run'],
     path.join(directory,'worker.log'));
-  console.log('已安装。登录豆包并启动本机调试接口后，执行器会自动领取任务。');
+  console.log(accounts.length
+    ? '已安装。登录豆包并启动本机调试接口后，执行器会自动领取任务。'
+    : '已安装。登录豆包并启动本机调试接口后，执行器会自动上报账号名单。');
 }
 
 async function main(args) {

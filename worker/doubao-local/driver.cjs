@@ -54,6 +54,40 @@ async function waitFor(check, timeout = 15000, message = '豆包界面未进入�
 async function click(role, text) {
   await ax({action:'click',role,label:text});
 }
+async function collectAccounts() {
+  let nodes=await snapshot();
+  const current=accountOf(nodes);
+  const menu=tree=>tree.some(n=>n.role==='AXMenu');
+  const rows=tree=>tree.filter(n=>n.role==='AXMenuItem' && label(n).startsWith('avatar '))
+    .map(n=>label(n).slice(7).trim()).filter(Boolean);
+  const more=tree=>tree.some(n=>n.role==='AXMenuItem' && label(n)==='更多账号');
+  if(!background || !current || busy(nodes) || menu(nodes)) return null;
+  await click('AXPopUpButton',current);
+  try {
+    nodes=await waitFor(tree=>accountOf(tree)===current && menu(tree),4000,'账号菜单未打开');
+    const recent=rows(nodes);
+    if(more(nodes)) {
+      await click('AXMenuItem','更多账号');
+      nodes=await waitFor(tree=>accountOf(tree)===current && rows(tree).some(name=>!recent.includes(name)),
+        4000,'更多账号尚未展开');
+    }
+    if(accountOf(nodes)!==current || busy(nodes)) return null;
+    return [...new Set([current,...recent,...rows(nodes)])];
+  } finally {
+    for(let i=0;i<2;i++) {
+      const tree=await snapshot();
+      if(accountOf(tree)!==current || !menu(tree)) break;
+      await ax({action:'close-account-menu'});
+      const stillOpen='账号菜单尚未关闭';
+      try {
+        await waitFor(next=>accountOf(next)!==current || !menu(next),1200,stillOpen);
+        break;
+      } catch(error) {
+        if(error.message!==stillOpen || i===1) throw error;
+      }
+    }
+  }
+}
 async function switchAccount(target) {
   let nodes = await snapshot();
   if (busy(nodes)) throw Error('检测到正在生成的任务，禁止切换账号');
@@ -299,7 +333,7 @@ function selectedFailed(nodes) {
   return nodes.some(n=>n.description==='视频生成失败' && n.bounds &&
     n.bounds.every((number,index)=>Math.abs(number-frame[index])<=2));
 }
-module.exports = { ax, snapshot, busy, accountOf, switchAccount, prepare, waitFor, click, selectedTitle, selectedFailed, hasVideoDownload, editorReferences, promptInput, configure, DEFAULT_MODEL, setGuard, cancelPreparation, useBackground, closeBackground };
+module.exports = { ax, snapshot, busy, accountOf, collectAccounts, switchAccount, prepare, waitFor, click, selectedTitle, selectedFailed, hasVideoDownload, editorReferences, promptInput, configure, DEFAULT_MODEL, setGuard, cancelPreparation, useBackground, closeBackground };
 
 if (require.main === module) {
   (async () => {

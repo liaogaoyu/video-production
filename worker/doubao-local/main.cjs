@@ -5,6 +5,7 @@ const os = require('node:os');
 const driver = require('./driver.cjs');
 const pause = ms => new Promise(resolve=>setTimeout(resolve,ms));
 const transient = error => error.retryable || ['AbortError','TimeoutError'].includes(error.name) || error.cause?.code;
+let nextAccountReport=0, lastAccountReportError='';
 
 async function main() {
   const configPath = process.argv[2];
@@ -16,7 +17,7 @@ async function main() {
   const base = new URL(config.serverUrl);
   if (base.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(base.hostname))
     throw Error('远程服务器必须使用 HTTPS');
-  if (!Array.isArray(config.accounts) || !config.accounts.length) throw Error('请配置账号列表');
+  if (!Array.isArray(config.accounts)) throw Error('请配置账号列表');
   const directory = path.resolve(path.dirname(configPath), config.stateDirectory || 'doubao-state');
   fs.mkdirSync(directory, {recursive:true, mode:0o700});
   const lockFile = path.join(directory, 'worker.lock');
@@ -214,6 +215,26 @@ async function main() {
       const previous=await api('tasks/'+state.taskId);
       if(previous.state==='succeeded') {state.stage='uploaded';save();}
     }
+    if((!state.taskId || ['uploaded','failed','cancelled'].includes(state.stage)) && Date.now()>=nextAccountReport) {
+      nextAccountReport=Date.now()+30000;
+      try {
+        const labels=await driver.collectAccounts();
+        if(labels) {
+          await api('account-report',{workerId:state.workerId,labels},false,5000);
+          nextAccountReport=Date.now()+(config.accounts.length?300000:45000);
+          if(!config.accounts.length && state.idleReason!=='waiting_account_mapping') {
+            state.idleReason='waiting_account_mapping';
+            save();
+            console.log('已上报豆包账号名单，等待配置生成账号。');
+          }
+          lastAccountReportError='';
+        }
+      } catch(error) {
+        if(error.message!==lastAccountReportError) console.error('账号名单暂未上报：',error.message);
+        lastAccountReportError=error.message;
+      }
+    }
+    if(!config.accounts.length) return;
     const claim = await api('claim',{workerId:state.workerId,accounts:config.accounts});
     if (!claim.task) {
       if(state.idleReason!==claim.reason){state.idleReason=claim.reason;save();console.log(JSON.stringify(claim));}
