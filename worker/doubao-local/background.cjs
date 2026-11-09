@@ -106,6 +106,12 @@ class BackgroundAdapter {
   }
   async perform(request) {
     if(request.action==='snapshot') return this.snapshot();
+    if(request.action==='close-account-menu') {
+      const key={key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:53};
+      await this.connection.send('Input.dispatchKeyEvent',{type:'keyDown',...key});
+      await this.connection.send('Input.dispatchKeyEvent',{type:'keyUp',...key});
+      return {ok:true};
+    }
     if(request.action==='canvas-node') {
       return this.connection.evaluate(`(title => {
         const headers=document.querySelectorAll('[title="双击编辑标题"]');
