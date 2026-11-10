@@ -2,12 +2,13 @@
 
 本地 Electron 客户端，用于管理漫剧项目、资产图片、整剧分镜和批量生成任务。客户端没有自身账号系统；项目、配置、任务和媒体默认保存在本机。
 
+开始修改代码前，先核对[分支管理规范](docs/branch-management.md)里的开发基线。
+
 另一台 Mac 可安装[本地豆包执行器](worker/doubao-local/MAC-INSTALL.md)，接入已有的 Storydock 工作台。
 
 ## 启动与验证
 
 ```sh
-cd /Users/liaogaoyu/Documents/limenx/prototypes/storydock
 npm install
 npm start
 npm run check
@@ -32,6 +33,8 @@ macOS Apple Silicon 构建：`npm run build:mac`。产物位于 `dist/LumenX 漫
 - 完整项目包导出和恢复，包含媒体与可移植 manifest，不导出密钥或登录凭据。
 
 ## 外部运行条件
+
+把另一台 Mac 接到现有工作台的本地豆包队列时，按[本地豆包执行器部署指南](worker/doubao-local/MAC-INSTALL.md)安装并登记该设备。
 
 生图需要用户提供可用的 OpenAI Images 协议服务、模型名和 API Key。保存配置不等于接口验证成功。
 
@@ -95,6 +98,9 @@ npm run local:start
 
 
 ### Dreamina 国际网页渠道（Seedance 2.0 / Fast）
+
+账号池提供“邮箱自动登录”：管理员输入邮箱和密码，Linux 服务端浏览器通过国际专用代理打开官网表单、填写并提交，成功后自动保存加密登录态；密码仅用于本次登录，不写入数据库或日志。遇到验证码、邮件验证、人机验证或必须人工确认的官网内容，系统转到现有远程浏览器，完成后自动检查并保存。弹窗未加载时只在提交密码前刷新一次；密码错误和结果不确定时不会反复提交。没有启用自动破解验证码或自动接受新条款。
+
 
 此渠道独立于官方 CLI，使用内置的 `vendor/jimeng-api` fork（GPL-3.0，来源见其 `UPSTREAM.md`），只生成分镜视频。CLI 的 OAuth 不能直接当作网页 sessionid 使用。账号列表支持网页登录、剩余积分查询、暂停和轮流分配；资产生图仍走原来的配置。
 

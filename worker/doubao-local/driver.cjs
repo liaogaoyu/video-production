@@ -12,7 +12,7 @@ function useBackground(endpoint) {
 function closeBackground() {background?.close();background=null;}
 
 async function ax(request) {
-  if(!['snapshot','canvas-node','canvas-rejected'].includes(request.action) && guard) await guard();
+  if(!['snapshot','canvas-node','canvas-rejected','canvas-status'].includes(request.action) && guard) await guard();
   if(background) {
     try {return await background.perform(request);}
     catch(error) {error.message+=` [后台 ${request.action}${request.role?' '+request.role:''}]`;throw error;}
@@ -49,7 +49,7 @@ async function waitFor(check, timeout = 15000, message = '豆包界面未进入�
     if (check(nodes)) return nodes;
     await pause(400);
   } while (Date.now() < until);
-  throw Error(message);
+  throw Object.assign(Error(message),{uiTimeout:true});
 }
 async function click(role, text) {
   await ax({action:'click',role,label:text});
@@ -169,7 +169,7 @@ async function prepare(task, config, report=async()=>{}) {
       const cards=nodes.filter(isCard);
       if(cards.length!==1) throw Error('画布入口不唯一，请手动打开自动化专用画布');
       await click('AXButton',cards[0].title);
-      nodes=await waitFor(link?configuredCanvasOpen:canvasOpen);
+      nodes=await waitFor(link?configuredCanvasOpen:canvasOpen,15000,'点击画布卡片后，视频生成编辑器没有打开');
     }
   }
   await report('writing_prompt');
@@ -215,7 +215,8 @@ async function prepare(task, config, report=async()=>{}) {
       await click('AXButton','打开');
     }
     await waitFor(tree=>tree.some(n=>n.role==='AXImage'&&label(n)===path.basename(file)) &&
-      !tree.some(n=>n.role==='AXProgressIndicator'&&/upload/i.test(label(n))),60000);
+      !tree.some(n=>n.role==='AXProgressIndicator'&&/upload/i.test(label(n))),60000,
+      `豆包在 60 秒内未确认第 ${index+1} 张参考图上传完成`);
     await report('uploading_references',index+1,files.length);
   }
   const expected=files.map(file=>path.basename(file));

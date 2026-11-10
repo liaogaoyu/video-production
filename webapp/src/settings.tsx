@@ -1,9 +1,11 @@
+import {SeedanceApiSettings} from "./seedance-api-settings";
 import { useEffect, useState } from "react";
 import {
   App,
   Alert,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   Modal,
@@ -35,6 +37,8 @@ export function SettingsPage() {
     [loading, setLoading] = useState(true),
     [add, setAdd] = useState<"domestic" | "international" | null>(null),
     [auth, setAuth] = useState<Account | null>(null),
+    [complianceAccount, setComplianceAccount] = useState<Account | null>(null),
+    [emailLogin, setEmailLogin] = useState<Account | null>(null),
     [login, setLogin] = useState<Account | null>(null),
     [modelForm] = Form.useForm(),
     [addForm] = Form.useForm(),
@@ -85,6 +89,7 @@ export function SettingsPage() {
           刷新状态
         </Action>
       </div>
+      <SeedanceApiSettings />
       <div className="settings-grid">
         <div>
           <Card title="生图模型">
@@ -397,6 +402,7 @@ export function SettingsPage() {
                       }
                     }}
                   />
+                  <Button size="small" onClick={() => setEmailLogin(a)}>邮箱自动登录</Button>
                   <Button
                     size="small"
                     icon={<LoginOutlined />}
@@ -418,6 +424,9 @@ export function SettingsPage() {
                   >
                     检查积分
                   </Action>
+                  <Button size="small" disabled={!a.authorized} onClick={() => setComplianceAccount(a)}>
+                    {a.complianceConfirmed ? "已完成生成确认" : "生成确认"}
+                  </Button>
                   <Switch
                     size="small"
                     checked={a.enabled}
@@ -441,6 +450,9 @@ export function SettingsPage() {
           </Card>
         </div>
       </div>
+      {emailLogin && <EmailAutomaticLogin account={emailLogin} onClose={() => setEmailLogin(null)} onDone={refresh} />}
+      {complianceAccount && <OfficialGenerationConfirmation account={complianceAccount}
+        onClose={() => setComplianceAccount(null)} onDone={refresh} />}
       <Modal
         open={!!add}
         title={add === "domestic" ? "添加即梦账号" : "添加国际网页账号"}
@@ -579,10 +591,12 @@ function BrowserLogin({
   account,
   onClose,
   onDone,
+  notice,
 }: {
   account: Account;
   onClose: () => void;
   onDone: () => Promise<void>;
+  notice?: string;
 }) {
   const [frame, setFrame] = useState(""),
     [text, setText] = useState(""),
@@ -657,6 +671,7 @@ function BrowserLogin({
         </Space>
       }
     >
+      {notice && <Alert type="info" title={notice} className="form-toolbar" />}
       {error && <Alert type="warning" title={error} className="form-toolbar" />}
       {!frame ? (
         <div className="page-loading">
@@ -728,4 +743,59 @@ function BrowserLogin({
       </Space.Compact>
     </Modal>
   );
+}
+
+function OfficialGenerationConfirmation({account,onClose,onDone}: {account: Account;onClose:()=>void;onDone:()=>Promise<void>}) {
+ const [details,setDetails]=useState<any>(null),[accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
+ const {message}=App.useApp();
+ useEffect(()=>{let active=true;api(`dreamina-web/accounts/${account.id}/compliance`).then(r=>{if(active)setDetails(r);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[account.id]);
+ return <Modal open title={`官网生成安全确认 · ${account.name}`} onCancel={()=>{if(!busy)onClose();}}
+   okText={details?.confirmed ? "完成" : "同意并保存到官网"} confirmLoading={busy}
+   okButtonProps={{disabled:!details || (!details.confirmed&&!accepted)}} cancelButtonProps={{disabled:busy}}
+   onOk={async()=>{
+    if(details?.confirmed){await onDone();onClose();return;}
+    setBusy(true);setError("");
+    try{await api(`dreamina-web/accounts/${account.id}/compliance`,"POST",{accepted,version:details.version});
+      await onDone();message.success("官网确认已保存，后续生成自动检查");onClose();
+    }catch(e){setError((e as Error).message);}finally{setBusy(false);}
+   }}>
+   {details ? <>
+    <Alert type={details.confirmed?"success":"info"} title={details.confirmed?"官网已记录确认，无需重复操作":"该账号首次生成前需要完成官网安全确认"} />
+    <Typography.Paragraph className="spaced">{details.statement}</Typography.Paragraph>
+    {!details.confirmed&&<Checkbox checked={accepted} onChange={e=>setAccepted(e.target.checked)} disabled={busy}>我已阅读并同意上述官网确认内容</Checkbox>}
+   </> : !error && <Spin />}
+   {error&&<Alert className="spaced" type="error" title={error} />}
+ </Modal>;
+}
+
+function EmailAutomaticLogin({account,onClose,onDone}: {account:Account;onClose:()=>void;onDone:()=>Promise<void>}) {
+ const [form]=Form.useForm(),[started,setStarted]=useState(false),[busy,setBusy]=useState(false),[state,setState]=useState<any>(null),[error,setError]=useState("");
+ const {message}=App.useApp(),base=`dreamina-web/accounts/${account.id}/login`;
+ useEffect(()=>{
+  if(!started)return;
+  let alive=true,timer:ReturnType<typeof setTimeout>;
+  const poll=async()=>{try{
+   const result=await api(base+'/status');if(!alive)return;setState(result);
+   if(result.status==='authenticated'){await onDone();if(alive){message.success('登录成功，登录态已保存');onClose();}return;}
+   if(result.status==='failed'||result.status==='cancelled'){setStarted(false);setError(result.message);return;}
+  }catch(e){if(alive)setError((e as Error).message);}
+  if(alive)timer=setTimeout(poll,1500);};poll();
+  return()=>{alive=false;clearTimeout(timer);};
+ },[started]);
+ useEffect(()=>()=>{api(base,'DELETE').catch(()=>{});},[]);
+ if(started&&['needs_verification','needs_confirmation','manual'].includes(state?.status))return <BrowserLogin account={account} onClose={onClose} onDone={onDone} notice={state.message} />;
+ return <Modal open title={`邮箱自动登录 · ${account.name}`} onCancel={onClose} footer={null}>
+  <Typography.Paragraph type="secondary">服务器通过国际版代理登录，成功后自动保存加密登录态。密码仅用于本次登录，不写入数据库。</Typography.Paragraph>
+  {!started&&<Form form={form} layout="vertical" onFinish={async(values)=>{
+   setBusy(true);setError('');
+   try{const result=await api(base+'/email','POST',values);form.setFieldValue('password','');setState(result);setStarted(true);}
+   catch(e){setError((e as Error).message);}finally{setBusy(false);}
+  }}>
+   <Form.Item label="邮箱" name="email" rules={[{required:true,type:'email',message:'请输入有效邮箱'}]}><Input autoComplete="username" /></Form.Item>
+   <Form.Item label="密码" name="password" rules={[{required:true,message:'请输入密码'}]}><Input.Password autoComplete="current-password" /></Form.Item>
+   <Button type="primary" htmlType="submit" loading={busy}>自动登录并保存登录态</Button>
+  </Form>}
+  {started&&<Space><Spin /><Typography.Text>{state?.message||'正在自动登录…'}</Typography.Text></Space>}
+  {error&&<Alert type="error" className="spaced" title={error} />}
+ </Modal>;
 }

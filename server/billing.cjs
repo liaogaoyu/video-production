@@ -142,14 +142,14 @@ function reconcileJob(db, id) {
         const u = result.officialUsage;
         if (
           !u ||
-          u.source !== "official_actual" ||
+          u.source !== (snap.rate.apiCny ? "api_actual_cny" : "official_actual") ||
           !job.remote_task_id ||
           u.taskId !== job.remote_task_id ||
-          u.credits === undefined
+          (snap.rate.apiCny ? (u.costCny === undefined || u.currency !== "CNY" || u.billingStatus !== "billed") : u.credits === undefined)
         )
           return;
         try {
-          final = price(milli(u.credits), snap.rate, 100, snap.kind);
+          final = snap.rate.apiCny ? require('./seedance-api.cjs').cnyPrice(u.costCny,snap.rate.markupPercent) : price(milli(u.credits), snap.rate, 100, snap.kind);
         } catch {
           return;
         }
@@ -212,7 +212,7 @@ function createBilling(s) {
   function listOffers(admin = false) {
     const conn = s.repos.accounts.imageConnection();
     return offers()
-      .filter((o) => admin || o.enabled)
+      .filter((o) => admin || (o.enabled && (o.provider !== "seedance_api" || s.seedanceApi?.config().enabled && require("./seedance-api.cjs").FIXED_RATES_FEN[o.model] != null)))
       .map((o) =>
         admin
           ? { ...o, pricing: JSON.parse(o.pricing_json) }
@@ -224,10 +224,11 @@ function createBilling(s) {
                   : o.name,
               kind: o.kind,
               minDuration: 4,
-              maxDuration: 15,
-              resolutions: ["720p"],
+              maxDuration: o.provider === 'seedance_api' ? require('./seedance-api.cjs').MODELS.find(m=>m.id===o.model)?.maxDuration || 15 : 15,
+              resolutions: o.provider === 'seedance_api' ? require('./seedance-api.cjs').MODELS.find(m=>m.id===o.model)?.resolutions || ['720p'] : ['720p'],
+              provider: o.provider,
               priceReady:
-                o.kind === "image" ||
+                o.kind === "image" || o.provider === "seedance_api" ||
                 o.provider === "dreamina_web_api" ||
                 cfg.get().rates[o.group_key]?.estimateCreditsPerSecond !=
                   null ||
@@ -317,10 +318,18 @@ function createBilling(s) {
         );
     }
     const project = s.repos.content.mustProject(projectId),
-      resolution = "720p",
+      resolution = offer.provider === "seedance_api" ? (offer.model === "seedance-2.5-draft" ? "480p" : "720p") : "720p",
       ratio = b.ratio || project.ratio;
     if (!["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].includes(ratio))
       throw new ApiError(400, "invalid_ratio", "画幅无效");
+    if (offer.provider === 'seedance_api' && !officialEstimates) {
+      const inputHash=fingerprint(projectId,ids), offerHash=hash(offer), revision=s.seedanceApi.config().revision;
+      return s.seedanceApi.estimate(projectId,{sourceIds:ids,model:offer.model,resolution,ratio}).then(estimates=>{
+        require('./tenant.cjs').own(db,projectId,user);
+        if(fingerprint(projectId,ids)!==inputHash || hash(db.prepare('SELECT * FROM public_model_offers WHERE id=?').get(offer.id))!==offerHash || s.seedanceApi.config().revision!==revision)throw new ApiError(409,'quote_changed','内容或 API 配置已变化，请重新报价');
+        return quote(user,projectId,b,estimates);
+      });
+    }
     if (offer.provider === "dreamina_web_api" && !officialEstimates) {
       const inputHash = fingerprint(projectId, ids);
       const requested = ids.map((id) => {
@@ -384,7 +393,7 @@ function createBilling(s) {
       })();
     }
     const rules = JSON.parse(offer.pricing_json),
-      rate = settings.rates[offer.group_key];
+      rate = offer.provider === 'seedance_api' ? {apiCny:true,markupPercent:s.seedanceApi.config().markupPercent} : settings.rates[offer.group_key];
     const items = ids.map((id, index) => {
       const row = db
         .prepare(
@@ -394,7 +403,7 @@ function createBilling(s) {
       if (!row) throw new ApiError(404, "source_missing", "资产或分镜不存在");
       let units = 1000;
       if (offer.kind === "video") {
-        integer(row.duration, "时长", 4, 15);
+        integer(row.duration, "时长", 4, offer.provider === "seedance_api" && offer.model === "seedance-2.5-draft" ? 30 : 15);
         const refs = db
           .prepare("SELECT COUNT(*) n FROM shot_references WHERE shot_id=?")
           .get(id).n;
@@ -412,7 +421,8 @@ function createBilling(s) {
               r.resolution === resolution &&
               r.referenceMode === "any",
           );
-        if (officialEstimates) units = milli(officialEstimates[index].credits);
+        if (rate.apiCny) units = 0;
+        else if (officialEstimates) units = milli(officialEstimates[index].credits);
         else if (rate.estimateCreditsPerSecond != null)
           units = milli(rate.estimateCreditsPerSecond) * row.duration;
         else if (entry) units = milli(entry.credits);
@@ -437,13 +447,15 @@ function createBilling(s) {
                 row.prompt,
                 row.type,
                 project.asset_common_prompt,
+                b.appendDisplayRules !== false,
               )
             : null,
         duration: row.duration || null,
         unitsMilli: units,
-        officialCredits: offer.kind === "video" ? units / 1000 : null,
-        amount: price(units, rate, settings.pointsPerYuan, offer.kind),
-        source: officialEstimates ? "official_web_reference" : "configured",
+        officialCredits: rate.apiCny ? null : offer.kind === "video" ? units / 1000 : null,
+        costCny: rate.apiCny ? officialEstimates[index].costCny : undefined,
+        amount: rate.apiCny ? require('./seedance-api.cjs').cnyPrice(officialEstimates[index].costCny,rate.markupPercent) : price(units, rate, settings.pointsPerYuan, offer.kind),
+        source: rate.apiCny ? 'api_fixed_cny' : officialEstimates ? "official_web_reference" : "configured",
         estimateEvidence: officialEstimates
           ? officialEstimates[index]
           : undefined,
@@ -464,11 +476,12 @@ function createBilling(s) {
       kind: offer.kind,
       body: {
         kind: offer.kind,
+        appendDisplayRules: b.appendDisplayRules !== false,
         sourceIds: ids,
         model: offer.model,
         resolution,
         ratio,
-        accountId: officialEstimates ? officialEstimates[0].accountId : "auto",
+        accountId: offer.provider === "seedance_api" ? null : officialEstimates ? officialEstimates[0].accountId : "auto",
       },
       items,
       rate,
@@ -498,7 +511,7 @@ function createBilling(s) {
       ceiling: amount,
       items,
       expiresAt,
-      basis: officialEstimates
+      basis: rate.apiCny ? "按 API 渠道固定秒价预扣" : officialEstimates
         ? "官网参考单价预估"
         : offer.kind === "image"
           ? "按生成张数预估"
@@ -570,7 +583,9 @@ function createBilling(s) {
           );
       }
       const result =
-        offer.provider === "dreamina_web_api"
+        offer.provider === 'seedance_api'
+          ? s.seedanceApi.batch(q.project_id,snap.body,"quote-"+id,snap.items.map(i=>i.estimateEvidence))
+          : offer.provider === "dreamina_web_api"
           ? s.web.batch(q.project_id, snap.body, "quote-" + id)
           : s.repos.jobs.createBatch({
               projectId: q.project_id,

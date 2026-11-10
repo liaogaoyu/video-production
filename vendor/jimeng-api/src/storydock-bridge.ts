@@ -28,13 +28,25 @@ async function execute(m:any) {
   }
   return {...calculateEstimate(rules.meta,rules.benefit,b.duration),model};
  }
+ if(m.method==='compliance' || m.method==='confirm-compliance') {
+  const helper=require(process.env.STORYDOCK_WEB_VENDOR+'/../../server/web-compliance.cjs');
+  const headers={Referer:'https://dreamina.capcut.com/'};
+  if(m.method==='confirm-compliance') {
+   if(b.accepted!==true || b.version!==helper.version) throw Error('需要明确同意当前官网安全确认内容');
+   await request('post','/mweb/v1/update_settings',m.token,{data:{custom_settings:{aigc_compliance_confirmed:true}},headers});
+  }
+  const data=await request('post','/mweb/v1/get_settings',m.token,{data:{},headers});
+  const result=helper.readConfirmation(data);
+  if(m.method==='confirm-compliance'&&!result.confirmed) throw Error('官网未保存安全确认，请稍后重试');
+  return result;
+ }
  if(m.method==='usage') {
   const r=await request('post','/commerce/v1/benefits/user_credit_history',m.token,{data:{cursor:b.cursor||'',count:50},noDefaultParams:true,headers:{Referer:'https://dreamina.capcut.com/'}});
   return {records:r.records?.map((x:any)=>({amount:x.amount,submit_id:x.submit_id,history_id:x.history_id,history_type:x.history_type,status:x.status})),hasMore:r.has_more,cursor:r.new_cursor};
  }
  if(m.method==='credit') return getCredit(m.token);
  if(m.method==='check-upload'){const image=await uploadImageBuffer(await fs.readFile(b.file),m.token,parseRegionFromToken(m.token));await checkImageContent(image.uri,m.token,parseRegionFromToken(m.token));return {uploaded:true,width:image.width,height:image.height};}
- if(m.method==='submit') return generateVideo(b.model,b.prompt,{ratio:b.ratio,resolution:'720p',duration:b.duration,files:b.files||{},functionMode:b.references?'omni_reference':'first_last_frames',submitOnly:true,clientSubmitId:b.submitId},m.token);
+ if(m.method==='submit') return generateVideo(b.model,b.prompt,{ratio:b.ratio,resolution:'720p',duration:b.duration,files:b.files||{},functionMode:b.references?'omni_reference':'first_last_frames',submitOnly:true,clientSubmitId:b.submitId,browserProfileDirectory:b.profileDirectory},m.token);
  if(m.method==='query') {
   const id=String(b.historyId||b.submitId);const result=await request('post','/mweb/v1/get_history_by_ids',m.token,{data:{history_ids:[id]}});
   const h=result[id]||Object.values(result).find((v:any)=>v?.task?.submit_id===b.submitId) as any;

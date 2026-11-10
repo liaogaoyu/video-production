@@ -1,6 +1,8 @@
+const { uniqueAssetReferences } = require("./references.cjs");
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {ApiError,publicMessage}=require('./errors.cjs');
 const {transaction}=require('./db.cjs');
+const complianceInfo=require('./web-compliance.cjs');
 const {createWebBridge}=require('../worker/dreamina-web/bridge.cjs');
 const PROVIDER='dreamina_web_api';
 const {withVideoReferenceGuidance}=require('../video-reference-guidance.cjs');
@@ -17,19 +19,43 @@ function compileReferences(prompt,refs){
 function resolveWebProxy(config={},env=process.env){return env.STORYDOCK_WEB_PROXY||config.proxy||env.STORYDOCK_DREAMINA_PROXY||'';}
 function createDreaminaWebService(services,{bridge,browserFactory}={}){
  const {db,secrets,paths,repos,media}=services;
- if(!bridge){const configFile=path.join(paths.root,'web-runtime.json');const config=fs.existsSync(configFile)?JSON.parse(fs.readFileSync(configFile,'utf8')):{};bridge=createWebBridge({proxy:resolveWebProxy(config)});}const owner=uuid(),sessions=new Map();
+ if(!bridge){const configFile=path.join(paths.root,'web-runtime.json');const config=fs.existsSync(configFile)?JSON.parse(fs.readFileSync(configFile,'utf8')):{};bridge=createWebBridge({proxy:resolveWebProxy(config)});}const owner=uuid(),sessions=new Map(),emailAttempts=new Map();
  db.exec(`CREATE TABLE IF NOT EXISTS web_accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,region TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,authorized INTEGER NOT NULL DEFAULT 0,identity_hash TEXT,total_credit REAL,credit_checked_at TEXT,nonce TEXT,ciphertext TEXT,error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS web_runs(job_id TEXT PRIMARY KEY,submit_id TEXT NOT NULL UNIQUE,history_id TEXT,attempted INTEGER NOT NULL DEFAULT 0,media_url TEXT,remote_model TEXT);
  CREATE TABLE IF NOT EXISTS web_leases(account_id TEXT PRIMARY KEY,owner TEXT NOT NULL,until_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS web_batch_keys(key TEXT PRIMARY KEY,body_hash TEXT NOT NULL,result_json TEXT NOT NULL);`);
  transaction(db,()=>{if(!db.prepare('PRAGMA table_info(web_accounts)').all().some(c=>c.name==='max_concurrent'))db.exec('ALTER TABLE web_accounts ADD COLUMN max_concurrent INTEGER NOT NULL DEFAULT 3');});
  transaction(db,()=>{if(!db.prepare('PRAGMA table_info(web_runs)').all().some(c=>c.name==='last_error'))db.exec("ALTER TABLE web_runs ADD COLUMN last_error TEXT NOT NULL DEFAULT ''");});
+ transaction(db,()=>{const cols=db.prepare('PRAGMA table_info(web_accounts)').all();if(!cols.some(c=>c.name==='compliance_confirmed'))db.exec('ALTER TABLE web_accounts ADD COLUMN compliance_confirmed INTEGER');if(!cols.some(c=>c.name==='compliance_checked_at'))db.exec('ALTER TABLE web_accounts ADD COLUMN compliance_checked_at TEXT');});
+ transaction(db,()=>{if(!db.prepare('PRAGMA table_info(web_accounts)').all().some(c=>c.name==='merged_into'))db.exec('ALTER TABLE web_accounts ADD COLUMN merged_into TEXT');});
+ async function compliance(id,{force=false}={}) {
+  const a=account(id);
+  if(!force && a.compliance_confirmed===1 && Date.now()-Date.parse(a.compliance_checked_at||'')<60000)return {confirmed:true,statement:complianceInfo.statement,version:complianceInfo.version};
+  let r;try{r=await bridge.call('compliance',token(id),{},30000);}catch(e){throw new ApiError(502,'compliance_check_failed','官网生成确认状态查询失败，请稍后重试');}
+  if(typeof r?.confirmed!=='boolean')throw new ApiError(502,'compliance_check_failed','官网生成确认状态返回异常');
+  db.prepare('UPDATE web_accounts SET compliance_confirmed=?,compliance_checked_at=? WHERE id=?').run(r.confirmed?1:0,now(),id);
+  return {...r,statement:complianceInfo.statement,version:complianceInfo.version};
+ }
+ async function confirmCompliance(id,b,actor) {
+  if(actor?.role!=='admin')throw new ApiError(403,'admin_required','仅限管理员确认官网账号');
+  if(b.accepted!==true || b.version!==complianceInfo.version)throw new ApiError(400,'confirmation_required','请阅读并明确同意当前官网安全确认内容');
+  acquire(id);try{
+   const r=await bridge.call('confirm-compliance',token(id),{accepted:true,version:complianceInfo.version},30000);
+   if(r?.confirmed!==true)throw new ApiError(502,'confirmation_not_saved','官网尚未确认，请重试');
+   db.prepare("UPDATE web_accounts SET compliance_confirmed=1,compliance_checked_at=?,error='' WHERE id=?").run(now(),id);
+   repos.record('web.account.confirmed',{accountId:id,userId:actor.id,statementVersion:complianceInfo.version});
+   return {confirmed:true};
+  }finally{release(id);}
+ }
+ async function requireCompliance(id) {
+  if(!(await compliance(id)).confirmed)throw new ApiError(409,'official_confirmation_required','该国际账号尚未完成官网生成确认，请管理员在“模型与账号”中点击“生成确认”处理');
+ }
  function diagnostic(error){return publicMessage(String(error?.message||'未知异常').replace(/https?:\/\/\S+/g,'[URL]').replace(/(?:sessionid|cookie|authorization)[=:][^,;\s]+/gi,'[凭据已隐藏]').replace(/[A-Za-z0-9_=-]{32,}/g,'[已隐藏]'));}
  function account(id){const a=db.prepare('SELECT * FROM web_accounts WHERE id=?').get(id);if(!a)throw new ApiError(404,'account_missing','国际网页账号不存在');return a;}
- function present(a){return {id:a.id,name:a.name,region:a.region,enabled:!!a.enabled,maxConcurrent:a.max_concurrent,authorized:!!a.authorized,identityConfirmed:!!a.identity_hash,totalCredit:a.total_credit,checkedAt:a.credit_checked_at,error:a.error};}
+ function present(a){return {id:a.id,name:a.name,region:a.region,enabled:!!a.enabled,maxConcurrent:a.max_concurrent,authorized:!!a.authorized,identityConfirmed:!!a.identity_hash,totalCredit:a.total_credit,checkedAt:a.credit_checked_at,error:a.error,complianceConfirmed:a.compliance_confirmed===null?null:!!a.compliance_confirmed};}
  function create(body){const name=String(body.name||'').trim(),region=body.region||'us';if(!name||name.length>60||!['us','hk','jp','sg'].includes(region))throw new ApiError(400,'invalid_account','请输入账号名称和地区');const id=uuid();db.prepare('INSERT INTO web_accounts(id,name,region,created_at,updated_at) VALUES(?,?,?,?,?)').run(id,name,region,now(),now());return present(account(id));}
  function token(id){const a=account(id);if(!a.ciphertext)throw new ApiError(400,'auth_required','请先登录国际账号');return secrets.open(a,{accountId:id,purpose:'dreamina-web-session'});}
- function saveCredential(id,value,identity){const a=account(id);if(!value||!identity)throw new ApiError(400,'identity_missing','尚未取得网页登录身份');const hash=digest(String(identity));const duplicate=db.prepare('SELECT id FROM web_accounts WHERE identity_hash=? AND id<>?').get(hash,id);if(duplicate)throw new ApiError(409,'duplicate_account','这个账号已经添加，请使用原账号');const sealed=secrets.seal(`${a.region}-${value}`,{accountId:id,purpose:'dreamina-web-session'});db.prepare("UPDATE web_accounts SET nonce=?,ciphertext=?,identity_hash=?,authorized=1,error='',updated_at=? WHERE id=?").run(sealed.nonce,sealed.ciphertext,hash,now(),id);return present(account(id));}
+ function saveCredential(id,value,identity){const a=account(id);if(!value||!identity)throw new ApiError(400,'identity_missing','尚未取得网页登录身份');const hash=digest(String(identity));const duplicate=db.prepare('SELECT id FROM web_accounts WHERE identity_hash=? AND id<>?').get(hash,id);if(duplicate)throw new ApiError(409,'duplicate_account','这个账号已经添加，请使用原账号');const sealed=secrets.seal(`${a.region}-${value}`,{accountId:id,purpose:'dreamina-web-session'});db.prepare("UPDATE web_accounts SET nonce=?,ciphertext=?,identity_hash=?,authorized=1,compliance_confirmed=NULL,compliance_checked_at=NULL,error='',updated_at=? WHERE id=?").run(sealed.nonce,sealed.ciphertext,hash,now(),id);return present(account(id));}
  function acquire(id){const until=new Date(Date.now()+360000).toISOString();const r=db.prepare('INSERT INTO web_leases(account_id,owner,until_at) VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET owner=excluded.owner,until_at=excluded.until_at WHERE web_leases.until_at<? OR web_leases.owner=?').run(id,owner,until,now(),owner);if(!r.changes)throw new ApiError(409,'account_busy','账号正在执行任务或登录，请稍后再试');}
  function release(id){db.prepare('DELETE FROM web_leases WHERE account_id=? AND owner=?').run(id,owner);}
  async function checked(id){const a=account(id);try{const c=await bridge.call('credit',token(id));db.prepare("UPDATE web_accounts SET total_credit=?,credit_checked_at=?,authorized=1,error='',updated_at=? WHERE id=?").run(c.totalCredit,now(),now(),id);return present(account(id));}catch(e){const login=/登录|login|session|401/i.test(e.message);db.prepare('UPDATE web_accounts SET authorized=?,error=?,updated_at=? WHERE id=?').run(login?0:a.authorized,'余额查询失败，请检查网络或重新登录',now(),id);throw new ApiError(502,'account_check_failed','余额查询失败，请检查网络或重新登录');}}
@@ -42,6 +68,38 @@ function createDreaminaWebService(services,{bridge,browserFactory}={}){
   await page.goto('https://dreamina.capcut.com/ai-tool/home',{waitUntil:'domcontentloaded',timeout:60000});return {accountId:id,status:'ready'};
  }catch(e){const s=sessions.get(id);await s?.ctx.close().catch(()=>{});sessions.delete(id);release(id);throw new ApiError(502,'login_start_failed','登录浏览器启动失败，请检查浏览器环境和代理');}}
  function session(id){const s=sessions.get(id);if(!s)throw new ApiError(404,'login_closed','登录窗口已关闭，请重新打开');if(Date.now()-s.started>15*60000){void closeLogin(id);throw new ApiError(410,'login_expired','登录窗口已超时，请重新打开');}acquire(id);return s;}
+ async function startEmailLogin(id,b) {
+  const email=String(b.email||'').trim(),password=String(b.password||'');
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||!password||password.length>1024)throw new ApiError(400,'invalid_login','请输入有效邮箱和密码');
+  const old=emailAttempts.get(id);
+  if(old&&!['failed','authenticated','cancelled'].includes(old.status))throw new ApiError(409,'login_busy','自动登录正在进行，请先关闭原窗口');
+  await startLogin(id);
+  const s=session(id),attempt={status:'running',message:'正在启动邮箱自动登录',cancelled:false,checking:false};emailAttempts.set(id,attempt);
+  void (async()=>{
+   const result=await require('./web-email-login.cjs').runEmailLogin({page:s.page,email,password,
+    authenticated:async()=>!!s.identity,cancelled:()=>attempt.cancelled,
+    onStage:message=>{attempt.message=message;},
+   });
+   if(attempt.cancelled)return;
+   if(result.status==='authenticated'){
+    try{const saved=await finishLogin(id);attempt.status='authenticated';attempt.message=saved.id===id?'登录成功，登录态已加密保存':'登录成功，已自动更新已有账号「'+saved.name+'」';}
+    catch(e){attempt.status='failed';attempt.message=e instanceof ApiError?e.message:'登录态保存未完成，请稍后重试';console.error('[dreamina-login] '+JSON.stringify({accountId:id,stage:'finalize',code:e.code||'save_failed'}));}
+   }else{attempt.status=result.status;attempt.message=result.message||'登录已停止';}
+  })().catch(()=>{attempt.status='manual';attempt.message='自动登录未完成，请在服务端窗口继续';});
+  return {status:attempt.status,message:attempt.message};
+ }
+ async function emailLoginStatus(id) {
+  account(id);const a=emailAttempts.get(id);
+  if(!a)return {status:'idle',message:'尚未启动邮箱自动登录'};
+  const s=sessions.get(id);
+  if(s && !a.cancelled && !a.checking && !['running','authenticated','failed','cancelled'].includes(a.status) && s.identity){
+   a.checking=true;
+   try{const saved=await finishLogin(id);a.status='authenticated';a.message=saved.id===id?'登录成功，登录态已加密保存':'登录成功，已自动更新已有账号「'+saved.name+'」';}
+   catch{a.message='登录态保存未完成，请稍后重试';}finally{a.checking=false;}
+  }
+  if(s && Date.now()-s.started>15*60000 && a.status!=='authenticated'){await closeLogin(id);a.status='failed';a.message='登录窗口已超时，请重新登录';}
+  return {status:a.status,message:a.message};
+ }
  async function loginFrame(id){const s=session(id);return {image:(await s.page.screenshot({type:'jpeg',quality:65})).toString('base64'),width:1100,height:760};}
  async function loginInput(id,b){const s=session(id);if(s.busy)throw new ApiError(409,'login_busy','请等待上一操作完成');s.busy=true;try{
   if(b.type==='click'){if(!Number.isFinite(b.x)||!Number.isFinite(b.y)||b.x<0||b.x>1100||b.y<0||b.y>760)throw new ApiError(400,'invalid_input','坐标无效');await s.page.mouse.click(b.x,b.y);}
@@ -50,17 +108,44 @@ function createDreaminaWebService(services,{bridge,browserFactory}={}){
   else if(b.type==='scroll')await s.page.mouse.wheel(0,Math.max(-700,Math.min(700,Number(b.delta)||0)));
   else throw new ApiError(400,'invalid_input','操作不支持');return {ok:true};
  }finally{s.busy=false;}}
- async function finishLogin(id){const s=session(id);if(!s.identity){await s.page.reload({waitUntil:'domcontentloaded'});await s.page.waitForTimeout(2500);}const cookies=await s.ctx.cookies('https://dreamina.capcut.com');const value=cookies.find(c=>c.name==='sessionid')?.value;if(!value||!s.identity)throw new ApiError(400,'login_incomplete','尚未完成登录，请在窗口中登录后再点击完成');saveCredential(id,value,s.identity);await closeLogin(id);return checked(id);}
- async function closeLogin(id){const s=sessions.get(id);sessions.delete(id);try{await s?.ctx.close();}finally{release(id);}return {closed:true};}
+ async function finishLogin(id){
+  const s=session(id);
+  if(!s.identity){await s.page.reload({waitUntil:'domcontentloaded'});await s.page.waitForTimeout(2500);}
+  const cookies=await s.ctx.cookies('https://dreamina.capcut.com');
+  const value=cookies.find(c=>c.name==='sessionid')?.value;
+  if(!value||!s.identity)throw new ApiError(400,'login_incomplete','尚未完成登录，请在窗口中登录后再点击完成');
+  // The same upstream identity must remain one pool account. Preserve the
+  // original account ID, jobs and billing history; archive only an unused draft.
+  const duplicate=db.prepare('SELECT id FROM web_accounts WHERE identity_hash=? AND id<>? AND merged_into IS NULL').get(digest(String(s.identity)),id);
+  const targetId=duplicate?.id||id;
+  transaction(db,()=>{
+   if(duplicate){
+    const draft=account(id);
+    if(draft.ciphertext||db.prepare('SELECT id FROM jobs WHERE account_id=? LIMIT 1').get(id))throw new ApiError(409,'duplicate_account','该官网身份已在账号池中，当前账号有历史数据，不能自动合并');
+   }
+   saveCredential(targetId,value,s.identity);
+   if(duplicate)db.prepare("UPDATE web_accounts SET enabled=0,merged_into=?,error='',updated_at=? WHERE id=?").run(targetId,now(),id);
+  });
+  const attempt=emailAttempts.get(id);if(attempt)attempt.status='authenticated';
+  await closeLogin(id);
+  return checked(targetId);
+ }
+
+ async function closeLogin(id){const attempt=emailAttempts.get(id);if(attempt&&attempt.status!=='authenticated'){attempt.cancelled=true;attempt.status='cancelled';attempt.message='登录已取消';}const s=sessions.get(id);sessions.delete(id);try{await s?.ctx.close();}finally{release(id);}return {closed:true};}
  function batch(projectId,b,key){if(!key||key.length>150)throw new ApiError(400,'key_required','缺少任务提交标识');const hash=digest(JSON.stringify({projectId,b}));return transaction(db,()=>{const old=db.prepare('SELECT * FROM web_batch_keys WHERE key=?').get(key);if(old){if(old.body_hash!==hash)throw new ApiError(409,'key_conflict','重复提交内容不一致');return JSON.parse(old.result_json);}const project=db.prepare('SELECT * FROM projects WHERE id=? AND deleted_at IS NULL').get(projectId);if(!project)throw new ApiError(404,'project_missing','项目不存在');const candidates=b.accountId==='auto'?db.prepare('SELECT * FROM web_accounts WHERE enabled=1 AND authorized=1 ORDER BY created_at,id').all():[account(b.accountId)];if(!candidates.length)throw new ApiError(400,'auth_required','没有可用国际网页账号');const offset=db.prepare('SELECT count(*) AS n FROM jobs WHERE provider=?').get(PROVIDER).n;let a=candidates[0];if(!a.enabled||!a.authorized)throw new ApiError(400,'auth_required','请选择已登录且启用的账号');if(!MODELS.includes(b.model)||!['16:9','9:16','1:1','4:3','3:4','21:9'].includes(b.ratio||project.ratio))throw new ApiError(400,'invalid_model','模型或画幅不支持');const ids=[...new Set(b.sourceIds||[])];if(!ids.length||ids.length>100)throw new ApiError(400,'invalid_sources','请选择1至100个分镜');const batchId=uuid(),jobIds=[];
- for(const sourceId of ids){a=candidates[(offset+jobIds.length)%candidates.length];const shot=db.prepare('SELECT * FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL').get(sourceId,projectId);if(!shot||!Number.isInteger(shot.duration)||shot.duration<4||shot.duration>15||!shot.prompt?.trim())throw new ApiError(400,'invalid_shot','分镜提示词或时长无效（4至15秒）');const refs=db.prepare('SELECT sr.position,a.id AS assetId,a.name,v.id AS versionId,v.media_id AS mediaId,m.sha256 FROM shot_references sr JOIN assets a ON a.id=sr.asset_id LEFT JOIN asset_versions v ON v.id=a.locked_version_id LEFT JOIN media m ON m.id=v.media_id WHERE sr.shot_id=? ORDER BY sr.position').all(sourceId);if(refs.length>9||refs.some(r=>!r.mediaId))throw new ApiError(400,'reference_not_ready','参考资产需要固定可用图片，最多9张');const input={title:shot.title,promptOriginal:shot.prompt,promptSubmitted:withVideoReferenceGuidance(compileReferences(shot.prompt,refs),refs),references:refs,duration:shot.duration,ratio:b.ratio||project.ratio};const id=uuid(),submitId=uuid();db.prepare("INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,account_id,provider,model,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,?,'video','queued',?,?,?,?,?,?,?)").run(id,projectId,sourceId,batchId,a.id,PROVIDER,b.model,JSON.stringify({resolution:'720p',ratio:input.ratio}),JSON.stringify(input),now(),now());db.prepare('INSERT INTO web_runs(job_id,submit_id) VALUES(?,?)').run(id,submitId);jobIds.push(id);}
+ for(const sourceId of ids){a=candidates[(offset+jobIds.length)%candidates.length];const shot=db.prepare('SELECT * FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL').get(sourceId,projectId);if(!shot||!Number.isInteger(shot.duration)||shot.duration<4||shot.duration>15||!shot.prompt?.trim())throw new ApiError(400,'invalid_shot','分镜提示词或时长无效（4至15秒）');const refs=uniqueAssetReferences(db.prepare('SELECT sr.position,a.id AS assetId,a.name,v.id AS versionId,v.media_id AS mediaId,m.sha256 FROM shot_references sr JOIN assets a ON a.id=sr.asset_id LEFT JOIN asset_versions v ON v.id=a.locked_version_id LEFT JOIN media m ON m.id=v.media_id WHERE sr.shot_id=? ORDER BY sr.position').all(sourceId));if(refs.length>9||refs.some(r=>!r.mediaId))throw new ApiError(400,'reference_not_ready','参考资产需要固定可用图片，最多9张');const input={title:shot.title,promptOriginal:shot.prompt,promptSubmitted:withVideoReferenceGuidance(compileReferences(shot.prompt,refs),refs),references:refs,duration:shot.duration,ratio:b.ratio||project.ratio};const id=uuid(),submitId=uuid();db.prepare("INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,account_id,provider,model,config_snapshot,input_snapshot,created_at,updated_at) VALUES(?,?,?,?,'video','queued',?,?,?,?,?,?,?)").run(id,projectId,sourceId,batchId,a.id,PROVIDER,b.model,JSON.stringify({resolution:'720p',ratio:input.ratio}),JSON.stringify(input),now(),now());db.prepare('INSERT INTO web_runs(job_id,submit_id) VALUES(?,?)').run(id,submitId);jobIds.push(id);}
  const result={batchId,jobIds};db.prepare('INSERT INTO web_batch_keys VALUES(?,?,?)').run(key,hash,JSON.stringify(result));return result;});}
  async function guarded(job,work){acquire(job.accountId);const renew=setInterval(()=>{try{acquire(job.accountId);db.prepare('UPDATE jobs SET lease_until=? WHERE id=? AND lease_owner=?').run(new Date(Date.now()+360000).toISOString(),job.id,job.leaseOwner);}catch{}},15000);try{return await work();}finally{clearInterval(renew);release(job.accountId);}}
  function run(job){return db.prepare('SELECT * FROM web_runs WHERE job_id=?').get(job.id);}
  function provider(){return {
   async usage(job){return guarded(job,async()=>{const r=run(job);return require('./actual-usage.cjs').webUsage(body=>bridge.call('usage',token(job.accountId),body,10000),r.submit_id);});},
-  async prepare(job){const a=account(job.accountId);if(!a.authorized||!a.enabled)throw Error('国际账号尚未登录或已暂停');const input=JSON.parse(job.inputSnapshot);for(const ref of input.references){const m=db.prepare('SELECT * FROM media WHERE id=?').get(ref.mediaId);if(!m||digest(fs.readFileSync(media.locate(m.storage_key)))!==ref.sha256)throw Error('参考图片已变化或丢失');}},
-  async submit(job){return guarded(job,async()=>{const r=run(job);const started=Date.now();if(r.attempted)return {outcome:'unknown',message:'原任务已尝试提交，请查询原任务，勿重复生成'};const input=JSON.parse(job.inputSnapshot),files={};for(let i=0;i<input.references.length;i++){const ref=input.references[i],m=db.prepare('SELECT * FROM media WHERE id=?').get(ref.mediaId);files['image_file_'+(i+1)]={filepath:media.locate(m.storage_key),originalFilename:'reference-'+(i+1)+'.png'};}db.prepare('UPDATE web_runs SET attempted=1 WHERE job_id=?').run(job.id);db.prepare('UPDATE jobs SET queue_note=? WHERE id=?').run(input.references.length?'正在上传'+input.references.length+'张参考图并提交官网':'正在向官网提交',job.id);try{const result=await bridge.call('submit',token(job.accountId),{submitId:r.submit_id,model:job.model,prompt:input.promptSubmitted,duration:input.duration,ratio:input.ratio,files,references:input.references.length>0});db.prepare('UPDATE web_runs SET history_id=?,remote_model=? WHERE job_id=?').run(result.historyId,result.model,job.id);console.log('[dreamina-web] '+JSON.stringify({jobId:job.id,stage:'accepted',elapsedMs:Date.now()-started,references:input.references.length,historyId:result.historyId}));return {outcome:'remote',remoteTaskId:r.submit_id,queueNote:'Dreamina 网页任务已受理'};}catch(e){const detail=diagnostic(e);db.prepare('UPDATE web_runs SET last_error=? WHERE job_id=?').run(detail,job.id);console.error('[dreamina-web] '+JSON.stringify({jobId:job.id,stage:'submit',elapsedMs:Date.now()-started,error:detail}));return {outcome:'unknown',message:'提交结果待确认：'+detail+'。请核对官网记录，不会自动重新生成'};}});},
+  async prepare(job){await requireCompliance(job.accountId);const a=account(job.accountId);if(!a.authorized||!a.enabled)throw Error('国际账号尚未登录或已暂停');const input=JSON.parse(job.inputSnapshot);for(const ref of input.references){const m=db.prepare('SELECT * FROM media WHERE id=?').get(ref.mediaId);if(!m||digest(fs.readFileSync(media.locate(m.storage_key)))!==ref.sha256)throw Error('参考图片已变化或丢失');}},
+  async submit(job){return guarded(job,async()=>{const r=run(job);const started=Date.now();if(r.attempted)return {outcome:'unknown',message:'原任务已尝试提交，请查询原任务，勿重复生成'};const input=JSON.parse(job.inputSnapshot),files={};for(let i=0;i<input.references.length;i++){const ref=input.references[i],m=db.prepare('SELECT * FROM media WHERE id=?').get(ref.mediaId);files['image_file_'+(i+1)]={filepath:media.locate(m.storage_key),originalFilename:'reference-'+(i+1)+'.png'};}db.prepare('UPDATE web_runs SET attempted=1 WHERE job_id=?').run(job.id);db.prepare('UPDATE jobs SET queue_note=? WHERE id=?').run(input.references.length?'正在上传'+input.references.length+'张参考图并提交官网':'正在向官网提交',job.id);try{await requireCompliance(job.accountId);const profileDirectory=path.join(paths.root,'web-profiles',job.accountId);const result=await bridge.call('submit',token(job.accountId),{submitId:r.submit_id,profileDirectory:fs.existsSync(profileDirectory)?profileDirectory:undefined,model:job.model,prompt:input.promptSubmitted,duration:input.duration,ratio:input.ratio,files,references:input.references.length>0});db.prepare('UPDATE web_runs SET history_id=?,remote_model=? WHERE job_id=?').run(result.historyId,result.model,job.id);console.log('[dreamina-web] '+JSON.stringify({jobId:job.id,stage:'accepted',elapsedMs:Date.now()-started,references:input.references.length,historyId:result.historyId}));return {outcome:'remote',remoteTaskId:r.submit_id,queueNote:'Dreamina 网页任务已受理'};}catch(e){const detail=diagnostic(e);db.prepare('UPDATE web_runs SET last_error=? WHERE job_id=?').run(detail,job.id);console.error('[dreamina-web] '+JSON.stringify({jobId:job.id,stage:'submit',elapsedMs:Date.now()-started,error:detail}));if(e.code==='official_confirmation_required')return {outcome:'failed',message:e.message};if(/(?:错误码[:：]\s*4010|ret[=:]\s*4010)/i.test(detail)&&/refresh and agree to the confirmation/i.test(detail)){db.prepare('UPDATE web_accounts SET compliance_confirmed=0,compliance_checked_at=?,error=? WHERE id=?').run(now(),'官网要求完成生成安全确认',job.accountId);db.prepare("UPDATE jobs SET queue_note='' WHERE id=?").run(job.id);return {outcome:'failed',message:'国际版官网要求先完成确认：请管理员在“模型与账号”中点击“生成确认”，完成后再重新提交。本次提交被官网拒绝。'};}
+   if (/shark not pass reject\s*\(错误码[:：]\s*-6\)/i.test(detail)) {
+    db.prepare("UPDATE jobs SET queue_note='' WHERE id=?").run(job.id);
+    return {outcome:'failed',message:'Dreamina 官网拒绝了生成请求（风控校验 -6）。请在官网确认该账号能正常生成后再试。'};
+   }
+   return {outcome:'unknown',message:'提交结果待确认：'+detail+'。请核对官网记录，不会自动重新生成'};}});},
   async query(job){return guarded(job,async()=>{const r=run(job);if(!r.history_id)return {outcome:'unknown',message:'未取得官网任务编号，请核对官网记录，不会自动重新生成'+(r.last_error?'。原异常：'+r.last_error:'')};try{const result=await bridge.call('query',token(job.accountId),{submitId:r.submit_id,historyId:r.history_id});if(result.status==='succeeded'){db.prepare('UPDATE web_runs SET media_url=?,history_id=COALESCE(history_id,?),remote_model=COALESCE(?,remote_model) WHERE job_id=?').run(result.url,result.historyId||null,result.model||null,job.id);return {outcome:'download',remoteTaskId:r.submit_id};}if(result.status==='failed')return {outcome:'failed',message:'官网生成失败：'+(result.code||'未知原因')};if(!r.history_id&&!result.found)return {outcome:'unknown',message:'尚未查到原提交，请核对官网，不会自动重新生成'};return {outcome:'pending',queueNote:'Dreamina 网页生成中'};}catch(e){const detail=diagnostic(e);console.error('[dreamina-web] '+JSON.stringify({jobId:job.id,stage:'query',error:detail}));return {outcome:'retry',message:'查询原任务失败，将稍后重试：'+detail};}});},
   async download(job){return guarded(job,async()=>{const r=run(job),file=path.join(paths.runs,'web-'+job.id+'.mp4');try{const fresh=await bridge.call('query',token(job.accountId),{submitId:r.submit_id,historyId:r.history_id});const url=fresh.url||r.media_url;if(!url)throw Error('官网尚未提供视频地址');await bridge.call('download',token(job.accountId),{url,output:file},150000);const saved=await repos.content.saveMedia({projectId:job.projectId,bytes:fs.readFileSync(file),source:PROVIDER,video:true,jobId:job.id});await fs.promises.unlink(file).catch(()=>{});await checked(job.accountId).catch(()=>{});return {outcome:'succeeded',mediaId:saved.id};}catch(e){return {outcome:'download_failed',message:'下载失败，将重新查询原视频并重试'};}});}
  };}
@@ -68,9 +153,10 @@ function createDreaminaWebService(services,{bridge,browserFactory}={}){
   const a=b.accountId?account(b.accountId):db.prepare('SELECT * FROM web_accounts WHERE enabled=1 AND authorized=1 ORDER BY created_at,id LIMIT 1').get();
   if(!a||!a.enabled||!a.authorized)throw new ApiError(400,'auth_required','暂无可用国际账号，请联系管理员检查登录状态');
   if(!MODELS.includes(b.model)||b.resolution!=='720p'||!Number.isInteger(b.duration)||b.duration<4||b.duration>15)throw new ApiError(400,'invalid_estimate','视频预估参数无效');
+  await requireCompliance(a.id);
   try {const r=await bridge.call('estimate',token(a.id),{model:b.model,resolution:b.resolution,duration:b.duration},30000);return {...r,accountId:a.id};}
   catch {throw new ApiError(502,'estimate_unavailable','国际版官网预估暂时不可用，请稍后重试');}
  }
- return {estimate,list:()=>db.prepare('SELECT * FROM web_accounts ORDER BY created_at').all().map(present),create,update(id,b){const a=account(id);const limit=b.maxConcurrent??a.max_concurrent;if(!Number.isInteger(limit)||limit<1||limit>10)throw new ApiError(400,'invalid_concurrency','单账号并发数应为1至10');db.prepare('UPDATE web_accounts SET enabled=?,max_concurrent=?,updated_at=? WHERE id=?').run(b.enabled===undefined?a.enabled:(b.enabled?1:0),limit,now(),id);return present(account(id));},checked,saveCredential,startLogin,loginFrame,loginInput,finishLogin,closeLogin,batch,provider,bridge,runtime:()=>({available:fs.existsSync(path.join(bridge.directory,'dist-bridge/storydock-bridge.cjs')),models:MODELS,message:'国际网页视频 · Seedance 2.0 / Fast'}),async close(){for(const id of sessions.keys())await closeLogin(id);bridge.close();},PROVIDER};
+ return {estimate,compliance,confirmCompliance,list:()=>db.prepare('SELECT * FROM web_accounts WHERE merged_into IS NULL ORDER BY created_at').all().map(present),create,update(id,b){const a=account(id);const limit=b.maxConcurrent??a.max_concurrent;if(!Number.isInteger(limit)||limit<1||limit>10)throw new ApiError(400,'invalid_concurrency','单账号并发数应为1至10');db.prepare('UPDATE web_accounts SET enabled=?,max_concurrent=?,updated_at=? WHERE id=?').run(b.enabled===undefined?a.enabled:(b.enabled?1:0),limit,now(),id);return present(account(id));},checked,saveCredential,startLogin,startEmailLogin,emailLoginStatus,loginFrame,loginInput,finishLogin,closeLogin,batch,provider,bridge,runtime:()=>({available:fs.existsSync(path.join(bridge.directory,'dist-bridge/storydock-bridge.cjs')),models:MODELS,message:'国际网页视频 · Seedance 2.0 / Fast'}),async close(){for(const id of sessions.keys())await closeLogin(id);bridge.close();},PROVIDER};
 }
 module.exports={createDreaminaWebService,compileReferences,resolveWebProxy,PROVIDER,MODELS};

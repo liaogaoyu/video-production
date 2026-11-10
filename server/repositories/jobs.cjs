@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const { ApiError, publicMessage } = require("../errors.cjs");
 const { transaction } = require("../db.cjs");
-const { freezePrompt } = require("../references.cjs");
+const { freezePrompt, uniqueAssetReferences } = require("../references.cjs");
 const { buildAssetImagePrompt } = require("../asset-prompt.cjs");
 
 const VIDEO_MODELS = new Set(["seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance2.5"]);
@@ -69,7 +69,7 @@ function createJobRepository(db, { record }) {
     }
     return accounts[0];
   }
-  function freezeImage(asset, connection, ratio) {
+  function freezeImage(asset, connection, ratio, appendDisplayRules = true) {
     const common = db.prepare(`SELECT r.position,r.media_id,m.sha256 FROM project_references r JOIN media m ON m.id=r.media_id WHERE r.project_id=? ORDER BY r.position,r.id`).all(asset.project_id);
     const own = db.prepare(`SELECT r.position,r.media_id,m.sha256 FROM asset_references r JOIN media m ON m.id=r.media_id WHERE r.asset_id=? ORDER BY r.position,r.id`).all(asset.id);
     const seen = new Set();
@@ -91,8 +91,9 @@ function createJobRepository(db, { record }) {
       input: {
         assetId: asset.id,
         title: asset.name,
+        appendDisplayRules,
         promptOriginal: asset.prompt,
-        promptSubmitted: buildAssetImagePrompt(asset.prompt,asset.type,db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt),
+        promptSubmitted: buildAssetImagePrompt(asset.prompt,asset.type,db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt,appendDisplayRules),
         projectPromptOriginal: db.prepare('SELECT asset_common_prompt FROM projects WHERE id=?').get(asset.project_id)?.asset_common_prompt || '',
         references: references.map((item, index) => ({ mediaId: item.media_id, index: index + 1, sha256: item.sha256, scope: item.scope })),
         ratio,
@@ -100,13 +101,13 @@ function createJobRepository(db, { record }) {
     };
   }
   function freezeVideo(shot, request) {
-    const refs = db.prepare(`
+    const refs = uniqueAssetReferences(db.prepare(`
       SELECT sr.position, sr.asset_id, a.name, a.locked_version_id, v.media_id, v.id AS version_id
       FROM shot_references sr
       JOIN assets a ON a.id=sr.asset_id AND a.deleted_at IS NULL
       LEFT JOIN asset_versions v ON v.id=a.locked_version_id
       WHERE sr.shot_id=? ORDER BY sr.position
-    `).all(shot.id);
+    `).all(shot.id));
     const missing = refs.filter((item) => !item.media_id);
     if (missing.length) throw new ApiError(400, "reference_not_ready", `分镜“${shot.title}”的资产“${missing[0].name}”还没有固定图片`);
     const names = refs.map((item) => item.name);
@@ -115,6 +116,8 @@ function createJobRepository(db, { record }) {
     const resolution = request.resolution || "720p";
     const ratio = request.ratio;
     if (!VIDEO_MODELS.has(model) || !VIDEO_RATIOS.has(ratio)) throw new ApiError(400, "invalid_field", "视频模型、画幅或时长不受支持");
+    const referenceLimit = model === "seedance2.5" ? 30 : 9;
+    if(refs.length>referenceLimit)throw new ApiError(400,"too_many_references",`分镜“${shot.title}”实际引用 ${refs.length} 个资产，该模型最多支持 ${referenceLimit} 张参考图`);
     const maxDuration = model === "seedance2.5" ? 30 : 15;
     if (!Number.isInteger(shot.duration) || shot.duration < 4 || shot.duration > maxDuration) {
       throw new ApiError(400, "invalid_field", "视频模型、画幅或时长不受支持");
@@ -130,11 +133,11 @@ function createJobRepository(db, { record }) {
         title: shot.title,
         promptOriginal: prompt.promptOriginal,
         promptSubmitted: prompt.promptSubmitted,
-        references: refs.map((item) => ({
+        references: refs.map((item, index) => ({
           assetId: item.asset_id,
           versionId: item.version_id,
           mediaId: item.media_id,
-          index: item.position,
+          index: index + 1,
           name: item.name,
         })),
         ratio,
@@ -171,7 +174,7 @@ function createJobRepository(db, { record }) {
       const jobIds = [];
       for (const sourceId of sourceIds) {
         const frozen = kind === "image"
-          ? freezeImage(db.prepare("SELECT * FROM assets WHERE id=? AND project_id=? AND deleted_at IS NULL").get(sourceId, project.id) || (() => { throw new ApiError(404, "asset_not_found", "资产不存在"); })(), connection, ratio)
+          ? freezeImage(db.prepare("SELECT * FROM assets WHERE id=? AND project_id=? AND deleted_at IS NULL").get(sourceId, project.id) || (() => { throw new ApiError(404, "asset_not_found", "资产不存在"); })(), connection, ratio, body.appendDisplayRules !== false)
           : freezeVideo(db.prepare("SELECT * FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL").get(sourceId, project.id) || (() => { throw new ApiError(404, "shot_not_found", "分镜不存在"); })(), { ...body, ratio });
         const id = crypto.randomUUID();
         db.prepare(`INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,provider,model,config_snapshot,input_snapshot,attempt,version,created_at,updated_at)

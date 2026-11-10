@@ -652,6 +652,13 @@ test('image jobs freeze character sheets, scene four views and single props whil
   assert.match(inputs[2].promptSubmitted,/不做四视图、不做四宫格/);
   assert.match(inputs[2].promptSubmitted,/不额外加入手持人物/);
   assert.equal(repos.content.graph(p.id).assets.find(a=>a.id===assets[0].id).prompt,'原始描述0');
+  const plain=repos.jobs.createBatch({projectId:p.id,body:{kind:'image',sourceIds:assets.map(a=>a.id),appendDisplayRules:false},idempotencyKey:crypto.randomUUID()});
+  plain.jobIds.forEach((id,i)=>{
+    const input=JSON.parse(repos.jobs.getJob(id).inputSnapshot);
+    assert.equal(input.appendDisplayRules,false);
+    assert.equal(input.promptSubmitted,`原始描述${i}`);
+  });
+
   repos.content.updateAsset(assets[0].id,{revision:assets[0].revision,prompt:'后来修改'});
   assert.equal(JSON.parse(repos.jobs.getJob(batch.jobIds[0]).inputSnapshot).promptSubmitted,inputs[0].promptSubmitted);
   let received;
@@ -747,5 +754,31 @@ test('explicit retry of a terminal domestic video creates a new upload attempt i
   assert.equal(db.prepare('select count(*) n from jobs where project_id=?').get(p.id).n,2);
   db.prepare("UPDATE jobs SET status='remote_running',remote_task_id='running-task' WHERE id=?").run(next.id);
   const ongoing=repos.jobs.retryJob(next.id);assert.equal(ongoing.id,next.id);assert.equal(ongoing.remoteTaskId,'running-task');
+ }finally{await c.close();}
+});
+
+test('disabling asset display rules keeps user prompts without added scene or layout constraints',()=>{
+ const {buildAssetImagePrompt}=require('./server/asset-prompt.cjs');
+ for(const type of ['角色','场景','道具']) {
+  assert.equal(buildAssetImagePrompt('我的单图提示词',type,'',false),'我的单图提示词');
+  assert.equal(buildAssetImagePrompt('我的单图提示词',type,'水彩',false),'【项目公共风格】\n水彩\n\n【当前资产】\n我的单图提示词');
+ }
+});
+
+test('a new asset can generate with uploaded reference images before any asset image exists',async()=>{
+ const c=await start();try{
+  const {repos}=c.services,p=repos.content.createProject({name:'新资产参考图'}).project;
+  await c.app.inject({method:'PUT',url:'/api/v1/connections/image',payload:{name:'reference-test',baseUrl:'https://example.com/v1',model:'image',apiKey:'test-key'}});
+  const a=repos.content.createAsset({projectId:p.id,name:'参考图角色',type:'角色',prompt:'保留参考图人物特征'});
+  await repos.content.addReference(a.id,PNG);
+  const before=repos.content.graph(p.id);
+  assert.equal(before.versions.length,0);
+  assert.equal(before.references.length,1);
+  const batch=repos.jobs.createBatch({projectId:p.id,body:{kind:'image',sourceIds:[a.id],appendDisplayRules:false},idempotencyKey:crypto.randomUUID()});
+  const input=JSON.parse(repos.jobs.getJob(batch.jobIds[0]).inputSnapshot);
+  assert.equal(input.promptSubmitted,'保留参考图人物特征');
+  assert.equal(input.references.length,1);
+  assert.equal(input.references[0].scope,'asset');
+  assert.ok(input.references[0].mediaId);
  }finally{await c.close();}
 });

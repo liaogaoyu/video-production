@@ -32,15 +32,19 @@ import {
   SettingOutlined,
   LogoutOutlined,
   UserOutlined,
+  ReadOutlined,
 } from "@ant-design/icons";
 import { api } from "./api";
-import { WorkspaceContext } from "./context";
+import { WorkspaceContext, notifyWorkspace, publishWorkspace } from "./context";
 import type { Job, Project, User } from "./types";
 const ProjectsPage = lazy(() =>
   import("./projects").then((m) => ({ default: m.ProjectsPage })),
 );
 const AssetsPage = lazy(() =>
   import("./assets").then((m) => ({ default: m.AssetsPage })),
+);
+const ScriptPage = lazy(() =>
+  import("./script").then((m) => ({ default: m.ScriptPage })),
 );
 const ShotsPage = lazy(() =>
   import("./shots").then((m) => ({ default: m.ShotsPage })),
@@ -52,12 +56,17 @@ const SettingsPage = lazy(() =>
   import("./settings").then((m) => ({ default: m.SettingsPage })),
 );
 import "./style.css";
-import {Login,WalletPage} from './account-ui';
+import "./editor-workspace.css";
+import { Login } from "./login";
+const WalletPage = lazy(() =>
+  import("./account-ui").then((m) => ({ default: m.WalletPage })),
+);
 const CommercialAdminPage=lazy(()=>import('./commercial-admin').then(m=>({default:m.CommercialAdminPage})));
 const pages: Record<string, string> = {
   projects: "我的项目",
+  script: "剧本",
   assets: "资产库",
-  shots: "分镜脚本",
+  shots: "分镜故事板",
   jobs: "生成队列",
   settings: "模型与账号",
   wallet: "余额与账号",
@@ -65,9 +74,11 @@ const pages: Record<string, string> = {
 };
 function route() {
   const [name, query = ""] = location.hash.replace(/^#\/?/, "").split("?");
+  const params = new URLSearchParams(query);
   return {
     page: pages[name] ? name : "projects",
-    project: new URLSearchParams(query).get("project") || "",
+    project: params.get("project") || "",
+    episode: params.get("episode") || "",
   };
 }
 function Workspace({
@@ -87,8 +98,12 @@ function Workspace({
     { message } = AntApp.useApp();
   const refreshBusy = useRef(false);
   const go = useCallback(
-    (page: string, project = where.project) => {
-      location.hash = `/${page}${project ? "?project=" + encodeURIComponent(project) : ""}`;
+    (page: string, project = where.project, episode = "") => {
+      const params = new URLSearchParams();
+      if (project) params.set("project", project);
+      if (episode) params.set("episode", episode);
+      const query = params.toString();
+      location.hash = `/${page}${query ? "?" + query : ""}`;
     },
     [where.project],
   );
@@ -168,9 +183,23 @@ function Workspace({
     reload,
     refreshProject,
     go,
+    episodeId: where.episode,
     user,
     setUser,
   };
+  publishWorkspace(context);
+  useEffect(() => {
+    notifyWorkspace();
+  }, [
+    projects,
+    project,
+    reload,
+    refreshProject,
+    go,
+    where.episode,
+    user,
+    setUser,
+  ]);
   return (
     <WorkspaceContext.Provider value={context}>
       <Layout className="workspace">
@@ -202,11 +231,12 @@ function Workspace({
             onClick={(e) => go(e.key, project?.id || projects[0]?.id || "")}
             items={[
               { key: "projects", icon: <FolderOutlined />, label: "我的项目" },
+              { key: "script", icon: <ReadOutlined />, label: "剧本" },
               { key: "assets", icon: <AppstoreOutlined />, label: "资产库" },
               {
                 key: "shots",
                 icon: <VideoCameraOutlined />,
-                label: "分镜脚本",
+                label: "分镜故事板",
               },
               {
                 key: "jobs",
@@ -273,56 +303,60 @@ function Workspace({
             </Dropdown>
           </Layout.Header>
           <Layout.Content className="content">
-            <Suspense
-              fallback={
-                <div className="page-loading">
-                  <Spin />
-                </div>
-              }
-            >
-              {loading ? (
-                <div className="page-loading">
-                  <Spin size="large" />
-                </div>
-              ) : failed ? (
-                <Alert
-                  type="error"
-                  title={failed}
-                  action={
-                    <Button
-                      onClick={() => {
-                        setFailed("");
-                        reload().catch((e) => setFailed(e.message));
-                      }}
-                    >
-                      重试
-                    </Button>
-                  }
-                />
-              ) : where.page === "projects" ? (
-                <ProjectsPage />
-              ) : where.page === "wallet" ? (
-                <WalletPage />
-              ) : where.page === "admin" ? (
-                user?.role==='admin'?<CommercialAdminPage/>:<Alert type="error" title="仅限管理员"/>
-              ) : where.page === "settings" ? (
-                !user||user.role==='admin'?<SettingsPage />:<WalletPage/>
-              ) : !project ? (
-                <Alert
-                  type="info"
-                  title="请先选择一个项目"
-                  action={
-                    <Button onClick={() => go("projects")}>我的项目</Button>
-                  }
-                />
-              ) : where.page === "assets" ? (
-                <AssetsPage key={project.id} />
-              ) : where.page === "shots" ? (
-                <ShotsPage key={project.id} />
-              ) : (
-                <JobsPage key={project.id} />
-              )}
-            </Suspense>
+            <PageBoundary key={where.page + ":" + (project?.id || "")}>
+              <Suspense
+                fallback={
+                  <div className="page-loading">
+                    <Spin />
+                  </div>
+                }
+              >
+                {loading ? (
+                  <div className="page-loading">
+                    <Spin size="large" />
+                  </div>
+                ) : failed ? (
+                  <Alert
+                    type="error"
+                    title={failed}
+                    action={
+                      <Button
+                        onClick={() => {
+                          setFailed("");
+                          reload().catch((e) => setFailed(e.message));
+                        }}
+                      >
+                        重试
+                      </Button>
+                    }
+                  />
+                ) : where.page === "projects" ? (
+                  <ProjectsPage />
+                ) : where.page === "wallet" ? (
+                  <WalletPage />
+                ) : where.page === "admin" ? (
+                  user?.role==='admin'?<CommercialAdminPage/>:<Alert type="error" title="仅限管理员"/>
+                ) : where.page === "settings" ? (
+                  !user||user.role==='admin'?<SettingsPage />:<WalletPage/>
+                ) : !project ? (
+                  <Alert
+                    type="info"
+                    title="请先选择一个项目"
+                    action={
+                      <Button onClick={() => go("projects")}>我的项目</Button>
+                    }
+                  />
+                ) : where.page === "script" ? (
+                  <ScriptPage key={project.id} />
+                ) : where.page === "assets" ? (
+                  <AssetsPage key={project.id} />
+                ) : where.page === "shots" ? (
+                  <ShotsPage key={project.id} />
+                ) : (
+                  <JobsPage key={project.id} />
+                )}
+              </Suspense>
+            </PageBoundary>
           </Layout.Content>
         </Layout>
       </Layout>
@@ -331,11 +365,17 @@ function Workspace({
 }
 class PageBoundary extends React.Component<
   { children: React.ReactNode },
-  { failed: boolean }
+  { failed: boolean; message: string }
 > {
-  state = { failed: false };
-  static getDerivedStateFromError() {
-    return { failed: true };
+  state = { failed: false, message: "" };
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      failed: true,
+      message: error instanceof Error ? error.message : String(error || ""),
+    };
+  }
+  componentDidCatch(error: unknown) {
+    console.error("PageBoundary", error);
   }
   render() {
     return this.state.failed ? (
@@ -343,7 +383,11 @@ class PageBoundary extends React.Component<
         <Alert
           type="error"
           title="页面加载失败"
-          description="请刷新页面重试，已提交的任务不受影响。"
+          description={
+            this.state.message
+              ? `${this.state.message}（已提交的任务不受影响，可刷新重试）`
+              : "请刷新页面重试，已提交的任务不受影响。"
+          }
           action={<Button onClick={() => location.reload()}>刷新页面</Button>}
         />
       </div>
@@ -411,9 +455,7 @@ createRoot(document.getElementById("root")!).render(
     }}
   >
     <AntApp>
-      <PageBoundary>
-        <Root />
-      </PageBoundary>
+      <Root />
     </AntApp>
   </ConfigProvider>,
 );

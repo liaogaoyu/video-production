@@ -116,7 +116,8 @@ class BackgroundAdapter {
       return this.connection.evaluate(`(title => {
         const headers=document.querySelectorAll('[title="双击编辑标题"]');
         if(headers.length!==1 || headers[0].firstElementChild?.textContent!==title) return null;
-        const selected=document.querySelectorAll('.react-flow__node.selected[data-id]');
+        const selected=[...document.querySelectorAll('.react-flow__node.selected[data-id]')]
+          .filter(node=>node.clientWidth>0 && node.clientHeight>0);
         return selected.length===1 ? selected[0].dataset.id : null;
       })(${JSON.stringify(request.title)})`);
     }
@@ -127,6 +128,20 @@ class BackgroundAdapter {
         if(matches.length!==1 || matches[0].querySelector('video')) return false;
         const card=matches[0].querySelector('[data-canvas-generation-state]');
         return !!card?.innerText.split('\\n').some(line=>line.trim()==='审核不通过');
+      })(${JSON.stringify(request.id)})`);
+    }
+    if(request.action==='canvas-status') {
+      return this.connection.evaluate(`(id => {
+        const nodes=[...document.querySelectorAll('.react-flow__node[data-id]')]
+          .filter(node=>node.dataset.id===id && node.clientWidth>0 && node.clientHeight>0);
+        if(nodes.length!==1) return 'unknown';
+        const node=nodes[0];
+        if(node.querySelector('video')) return 'ready';
+        const text=node.querySelector('[data-canvas-generation-state]')?.innerText || '';
+        if(/审核不通过/.test(text)) return 'rejected';
+        if(/视频生成失败|生成失败/.test(text)) return 'failed';
+        if(/正在生成视频|视频生成中|排队中/.test(text)) return 'running';
+        return 'unknown';
       })(${JSON.stringify(request.id)})`);
     }
     if(request.action==='select-canvas-node') {
@@ -207,7 +222,8 @@ class BackgroundAdapter {
         if(referenceMenu && e.closest('[data-slot="dropdown-menu-trigger"]')?.getAttribute('aria-expanded')==='true')
           return true;
         if(canvasNodeId) {
-          const selected=document.querySelectorAll('.react-flow__node.selected[data-id]');
+          const selected=[...document.querySelectorAll('.react-flow__node.selected[data-id]')]
+            .filter(node=>node.clientWidth>0 && node.clientHeight>0);
           const headers=document.querySelectorAll('[title="双击编辑标题"]');
           if(!e.isConnected || selected.length!==1 || selected[0].dataset.id!==canvasNodeId ||
              headers.length!==1 || headers[0].firstElementChild?.textContent!==canvasNodeTitle) return false;
@@ -225,7 +241,10 @@ class BackgroundAdapter {
       },[request.action==='title',target.role==='AXTextArea'||(target.role==='AXPopUpButton'&&target.popupType==='menu')||
         target.identifier==='chat_input_suggestion_create-canvas',
         request.canvasNodeId||null,request.canvasNodeTitle||null,request.action==='reference-menu']);
-      if(clicked===false) throw Object.assign(Error('下载前选中节点发生变化，稍后重试'),{retryable:true});
+      if(clicked===false) throw Object.assign(
+        Error(request.action==='submit'?'提交前选中节点发生变化，已阻止点击生成':'下载前选中节点发生变化，稍后重试'),
+        {retryable:true},
+      );
     } else throw Error('不支持的后台操作 '+request.action);
     return {ok:true};
   }

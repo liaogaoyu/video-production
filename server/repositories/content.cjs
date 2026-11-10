@@ -28,6 +28,7 @@ function conflict() {
 }
 
 function createContentRepository(db, { media, record }) {
+  require("../storyboard.cjs").installStoryboard(db);
   function mustProject(id, { writable = false } = {}) {
     const row = db.prepare("SELECT * FROM projects WHERE id=?").get(uuid(id, "项目"));
     if (!row || row.deleted_at) throw new ApiError(404, "project_not_found", "项目不存在");
@@ -74,7 +75,7 @@ function createContentRepository(db, { media, record }) {
     const mediaRows = mediaIds.length
       ? db.prepare(`SELECT * FROM media WHERE id IN (${[...new Set(mediaIds)].map(() => "?").join(",")})`).all(...new Set(mediaIds))
       : [];
-    return { project, assets, versions, references, projectReferences, shots, shotRefs, jobs, mediaRows };
+    return { project, episodes: db.prepare("SELECT * FROM episodes WHERE project_id=? ORDER BY number,id").all(projectId), assets, versions, references, projectReferences, shots, shotRefs, jobs, mediaRows };
   }
 
   function listProjects() {
@@ -117,7 +118,9 @@ function createContentRepository(db, { media, record }) {
           patch.description === undefined ? current.description : text(patch.description, "项目简介", 500),
           ratio,
           patch.style === undefined ? current.style : text(patch.style, "风格备注", 120),
-          patch.scriptText === undefined ? current.script_text : text(patch.scriptText, "剧本", 200000),
+          patch.scriptText === undefined && patch.synopsis === undefined
+            ? current.script_text
+            : text(patch.synopsis !== undefined ? patch.synopsis : patch.scriptText, "整剧梗概", 200000),
           now,
           current.id,
           current.revision,
@@ -309,7 +312,10 @@ function createContentRepository(db, { media, record }) {
   function writeShot(project, input, existing) {
     const title = text(input.title === undefined && existing ? existing.title : input.title, "镜头名称", 80, { required: true });
     const prompt = text(input.prompt === undefined && existing ? existing.prompt : input.prompt, "分镜提示词", 20000, { required: true });
-    const episode = Number(input.episode === undefined && existing ? existing.episode : input.episode);
+    const chosenId=input.episodeId || (input.episode===undefined?existing?.episode_id:null);
+    const chosen=chosenId?db.prepare("SELECT * FROM episodes WHERE id=? AND project_id=?").get(chosenId,project.id):null;
+    if(chosenId&&!chosen)throw new ApiError(400,"invalid_episode","分集不属于当前项目");
+    const episode = chosen ? chosen.number : Number(input.episode === undefined && existing ? existing.episode : input.episode);
     const number = Number(input.number === undefined && existing ? existing.number : input.number);
     const duration = Number(input.duration === undefined && existing ? existing.duration : input.duration);
     if (!Number.isInteger(episode) || episode < 1 || episode > 999) throw new ApiError(400, "invalid_field", "集数必须是 1–999 的整数");
@@ -318,7 +324,7 @@ function createContentRepository(db, { media, record }) {
     const clash = db.prepare("SELECT id FROM shots WHERE project_id=? AND episode=? AND number=? AND deleted_at IS NULL AND id<>?").get(project.id, episode, number, existing?.id || "");
     if (clash) throw new ApiError(409, "shot_number_conflict", "同一集内镜头编号重复");
     const linked = resolveShotAssets(project.id, prompt);
-    return { title, prompt, episode, number, duration, linked, externalKey: text(input.externalKey === undefined && existing ? existing.external_key : input.externalKey, "分镜键", 80) };
+    return { title, prompt, episode, episodeId:chosen?.id, number, duration, linked, externalKey: text(input.externalKey === undefined && existing ? existing.external_key : input.externalKey, "分镜键", 80) };
   }
 
   function createShot(input) {
@@ -327,8 +333,12 @@ function createContentRepository(db, { media, record }) {
     const now = iso();
     const id = uuid(input.id, "分镜");
     transaction(db, () => {
+      let e=db.prepare("SELECT id FROM episodes WHERE project_id=? AND number=?").get(project.id,shot.episode);
+      if(!e)e=storyboard.createEpisode(project.id,{number:shot.episode});
+      shot.episodeId=e.id;
       db.prepare("INSERT INTO shots(id,project_id,external_key,episode,number,sort_key,title,duration,prompt,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?)")
         .run(id, project.id, shot.externalKey, shot.episode, shot.number, `${String(shot.episode).padStart(4, "0")}-${String(shot.number).padStart(6, "0")}-${id}`, shot.title, shot.duration, shot.prompt, now, now);
+      db.prepare("UPDATE shots SET episode_id=? WHERE id=?").run(shot.episodeId,id);
       replaceShotReferences(id, shot.linked);
       record("shot.created", { projectId: project.id, shotId: id });
     });
@@ -346,6 +356,9 @@ function createContentRepository(db, { media, record }) {
       const result = db.prepare("UPDATE shots SET external_key=?, episode=?, number=?, sort_key=?, title=?, duration=?, prompt=?, revision=revision+1, updated_at=? WHERE id=? AND revision=? AND deleted_at IS NULL")
         .run(shot.externalKey, shot.episode, shot.number, `${String(shot.episode).padStart(4, "0")}-${String(shot.number).padStart(6, "0")}-${existing.id}`, shot.title, shot.duration, shot.prompt, now, existing.id, existing.revision);
       if (result.changes !== 1) conflict();
+      let e=db.prepare("SELECT id FROM episodes WHERE project_id=? AND number=?").get(project.id,shot.episode);
+      if(!e)e=storyboard.createEpisode(project.id,{number:shot.episode});
+      db.prepare("UPDATE shots SET episode_id=? WHERE id=?").run(e.id,existing.id);
       replaceShotReferences(existing.id, shot.linked);
       record("shot.updated", { projectId: project.id, shotId: existing.id });
     });
@@ -358,6 +371,28 @@ function createContentRepository(db, { media, record }) {
     db.prepare("UPDATE shots SET deleted_at=?, updated_at=? WHERE id=?").run(iso(), iso(), existing.id);
     record("shot.deleted", { projectId: existing.project_id, shotId: existing.id });
     return { deleted: true };
+  }
+
+  function deleteShots(projectId, ids) {
+    const project = mustProject(projectId);
+    if (!Array.isArray(ids) || !ids.length || ids.length > 10000)
+      throw new ApiError(400, "invalid_shots", "请选择要删除的分镜");
+    const selected = [...new Set(ids.map(id => uuid(id, "分镜")))];
+    return transaction(db, () => {
+      const getShot = db.prepare("SELECT deleted_at FROM shots WHERE project_id=? AND id=?");
+      const remove = db.prepare("UPDATE shots SET deleted_at=?, updated_at=? WHERE project_id=? AND id=?");
+      const now = iso();
+      let deleted = 0;
+      for (const id of selected) {
+        const shot = getShot.get(project.id, id);
+        if (!shot) throw new ApiError(404, "shot_not_found", "所选分镜不存在或不属于当前项目");
+        if (shot.deleted_at) continue;
+        remove.run(now, now, project.id, id);
+        record("shot.deleted", { projectId: project.id, shotId: id });
+        deleted++;
+      }
+      return { deleted };
+    });
   }
 
   function deleteAllShots(projectId) {
@@ -406,6 +441,7 @@ function createContentRepository(db, { media, record }) {
 
   function importShots(projectId, body) {
     const project = mustProject(projectId);
+    if(body.schemaVersion===2)return storyboard.importStoryboard(projectId,body);
     const items = Array.isArray(body.shots) ? body.shots : null;
     if (!items) throw new ApiError(400, "invalid_import", "分镜清单格式不正确");
     const numbers = new Set(db.prepare("SELECT episode, number FROM shots WHERE project_id=? AND deleted_at IS NULL").all(project.id).map((shot) => `${shot.episode}:${shot.number}`));
@@ -436,11 +472,13 @@ function createContentRepository(db, { media, record }) {
     return { preview, created };
   }
 
-  return {
+  const content={
     graph, listProjects, createProject, updateProject, deleteProject, createAsset, updateAsset, deleteAsset,
-    readReferenceMedia, addProjectReference, deleteProjectReference, saveMedia, addVersion, addReference, deleteReference, setLockedVersion, createShot, updateShot, deleteShot,
+    readReferenceMedia, addProjectReference, deleteProjectReference, saveMedia, addVersion, addReference, deleteReference, setLockedVersion, createShot, updateShot, deleteShot, deleteShots,
     deleteAllShots, importAssets, importShots, mustProject, mustAsset, liveAssets,
   };
+  const storyboard=require("../storyboard.cjs").storyboardRepository(db,content,record);
+  return Object.assign(content,storyboard);
 }
 
 module.exports = { createContentRepository, UUID_RE };

@@ -238,7 +238,7 @@ export async function request(
   method: string,
   uri: string,
   refreshToken: string,
-  options: AxiosRequestConfig & { noDefaultParams?: boolean; useAbogusBrowser?: boolean } = {}
+  options: AxiosRequestConfig & { noDefaultParams?: boolean; useAbogusBrowser?: boolean; browserProfileDirectory?: string } = {}
 ) {
   const parsedProxy = parseProxyFromToken(refreshToken);
   const tokenWithRegion = parsedProxy.token;
@@ -345,6 +345,7 @@ export async function request(
     const br = await browserRequest({
       method, url: qs ? `${fullUrl}?${qs}` : fullUrl,
       headers: _.omit(headers, "Cookie"), data: options.data, regionInfo, sessionToken,
+      profileDirectory: options.browserProfileDirectory,
     });
     logger.info(`[abogus] 响应状态: ${br.status}，摘要: ${JSON.stringify(redact(br.data)).substring(0, 500)}`);
     return checkResult({ status: br.status, statusText: br.statusText, data: br.data, headers: {}, config: {} } as any);
@@ -376,7 +377,7 @@ export async function request(
         headers: headers,
         timeout: 45000, // 增加超时时间到45秒
         validateStatus: () => true, // 允许任何状态码
-        ..._.omit(options, "params", "headers", "noDefaultParams", "useAbogusBrowser"),
+        ..._.omit(options, "params", "headers", "noDefaultParams", "useAbogusBrowser", "browserProfileDirectory"),
         ...(proxyAgent ? { httpAgent: proxyAgent, httpsAgent: proxyAgent, proxy: false } : {}),
       });
 

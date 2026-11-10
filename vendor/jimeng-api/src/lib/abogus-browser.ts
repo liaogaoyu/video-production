@@ -19,6 +19,7 @@ export interface BrowserRequest {
   headers: Record<string, any>;
   data: any;
   regionInfo: RegionInfo;
+  profileDirectory?: string;
   sessionToken: string; // 去掉区域前缀后的 sessionid，只用于写入浏览器 cookie，不打印
 }
 
@@ -34,7 +35,8 @@ export type BrowserRequester = (req: BrowserRequest) => Promise<BrowserResponse>
 let overrideRequester: BrowserRequester | null = null;
 export function setBrowserRequester(fn: BrowserRequester | null) { overrideRequester = fn; }
 
-const sessions = new Map<string, { browser: any; context: any; page: any; lastUsed: number }>();
+type BrowserSession = { browser: any; context: any; page: any; lastUsed: number; closeAfterRequest: boolean };
+const sessions = new Map<string, BrowserSession>();
 const IDLE_MS = 10 * 60 * 1000;
 
 function defaultPageUrl(ri: RegionInfo) {
@@ -46,10 +48,10 @@ function cookieDomains(ri: RegionInfo) {
   return ri.isCN ? [".jianying.com"] : [".capcut.com", ".capcutapi.com", ".capcut.us"];
 }
 
-async function getSession(req: BrowserRequest) {
+async function getSession(req: BrowserRequest): Promise<BrowserSession> {
   const key = `${regionKey(req.regionInfo)}:${req.sessionToken}`;
   const existing = sessions.get(key);
-  if (existing) { existing.lastUsed = Date.now(); return existing; }
+  if (existing && !req.profileDirectory) { existing.lastUsed = Date.now(); return existing; }
 
   let pw: any;
   try {
@@ -60,38 +62,59 @@ async function getSession(req: BrowserRequest) {
     throw new Error("已开启 ABOGUS_BROWSER_ENABLED，但未安装 playwright-core。请执行: npm i playwright-core && npx playwright-core install chromium");
   }
   const chromium = pw.chromium || pw.default?.chromium;
-  const browser = await chromium.launch({
+  const launchOptions = {
     headless: process.env.ABOGUS_HEADLESS !== "0",
     executablePath: process.env.ABOGUS_BROWSER_EXECUTABLE || undefined,
     ...(process.env.INTL_PROXY_URL ? { proxy: { server: process.env.INTL_PROXY_URL } } : {}),
-  });
-  // 使用常规桌面 Chrome UA，避免 HeadlessChrome 标识
-  const context = await browser.newContext({
+  };
+  const contextOptions = {
     locale: req.regionInfo.isCN ? "zh-CN" : "en-US",
-    userAgent: process.env.ABOGUS_USER_AGENT || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-  });
-  await context.addCookies(cookieDomains(req.regionInfo).flatMap((domain) =>
-    ["sessionid", "sessionid_ss", "sid_tt"].map((name) => ({ name, value: req.sessionToken, domain, path: "/", secure: true, httpOnly: true, sameSite: "None" as const }))));
-  const page = await context.newPage();
-  if (process.env.ABOGUS_DRY_RUN === "1") {
-    // 演练模式：生成请求在浏览器内被拦截丢弃，不会发到服务器（用于离线检查签名是否附加）
-    await page.route("**/aigc_draft/generate**", (route: any) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ret: "0", data: { aigc_data: { history_record_id: "" } }, dry_run: true }) }));
-    logger.warn("[abogus] ABOGUS_DRY_RUN=1：生成请求不会发往服务器");
-  }
-  const pageUrl = defaultPageUrl(req.regionInfo);
-  logger.info(`[abogus] 启动浏览器会话 region=${regionKey(req.regionInfo)} page=${pageUrl}`);
-  await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  // 等待风控 SDK 完成对 fetch/XHR 的接管（离线观察：window.__ac_intercepted_fetch / byted_acrawler）
+  };
+  const persistent = Boolean(req.profileDirectory);
+  const browser = persistent ? null : await chromium.launch(launchOptions);
+  const context = persistent
+    ? await chromium.launchPersistentContext(req.profileDirectory, { ...launchOptions, ...contextOptions })
+    : await browser.newContext({
+        ...contextOptions,
+        ...(process.env.ABOGUS_USER_AGENT ? { userAgent: process.env.ABOGUS_USER_AGENT } : {}),
+      });
+  const close = () => persistent ? context.close() : browser.close();
   try {
-    await page.waitForFunction(() => !!((window as any).__ac_intercepted_fetch || (window as any).byted_acrawler), null, { timeout: 30000 });
-    logger.info("[abogus] 检测到风控 SDK 已加载");
-  } catch {
-    logger.warn("[abogus] 30s 内未检测到风控 SDK，请求可能不会被签名");
+    if (persistent) {
+      const cookies = await context.cookies("https://dreamina.capcut.com");
+      if (!cookies.some((cookie: any) => cookie.name === "sessionid" && cookie.value === req.sessionToken)) {
+        await close();
+        logger.warn("[abogus] 已保存的浏览器会话与当前账号令牌不匹配，使用该账号的临时会话");
+        return getSession({ ...req, profileDirectory: undefined });
+      }
+    } else {
+      await context.addCookies(cookieDomains(req.regionInfo).flatMap((domain) =>
+        ["sessionid", "sessionid_ss", "sid_tt"].map((name) => ({ name, value: req.sessionToken, domain, path: "/", secure: true, httpOnly: true, sameSite: "None" as const }))));
+    }
+    const page = persistent ? context.pages()[0] || await context.newPage() : await context.newPage();
+    if (process.env.ABOGUS_DRY_RUN === "1") {
+      // 演练模式：生成请求在浏览器内被拦截丢弃，不会发到服务器（用于离线检查签名是否附加）
+      await page.route("**/aigc_draft/generate**", (route: any) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ret: "0", data: { aigc_data: { history_record_id: "" } }, dry_run: true }) }));
+      logger.warn("[abogus] ABOGUS_DRY_RUN=1：生成请求不会发往服务器");
+    }
+    const pageUrl = defaultPageUrl(req.regionInfo);
+    logger.info(`[abogus] 启动浏览器会话 region=${regionKey(req.regionInfo)} page=${pageUrl} session=${persistent ? "profile" : "temporary"}`);
+    await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    // 等待风控 SDK 完成对 fetch/XHR 的接管（离线观察：window.__ac_intercepted_fetch / byted_acrawler）
+    try {
+      await page.waitForFunction(() => !!((window as any).__ac_intercepted_fetch || (window as any).byted_acrawler), null, { timeout: 30000 });
+      logger.info("[abogus] 检测到风控 SDK 已加载");
+    } catch {
+      logger.warn("[abogus] 30s 内未检测到风控 SDK，请求可能不会被签名");
+    }
+    await page.waitForTimeout(Number(process.env.ABOGUS_WARMUP_MS || 8000));
+    const s = { browser, context, page, lastUsed: Date.now(), closeAfterRequest: persistent };
+    if (!persistent) sessions.set(key, s);
+    return s;
+  } catch (error) {
+    await close().catch(() => {});
+    throw error;
   }
-  await page.waitForTimeout(Number(process.env.ABOGUS_WARMUP_MS || 8000));
-  const s = { browser, context, page, lastUsed: Date.now() };
-  sessions.set(key, s);
-  return s;
 }
 
 setInterval(async () => {
@@ -130,7 +153,10 @@ export async function browserRequest(req: BrowserRequest): Promise<BrowserRespon
     try { data = JSON.parse(text); } catch { /* keep text */ }
     return { status: r.status, statusText: r.statusText, data };
   }, { url: req.url, method: req.method.toUpperCase(), headers, body: req.data == null ? undefined : JSON.stringify(req.data) });
-  } finally { s.page.off("request", onReq); }
+  } finally {
+    s.page.off("request", onReq);
+    if (s.closeAfterRequest) await s.context.close().catch(() => {});
+  }
 }
 
 export async function closeAllBrowserSessions() {

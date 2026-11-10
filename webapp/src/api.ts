@@ -4,6 +4,7 @@ export function api<T = any>(
   method = "GET",
   body?: unknown,
   key?: string,
+  timeoutMs = method === "GET" ? 20000 : 180000,
 ): Promise<T> {
   const path = "/api/v1/" + url;
   if (method === "GET" && pending.has(path)) return pending.get(path)!;
@@ -11,7 +12,7 @@ export function api<T = any>(
     const controller = new AbortController(),
       timer = setTimeout(
         () => controller.abort(),
-        method === "GET" ? 20000 : 180000,
+        timeoutMs,
       );
     try {
       const form = body instanceof FormData;
@@ -56,10 +57,10 @@ export const id = () => {
   const b = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(b, (n) => n.toString(16).padStart(2, "0")).join("");
 };
-export async function upload(url: string, file: File) {
+export async function upload(url: string, file: File, timeoutMs?: number) {
   const f = new FormData();
   f.append("file", file);
-  return api(url, "POST", f);
+  return api(url, "POST", f, undefined, timeoutMs);
 }
 export { copyText as copy } from "./clipboard.mjs";
 export const time = (value?: string) =>

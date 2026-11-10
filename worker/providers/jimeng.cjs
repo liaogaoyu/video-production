@@ -1,6 +1,7 @@
+const { compactVideoReferences } = require("../../server/references.cjs");
 function createJimengProvider({ repos, pool, media, db, owner }) {
   function imagePaths(job) {
-    const input = JSON.parse(job.inputSnapshot || "{}");
+    const input = compactVideoReferences(JSON.parse(job.inputSnapshot || "{}"));
     return (input.references || []).map((reference) => {
       const row = db.prepare("SELECT storage_key FROM media WHERE id=?").get(reference.mediaId);
       if (!row) throw Object.assign(new Error("参考图媒体不存在"), { kind: "rejected" });
@@ -30,11 +31,14 @@ function createJimengProvider({ repos, pool, media, db, owner }) {
       }).then(r=>r?.source==='official_actual'?r:null);
     },
     async prepare(job) {
+      const input=compactVideoReferences(JSON.parse(job.inputSnapshot || "{}"));
+      const max=input.model==='seedance2.5'?30:9;
+      if((input.references||[]).length>max)throw new Error(`实际参考图数量超过模型上限（最多${max}张），请减少引用后重新生成`);
       imagePaths(job);
     },
     async submit(job) {
       return withLease(job.accountId, "submit", async () => {
-        const input = JSON.parse(job.inputSnapshot || "{}");
+        const input = compactVideoReferences(JSON.parse(job.inputSnapshot || "{}"));
         try {
           const result = await pool.submitVideo(job.accountId, {
             jobId: job.id,

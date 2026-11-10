@@ -18,7 +18,7 @@ export function Importer({
   kind: "assets" | "shots";
   onClose: () => void;
 }) {
-  const { project, refreshProject } = useWorkspace(),
+  const { project, refreshProject, episodeId } = useWorkspace(),
     [text, setText] = useState(""),
     [preview, setPreview] = useState<any[] | null>(null),
     [busy, setBusy] = useState(false),
@@ -26,6 +26,20 @@ export function Importer({
     [copied, setCopied] = useState(false),
     { message } = App.useApp();
   const parse = () => JSON.parse(text);
+  const scriptBody = (() => {
+    const episodes = project?.data?.episodes || [];
+    const current =
+      episodes.find((e) => e.id === episodeId) ||
+      episodes.find((e) => e.body?.trim()) ||
+      episodes[0];
+    const parts = [
+      (project?.synopsis || project?.scriptText || "").trim() &&
+        `【整剧梗概】\n${project?.synopsis || project?.scriptText}`,
+      current?.body?.trim() &&
+        `【第 ${current.number} 集 · ${current.title}】\n${current.body}`,
+    ].filter(Boolean);
+    return parts.join("\n\n");
+  })();
   const check = async () => {
     setBusy(true);
     try {
@@ -103,8 +117,8 @@ export function Importer({
             try {
               await copy(
                 kind === "shots"
-                  ? buildShotInstructions(storyboardSkill, project)
-                  : buildAssetInstructions(assetSkill, project),
+                  ? buildShotInstructions(storyboardSkill, project, scriptBody)
+                  : buildAssetInstructions(assetSkill, project, scriptBody),
                 anchor,
               );
               setCopied(true);

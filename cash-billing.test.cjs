@@ -219,6 +219,12 @@ test("insufficient supplemental balance records debt, rejects new generation and
       offerId: "image-default",
       sourceIds: [asset.id],
     });
+    const plain = c.s.billing.quote(a, p.id, {
+      offerId: "image-default", sourceIds: [asset.id], appendDisplayRules: false,
+    });
+    assert.equal(plain.items[0].promptPreview, "白杯");
+    const snap = JSON.parse(c.s.db.prepare("SELECT snapshot FROM generation_quotes WHERE id=?").get(plain.id).snapshot);
+    assert.equal(snap.body.appendDisplayRules, false);
     assert.throws(() => c.s.billing.confirm(a, q.id), /待补扣/);
     const r = c.s.billing.topup(
       admin,

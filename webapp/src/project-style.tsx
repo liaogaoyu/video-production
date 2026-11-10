@@ -49,7 +49,7 @@ export function ProjectStyle() {
         <Button onClick={() => setValue("")}>清空</Button>
       </Space>
       <p className="muted">
-        新任务自动组合公共提示词、当前资产提示词和展示规则。场景始终无人；已提交任务不受后续修改影响。
+        新任务自动组合公共提示词和当前资产提示词。生成时可勾选追加展示规则（含场景无人要求）；已提交任务不受后续修改影响。
       </p>
       {error && <Alert type="error" title={error} />}
     </Card>

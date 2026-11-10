@@ -126,6 +126,14 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
       const previous = JSON.parse(row.manifest_json || "{}");
       const files = [];
       let packedMedia = [];
+      if (row.kind === "asset-images") {
+        const plan = previous.plan || require('../server/asset-image-export.cjs').planAssetImageExport(project, db, media);
+        if (!plan.files.length) throw new Error("当前项目没有可导出的资产图片");
+        const storageKey = `exports/${row.id}.zip`;
+        await writeExportArchive(media.locate(storageKey), plan.files.map(file=>({name:file.file,sourcePath:media.locate(file.storageKey)})));
+        repos.accounts.finishExport(row.id,{status:"succeeded",storageKey,manifest:{imageCount:plan.files.length,missing:plan.missing}});
+        return;
+      }
       if (row.kind === "videos" || row.kind === "jianying") {
         const plan = previous.plan || planVideoExport(project, db, media);
         if (!plan.clips.length) throw new Error("当前项目没有可导出的已完成分镜视频");

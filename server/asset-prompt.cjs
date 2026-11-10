@@ -1,6 +1,7 @@
-function buildAssetImagePrompt(prompt, type, commonPrompt = '') {
+function buildAssetImagePrompt(prompt, type, commonPrompt = '', appendDisplayRules = true) {
   const assetSource = String(prompt || '').trim();
   const common = String(commonPrompt || '').trim();
+  if (appendDisplayRules === false) return common ? `【项目公共风格】\n${common}\n\n【当前资产】\n${assetSource}` : assetSource;
   const source = common ? `【项目公共风格】\n${common}\n公共风格统一媒介、配色与质感；不新增人物，不覆盖资产身份、剧情年代及类型展示规则。\n\n【当前资产】\n${assetSource}` : assetSource;
   const heading = '【资产最终展示版式】';
   const layout = type === '角色' || type === 'character'

@@ -1,3 +1,4 @@
+const { planAssetImageExport } = require("./asset-image-export.cjs");
 const { planVideoExport } = require("./video-export.cjs");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -59,6 +60,7 @@ async function createHttpApp(services) {
   app.addHook("onRequest", async (request) => {
     if (!request.url.startsWith("/api/")) return;
     const endpoint=request.url.split("?")[0];
+    if (request.headers['x-doubao-device'] && require('./doubao-local.cjs').authenticateDevice(services,request)) return;
     if (["session","login","logout","registration","register","email/verify","email/resend","password/forgot","password/reset"].some(p=>endpoint==='/api/v1/auth/'+p)) {if(!['GET','HEAD'].includes(request.method))auth.sameOrigin(request);return;}
     if (auth.enabled()) { auth.guard(request); if(!["GET","HEAD"].includes(request.method)) auth.sameOrigin(request); }
     else authorize(paths.accessPassword, request);
@@ -73,6 +75,10 @@ async function createHttpApp(services) {
   app.put('/api/v1/admin/settings',async r=>{if(r.appUser?.role!=='admin')throw new ApiError(403,'admin_required','仅限管理员');return commercialSettings.save(r.body||{});});
   app.post('/api/v1/admin/settings/test-email',async r=>{if(r.appUser?.role!=='admin')throw new ApiError(403,'admin_required','仅限管理员');const to=String(r.body?.email||'');if(!/^\S+@\S+\.\S+$/.test(to))throw new ApiError(400,'invalid_email','请输入测试邮箱');await commercialSettings.mail(to,'工作台邮件测试','邮件配置测试成功。');return {sent:true};});
   require('./commercial-api.cjs').registerCommercialApi(app,services);
+  require('./shot-video-upload.cjs').registerShotVideoUpload(app,services);
+  require('./episode-video.cjs').registerEpisodeVideo(app,services);
+  require('./doubao-local.cjs').registerDoubaoLocal(app,services);
+  services.subtitleErase.register(app);
   const web=services.web;
   app.addHook("onClose",async()=>{await web.close();});
   app.addHook("onSend",async(request,reply,payload)=>{if(request.url.includes("/dreamina-web/"))reply.header("Cache-Control","no-store");return payload;});
@@ -80,7 +86,11 @@ async function createHttpApp(services) {
   app.get('/api/v1/dreamina-web/accounts',async()=>({accounts:web.list()}));
   app.post('/api/v1/dreamina-web/accounts',async request=>({account:web.create(request.body||{})}));
   app.patch('/api/v1/dreamina-web/accounts/:id',async request=>({account:web.update(request.params.id,request.body||{})}));
+  app.get('/api/v1/dreamina-web/accounts/:id/compliance',async request=>web.compliance(request.params.id,{force:true}));
+  app.post('/api/v1/dreamina-web/accounts/:id/compliance',async request=>web.confirmCompliance(request.params.id,request.body||{},request.appUser));
   app.post('/api/v1/dreamina-web/accounts/:id/check',async request=>({account:await web.checked(request.params.id)}));
+  app.post('/api/v1/dreamina-web/accounts/:id/login/email',async request=>web.startEmailLogin(request.params.id,request.body||{}));
+  app.get('/api/v1/dreamina-web/accounts/:id/login/status',async request=>web.emailLoginStatus(request.params.id));
   app.post('/api/v1/dreamina-web/accounts/:id/login',async request=>web.startLogin(request.params.id));
   app.get('/api/v1/dreamina-web/accounts/:id/login/frame',async request=>web.loginFrame(request.params.id));
   app.post('/api/v1/dreamina-web/accounts/:id/login/input',async request=>web.loginInput(request.params.id,request.body||{}));
@@ -139,11 +149,17 @@ async function createHttpApp(services) {
   app.delete("/api/v1/assets/:id/references/:referenceId", async (request) => repos.content.deleteReference(request.params.id, request.params.referenceId));
   app.put("/api/v1/assets/:id/locked-version", async (request) => repos.content.setLockedVersion(request.params.id, request.body?.versionId || null));
 
+  app.post("/api/v1/projects/:id/episodes",async request=>repos.content.createEpisode(request.params.id,request.body||{}));
+  app.patch("/api/v1/projects/:id/episodes/:episodeId",async request=>repos.content.updateEpisode(request.params.id,request.params.episodeId,request.body||{}));
+  app.delete("/api/v1/projects/:id/episodes/:episodeId",async request=>repos.content.deleteEpisode(request.params.id,request.params.episodeId));
+  app.post("/api/v1/projects/:id/script/import",async request=>repos.content.importScript(request.params.id,request.body||{}));
+  app.post("/api/v1/projects/:id/shots/insert",async request=>repos.content.insertShot(request.params.id,request.body||{}));
   app.post("/api/v1/projects/:id/shots", async (request, reply) => {
     reply.code(201);
     return repos.content.createShot({ ...(request.body || {}), projectId: request.params.id });
   });
   app.post("/api/v1/projects/:id/shots/import", async (request) => repos.content.importShots(request.params.id, request.body || {}));
+  app.post("/api/v1/projects/:id/shots/delete", async (request) => repos.content.deleteShots(request.params.id, request.body?.ids));
   app.patch("/api/v1/shots/:id", async (request) => repos.content.updateShot(request.params.id, request.body || {}));
   app.delete("/api/v1/shots/:id", async (request) => repos.content.deleteShot(request.params.id));
   app.delete("/api/v1/projects/:id/shots", async (request) => repos.content.deleteAllShots(request.params.id));
@@ -260,7 +276,7 @@ async function createHttpApp(services) {
   app.get("/api/v1/media/:id", async (request, reply) => {
     const row = services.db.prepare("SELECT * FROM media WHERE id=?").get(request.params.id);
     if (!row) throw new ApiError(404, "media_not_found", "媒体不存在");
-    const file = media.locate(row.storage_key);
+    const file = await media.ensureLocal(row.storage_key);
     const stat = await fs.promises.stat(file);
     const range = media.parseRange(request.headers.range, stat.size);
     reply.header("accept-ranges", "bytes");
@@ -285,16 +301,22 @@ async function createHttpApp(services) {
     const graph = repos.content.graph(request.params.id);
     const project = presentProject(graph);
     const kind = request.body?.kind || "backup";
-    if (!["videos", "backup", "jianying"].includes(kind)) throw new ApiError(400, "invalid_export_kind", "不支持的导出格式");
-    const plan = kind === "backup" ? null : planVideoExport(project, services.db, media);
-    if (plan && !plan.clips.length) throw new ApiError(409, "no_videos", "当前项目还没有可导出的已完成分镜视频");
+    if (!["videos", "backup", "jianying", "asset-images"].includes(kind)) throw new ApiError(400, "invalid_export_kind", "不支持的导出格式");
+    if(request.body?.episodeId && ["videos","jianying"].includes(kind)){
+      const e=project.data.episodes.find(e=>e.id===request.body.episodeId);
+      if(!e)throw new ApiError(404,"episode_missing","分集不存在");
+      project.data.shots=project.data.shots.filter(s=>s.episodeId===e.id);project.name+=" · "+e.title;
+    }
+    const plan = kind === "asset-images" ? planAssetImageExport(project, services.db, media, {allVersions:request.body?.allVersions===true}) : kind === "backup" ? null : planVideoExport(project, services.db, media);
+    if(kind === "asset-images" && !plan.files.length)throw new ApiError(409,"no_asset_images","当前项目没有可导出的资产图片");
+    if (plan && kind !== "asset-images" && !plan.clips.length) throw new ApiError(409, "no_videos", "当前项目还没有可导出的已完成分镜视频");
     const missing = plan?.missing || [];
     if (kind === "jianying" && missing.length && !request.body?.allowPartial) {
       return reply.code(409).send({ error: { code: "incomplete_videos", message: `还有 ${missing.length} 个分镜没有视频，请生成完成或明确选择仅导出已完成分镜` }, missing });
     }
     const row = repos.accounts.createExport({ projectId: project.id, kind, manifest: { missing, plan } });
     reply.code(202);
-    return { exportId: row.id, missing };
+    return { exportId: row.id, missing, ...(kind === "asset-images" ? {imageCount:plan.files.length} : {}) };
   });
   app.get("/api/v1/exports/:id", async request => {
     const row=repos.accounts.getExport(request.params.id);
@@ -304,7 +326,7 @@ async function createHttpApp(services) {
   app.get("/api/v1/exports/:id/download", async (request, reply) => {
     const row = repos.accounts.getExport(request.params.id);
     if (!row || row.status !== "succeeded" || !row.storage_key) throw new ApiError(404, "export_not_ready", "归档还没有完成");
-    const file = media.locate(row.storage_key);
+    const file = await media.ensureLocal(row.storage_key);
     reply.header("cache-control", "private, no-store");
     reply.header("content-type", "application/zip");
     reply.header("content-disposition", `attachment; filename="storydock-${row.kind}.zip"`);

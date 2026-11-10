@@ -201,6 +201,7 @@ export async function generateVideo(
     functionMode = "first_last_frames",
     submitOnly = false,
     clientSubmitId = util.uuid(),
+    browserProfileDirectory,
   }: {
     ratio?: string;
     resolution?: string;
@@ -211,6 +212,7 @@ export async function generateVideo(
     functionMode?: string;
     submitOnly?: boolean;
     clientSubmitId?: string;
+    browserProfileDirectory?: string;
   },
   refreshToken: string
 ) {
@@ -903,6 +905,7 @@ export async function generateVideo(
         headers: { Referer: videoReferer },
         // Seedance 2.0 提交可选走 a_bogus 浏览器签名通道（ABOGUS_BROWSER_ENABLED=1 时生效）
         useAbogusBrowser: is40Pro || is40,
+        browserProfileDirectory,
       }
     ));
   } catch (err: any) {

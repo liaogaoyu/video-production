@@ -1,13 +1,28 @@
-import { createContext, useContext } from "react";
-import type { Project, User } from "./types";
-export interface Workspace {
-  projects: Project[];
-  project?: Project;
-  reload: () => Promise<void>;
-  refreshProject: () => Promise<void>;
-  go: (page: string, project?: string) => void;
-  user: User | null;
-  setUser: (u: User) => void;
+import { createContext, useContext, useSyncExternalStore } from "react";
+import {
+  getWorkspace,
+  notifyWorkspace,
+  publishWorkspace,
+  subscribeWorkspace,
+  type Workspace,
+} from "./context-store";
+
+export type { Workspace };
+export { notifyWorkspace, publishWorkspace };
+
+// Kept for any remaining Provider usage; store is the source of truth across chunks.
+export const WorkspaceContext = createContext<Workspace | null>(null);
+
+export function useWorkspace(): Workspace {
+  const fromStore = useSyncExternalStore(
+    subscribeWorkspace,
+    getWorkspace,
+    getWorkspace,
+  );
+  const fromContext = useContext(WorkspaceContext);
+  const value = fromStore || fromContext;
+  if (!value) {
+    throw new Error("工作台上下文未就绪，请刷新页面后重试");
+  }
+  return value;
 }
-export const WorkspaceContext = createContext<Workspace>(null!);
-export const useWorkspace = () => useContext(WorkspaceContext);

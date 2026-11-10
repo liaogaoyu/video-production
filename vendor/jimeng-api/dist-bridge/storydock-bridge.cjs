@@ -1017,7 +1017,7 @@ async function getSession(req) {
   var _a2;
   const key = `${regionKey(req.regionInfo)}:${req.sessionToken}`;
   const existing = sessions.get(key);
-  if (existing) {
+  if (existing && !req.profileDirectory) {
     existing.lastUsed = Date.now();
     return existing;
   }
@@ -1029,34 +1029,55 @@ async function getSession(req) {
     throw new Error("\u5DF2\u5F00\u542F ABOGUS_BROWSER_ENABLED\uFF0C\u4F46\u672A\u5B89\u88C5 playwright-core\u3002\u8BF7\u6267\u884C: npm i playwright-core && npx playwright-core install chromium");
   }
   const chromium = pw.chromium || ((_a2 = pw.default) == null ? void 0 : _a2.chromium);
-  const browser = await chromium.launch({
+  const launchOptions = {
     headless: process.env.ABOGUS_HEADLESS !== "0",
     executablePath: process.env.ABOGUS_BROWSER_EXECUTABLE || void 0,
     ...process.env.INTL_PROXY_URL ? { proxy: { server: process.env.INTL_PROXY_URL } } : {}
+  };
+  const contextOptions = {
+    locale: req.regionInfo.isCN ? "zh-CN" : "en-US"
+  };
+  const persistent = Boolean(req.profileDirectory);
+  const browser = persistent ? null : await chromium.launch(launchOptions);
+  const context = persistent ? await chromium.launchPersistentContext(req.profileDirectory, { ...launchOptions, ...contextOptions }) : await browser.newContext({
+    ...contextOptions,
+    ...process.env.ABOGUS_USER_AGENT ? { userAgent: process.env.ABOGUS_USER_AGENT } : {}
   });
-  const context = await browser.newContext({
-    locale: req.regionInfo.isCN ? "zh-CN" : "en-US",
-    userAgent: process.env.ABOGUS_USER_AGENT || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
-  });
-  await context.addCookies(cookieDomains(req.regionInfo).flatMap((domain) => ["sessionid", "sessionid_ss", "sid_tt"].map((name) => ({ name, value: req.sessionToken, domain, path: "/", secure: true, httpOnly: true, sameSite: "None" }))));
-  const page = await context.newPage();
-  if (process.env.ABOGUS_DRY_RUN === "1") {
-    await page.route("**/aigc_draft/generate**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ret: "0", data: { aigc_data: { history_record_id: "" } }, dry_run: true }) }));
-    logger_default.warn("[abogus] ABOGUS_DRY_RUN=1\uFF1A\u751F\u6210\u8BF7\u6C42\u4E0D\u4F1A\u53D1\u5F80\u670D\u52A1\u5668");
-  }
-  const pageUrl = defaultPageUrl(req.regionInfo);
-  logger_default.info(`[abogus] \u542F\u52A8\u6D4F\u89C8\u5668\u4F1A\u8BDD region=${regionKey(req.regionInfo)} page=${pageUrl}`);
-  await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 6e4 });
+  const close = () => persistent ? context.close() : browser.close();
   try {
-    await page.waitForFunction(() => !!(window.__ac_intercepted_fetch || window.byted_acrawler), null, { timeout: 3e4 });
-    logger_default.info("[abogus] \u68C0\u6D4B\u5230\u98CE\u63A7 SDK \u5DF2\u52A0\u8F7D");
-  } catch {
-    logger_default.warn("[abogus] 30s \u5185\u672A\u68C0\u6D4B\u5230\u98CE\u63A7 SDK\uFF0C\u8BF7\u6C42\u53EF\u80FD\u4E0D\u4F1A\u88AB\u7B7E\u540D");
+    if (persistent) {
+      const cookies = await context.cookies("https://dreamina.capcut.com");
+      if (!cookies.some((cookie) => cookie.name === "sessionid" && cookie.value === req.sessionToken)) {
+        await close();
+        logger_default.warn("[abogus] \u5DF2\u4FDD\u5B58\u7684\u6D4F\u89C8\u5668\u4F1A\u8BDD\u4E0E\u5F53\u524D\u8D26\u53F7\u4EE4\u724C\u4E0D\u5339\u914D\uFF0C\u4F7F\u7528\u8BE5\u8D26\u53F7\u7684\u4E34\u65F6\u4F1A\u8BDD");
+        return getSession({ ...req, profileDirectory: void 0 });
+      }
+    } else {
+      await context.addCookies(cookieDomains(req.regionInfo).flatMap((domain) => ["sessionid", "sessionid_ss", "sid_tt"].map((name) => ({ name, value: req.sessionToken, domain, path: "/", secure: true, httpOnly: true, sameSite: "None" }))));
+    }
+    const page = persistent ? context.pages()[0] || await context.newPage() : await context.newPage();
+    if (process.env.ABOGUS_DRY_RUN === "1") {
+      await page.route("**/aigc_draft/generate**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ret: "0", data: { aigc_data: { history_record_id: "" } }, dry_run: true }) }));
+      logger_default.warn("[abogus] ABOGUS_DRY_RUN=1\uFF1A\u751F\u6210\u8BF7\u6C42\u4E0D\u4F1A\u53D1\u5F80\u670D\u52A1\u5668");
+    }
+    const pageUrl = defaultPageUrl(req.regionInfo);
+    logger_default.info(`[abogus] \u542F\u52A8\u6D4F\u89C8\u5668\u4F1A\u8BDD region=${regionKey(req.regionInfo)} page=${pageUrl} session=${persistent ? "profile" : "temporary"}`);
+    await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 6e4 });
+    try {
+      await page.waitForFunction(() => !!(window.__ac_intercepted_fetch || window.byted_acrawler), null, { timeout: 3e4 });
+      logger_default.info("[abogus] \u68C0\u6D4B\u5230\u98CE\u63A7 SDK \u5DF2\u52A0\u8F7D");
+    } catch {
+      logger_default.warn("[abogus] 30s \u5185\u672A\u68C0\u6D4B\u5230\u98CE\u63A7 SDK\uFF0C\u8BF7\u6C42\u53EF\u80FD\u4E0D\u4F1A\u88AB\u7B7E\u540D");
+    }
+    await page.waitForTimeout(Number(process.env.ABOGUS_WARMUP_MS || 8e3));
+    const s = { browser, context, page, lastUsed: Date.now(), closeAfterRequest: persistent };
+    if (!persistent) sessions.set(key, s);
+    return s;
+  } catch (error) {
+    await close().catch(() => {
+    });
+    throw error;
   }
-  await page.waitForTimeout(Number(process.env.ABOGUS_WARMUP_MS || 8e3));
-  const s = { browser, context, page, lastUsed: Date.now() };
-  sessions.set(key, s);
-  return s;
 }
 var _a, _b;
 (_b = (_a = setInterval(async () => {
@@ -1098,6 +1119,8 @@ async function browserRequest(req) {
     }, { url: req.url, method: req.method.toUpperCase(), headers, body: req.data == null ? void 0 : JSON.stringify(req.data) });
   } finally {
     s.page.off("request", onReq);
+    if (s.closeAfterRequest) await s.context.close().catch(() => {
+    });
   }
 }
 async function closeAllBrowserSessions() {
@@ -1401,7 +1424,8 @@ async function request(method, uri, refreshToken, options = {}) {
       headers: import_lodash7.default.omit(headers, "Cookie"),
       data: options.data,
       regionInfo,
-      sessionToken
+      sessionToken,
+      profileDirectory: options.browserProfileDirectory
     });
     logger_default.info(`[abogus] \u54CD\u5E94\u72B6\u6001: ${br.status}\uFF0C\u6458\u8981: ${JSON.stringify(redact(br.data)).substring(0, 500)}`);
     return checkResult({ status: br.status, statusText: br.statusText, data: br.data, headers: {}, config: {} });
@@ -1425,7 +1449,7 @@ async function request(method, uri, refreshToken, options = {}) {
         // 增加超时时间到45秒
         validateStatus: () => true,
         // 允许任何状态码
-        ...import_lodash7.default.omit(options, "params", "headers", "noDefaultParams", "useAbogusBrowser"),
+        ...import_lodash7.default.omit(options, "params", "headers", "noDefaultParams", "useAbogusBrowser", "browserProfileDirectory"),
         ...proxyAgent ? { httpAgent: proxyAgent, httpsAgent: proxyAgent, proxy: false } : {}
       });
       logger_default.info(`\u54CD\u5E94\u72B6\u6001: ${response.status} ${response.statusText}`);
@@ -2470,7 +2494,8 @@ async function generateVideo(_model, prompt, {
   httpRequest,
   functionMode = "first_last_frames",
   submitOnly = false,
-  clientSubmitId = util_default.uuid()
+  clientSubmitId = util_default.uuid(),
+  browserProfileDirectory
 }, refreshToken) {
   var _a2, _b2, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
   const regionInfo = parseRegionFromToken(refreshToken);
@@ -3093,7 +3118,8 @@ async function generateVideo(_model, prompt, {
         ...requestData,
         headers: { Referer: videoReferer },
         // Seedance 2.0 提交可选走 a_bogus 浏览器签名通道（ABOGUS_BROWSER_ENABLED=1 时生效）
-        useAbogusBrowser: is40Pro || is40
+        useAbogusBrowser: is40Pro || is40,
+        browserProfileDirectory
       }
     ));
   } catch (err) {
@@ -3209,6 +3235,18 @@ async function execute(m) {
     }
     return { ...calculateEstimate(rules.meta, rules.benefit, b.duration), model };
   }
+  if (m.method === "compliance" || m.method === "confirm-compliance") {
+    const helper = require(process.env.STORYDOCK_WEB_VENDOR + "/../../server/web-compliance.cjs");
+    const headers = { Referer: "https://dreamina.capcut.com/" };
+    if (m.method === "confirm-compliance") {
+      if (b.accepted !== true || b.version !== helper.version) throw Error("\u9700\u8981\u660E\u786E\u540C\u610F\u5F53\u524D\u5B98\u7F51\u5B89\u5168\u786E\u8BA4\u5185\u5BB9");
+      await request("post", "/mweb/v1/update_settings", m.token, { data: { custom_settings: { aigc_compliance_confirmed: true } }, headers });
+    }
+    const data = await request("post", "/mweb/v1/get_settings", m.token, { data: {}, headers });
+    const result = helper.readConfirmation(data);
+    if (m.method === "confirm-compliance" && !result.confirmed) throw Error("\u5B98\u7F51\u672A\u4FDD\u5B58\u5B89\u5168\u786E\u8BA4\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+    return result;
+  }
   if (m.method === "usage") {
     const r = await request("post", "/commerce/v1/benefits/user_credit_history", m.token, { data: { cursor: b.cursor || "", count: 50 }, noDefaultParams: true, headers: { Referer: "https://dreamina.capcut.com/" } });
     return { records: (_a2 = r.records) == null ? void 0 : _a2.map((x) => ({ amount: x.amount, submit_id: x.submit_id, history_id: x.history_id, history_type: x.history_type, status: x.status })), hasMore: r.has_more, cursor: r.new_cursor };
@@ -3219,7 +3257,7 @@ async function execute(m) {
     await checkImageContent(image.uri, m.token, parseRegionFromToken(m.token));
     return { uploaded: true, width: image.width, height: image.height };
   }
-  if (m.method === "submit") return generateVideo(b.model, b.prompt, { ratio: b.ratio, resolution: "720p", duration: b.duration, files: b.files || {}, functionMode: b.references ? "omni_reference" : "first_last_frames", submitOnly: true, clientSubmitId: b.submitId }, m.token);
+  if (m.method === "submit") return generateVideo(b.model, b.prompt, { ratio: b.ratio, resolution: "720p", duration: b.duration, files: b.files || {}, functionMode: b.references ? "omni_reference" : "first_last_frames", submitOnly: true, clientSubmitId: b.submitId, browserProfileDirectory: b.profileDirectory }, m.token);
   if (m.method === "query") {
     const id = String(b.historyId || b.submitId);
     const result = await request("post", "/mweb/v1/get_history_by_ids", m.token, { data: { history_ids: [id] } });

@@ -36,17 +36,24 @@ export function promptDocument(value, assets) {
       .split("\n")
       .map((line) => ({
         type: "paragraph",
-        content: splitPromptMentions(line, names).map((part) =>
-          part.mention
-            ? {
-                type: "mention",
-                attrs: {
-                  id: assets.find((asset) => `@${asset.name}` === part.text).id,
-                  label: part.text.slice(1),
-                },
-              }
-            : { type: "text", text: part.text },
-        ),
+        content: splitPromptMentions(line, names)
+          .map((part) => {
+            if (!part.mention) {
+              return part.text ? { type: "text", text: part.text } : null;
+            }
+            const asset = assets.find((item) => `@${item.name}` === part.text);
+            if (!asset) {
+              return part.text ? { type: "text", text: part.text } : null;
+            }
+            return {
+              type: "mention",
+              attrs: {
+                id: asset.id,
+                label: part.text.slice(1),
+              },
+            };
+          })
+          .filter(Boolean),
       })),
   };
 }

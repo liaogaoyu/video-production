@@ -5,7 +5,20 @@ const os = require('node:os');
 const driver = require('./driver.cjs');
 const pause = ms => new Promise(resolve=>setTimeout(resolve,ms));
 const transient = error => error.retryable || ['AbortError','TimeoutError'].includes(error.name) || error.cause?.code;
+const WATCH_RETRIES = 3;
 let nextAccountReport=0, lastAccountReportError='';
+
+function recoveryHint(phase, stage) {
+  if(stage==='submitting') return '在原账号打开原任务画布，再继续原任务。系统只核对已有提交和结果。';
+  if(phase==='fetching_references') return '检查工作台连接和该分镜的参考图。文件缺失或校验失败时，终止这条未提交任务，重新锁定参考图后再生成。';
+  if(phase==='switching_account') return '在执行器 Mac 上登录任务绑定的豆包账号，再继续原任务。';
+  if(phase==='uploading_references') return '在豆包原画布关闭文件选择或错误弹窗，再继续原任务。执行器会核对已有参考图。';
+  if(phase==='setting_parameters') return '检查原画布是否能选择 Fast 模型、画幅和时长，再继续原任务。';
+  if(phase==='downloading') return '打开原任务画布，检查下载目录中的同编号 MP4，再继续原任务。';
+  if(phase==='uploading') return '确认原视频文件可读且工作台连接正常，再继续回传。';
+  if(phase==='generating') return '在原账号打开原任务画布，确认原视频节点仍可访问，再继续等待结果。';
+  return '在执行器 Mac 上打开任务绑定账号的豆包画布，关闭遮挡弹窗，再继续原任务。';
+}
 
 async function main() {
   const configPath = process.argv[2];
@@ -54,17 +67,23 @@ async function main() {
   }
   const update = (task, next, note) => api(`tasks/${task.id}/state`,{workerId:state.workerId,state:next,note});
   let currentTask=null;
-  let latestProgress, heartbeat, sending=Promise.resolve();
+  let latestProgress, failurePhase, heartbeat, sending=Promise.resolve();
   function sendProgress() {
     const status=latestProgress;
     if(!currentTask || !status) return sending;
     const endpoint=`tasks/${currentTask.id}/progress`;
-    sending=sending.then(()=>api(endpoint,{workerId:state.workerId,...status},false,3000).catch(()=>{}));
+    sending=sending.then(()=>api(endpoint,{workerId:state.workerId,resumeRevision:state.resumeRevision||0,...status},false,3000).catch(()=>null));
     return sending;
   }
-  function report(phase, completed, total) {
-    latestProgress={phase,completed,total};
+  function report(phase, completed, total, interruption) {
+    if(!interruption) failurePhase=phase;
+    latestProgress={phase,completed,total,interruption};
     return sendProgress();
+  }
+  async function publishInterruption() {
+    const detail=state.interruption;
+    const result=await report(detail.automatic?'retrying':'needs_attention',null,null,detail);
+    if(result?.ok && !detail.synced) {detail.synced=true;save();}
   }
   async function checkCancellation() {
     const latest=await api('tasks/'+currentTask.id);
@@ -125,6 +144,21 @@ async function main() {
       throw Object.assign(Error('当前画布未找到原任务节点，保留账号锁，等待恢复'),{retryable:true});
     if(state.canvasNodeId!==id) {state.canvasNodeId=id;save();}
     return nodes;
+  }
+  async function recoverSubmission(task) {
+    await report('submitting');
+    if(!state.canvasNodeId || driver.accountOf(await driver.snapshot())!==task.account_label)
+      throw Error('无法核对上次提交，请打开原账号和原任务画布');
+    const result=await driver.ax({action:'canvas-status',id:state.canvasNodeId});
+    if(result==='unknown') throw Object.assign(Error('豆包原节点暂未显示已受理或失败，提交结果仍待确认'),{retryable:true});
+    if(result==='failed' || result==='rejected') {
+      await update(task,'failed',result==='rejected'?'豆包审核不通过，生成已停止':'豆包原任务明确显示视频生成失败');
+      state.stage='failed';state.error='';delete state.interruption;save();
+      return;
+    }
+    await update(task,'running','已核对豆包原任务，继续跟踪视频结果');
+    state.stage='running';save();
+    await finish(task);
   }
   async function finish(task) {
     if (state.stage === 'running') {
@@ -206,7 +240,7 @@ async function main() {
       const form=new FormData();form.append('file',new Blob([bytes],{type:'video/mp4'}),path.basename(state.videoFile));
       const result=await api(`tasks/${task.id}/video`,form,true);
       if(result.state!=='succeeded') throw Error('云端未确认保存成功');
-      state.stage='uploaded';state.error='';save();
+      state.stage='uploaded';state.error='';delete state.interruption;save();
       console.log('视频已回传，云端账号锁已释放。');
     }
   }
@@ -249,18 +283,37 @@ async function main() {
     driver.setGuard(checkCancellation);
     if (state.taskId && state.taskId !== task.id && !['uploaded','failed','cancelled'].includes(state.stage))
       throw Error('本地仍有未完成任务，保持锁定，请核对任务状态');
+    const resumeRevision=task.resume_revision||0;
+    const hadInterruption=state.taskId===task.id && !!state.interruption;
+    const resumed=state.resumeRevision!==resumeRevision || process.argv.includes('--resume');
+    if(state.taskId!==task.id || resumed) delete state.interruption;
+    state.resumeRevision=resumeRevision;
+    if(state.interruption) {
+      failurePhase=state.interruption.phase;
+      if(!state.interruption.synced) await publishInterruption();
+      if(!state.interruption.automatic) return;
+    }
+    if(state.taskId===task.id && state.canvasNodeId &&
+      (task.state==='submitting' || (task.state==='running' && state.stage==='submitting'))) {
+      await recoverSubmission(task);return;
+    }
     if(state.taskId===task.id && ['running','awaiting_video'].includes(task.state) &&
        ['running','awaiting_video','downloading','uploading'].includes(state.stage)) {
       await finish(task);return;
     }
+    if(state.taskId===task.id && task.state==='prepared' && state.stage==='submitting')
+      state.stage='prepared';
     if (!['claimed','prepared'].includes(task.state) || state.stage === 'submitting')
       throw Error(`任务处于 ${task.state}，恢复时保留账号锁，请核对原任务，禁止重复提交`);
     const account = config.accounts.find(a=>a.label === task.account_label);
     if (!account) throw Error('任务绑定账号已从配置移除');
-    if(state.taskId!==task.id) delete state.canvasNodeId;
+    if(state.taskId!==task.id) {
+      delete state.canvasNodeId;
+      state.stage='claimed';
+    }
     state.taskId=task.id;
     save();
-    if (task.state === 'claimed') {
+    if (task.state === 'claimed' || (task.state==='prepared' && hadInterruption)) {
       // Persist before every non-idempotent desktop operation.
       if (state.stage === 'preparing') {
         const tree=await driver.snapshot();
@@ -268,7 +321,7 @@ async function main() {
         // The cloud is still in claimed, so no submission can have occurred.
         // After a client restart, prepare can recreate an unfinished draft safely.
       }
-      if(state.stage!=='prepared') {
+      if(state.stage!=='prepared' || task.state==='prepared') {
         task.referenceFiles=await referenceFiles(task);
         state.stage='preparing'; save();
         await driver.prepare(task, account, report);
@@ -281,6 +334,7 @@ async function main() {
       console.log('节点已准备，账号锁保留。添加 --submit 可提交当前任务。');
       return;
     }
+    await report('checking_submission');
     const nodes = await driver.snapshot();
     if (driver.accountOf(nodes) !== task.account_label || driver.busy(nodes) || driver.selectedTitle(nodes)!=='豆包任务-'+task.id)
       throw Error('账号已改变或已有生成任务，保持锁定');
@@ -295,23 +349,38 @@ async function main() {
     const input=driver.promptInput(nodes,task.prompt);
     if(!input) throw Error('提交前提示词核对失败');
     const canvasNodeId=await driver.ax({action:'canvas-node',title:'豆包任务-'+task.id});
-    if(!canvasNodeId) throw Error('提交前无法识别选中的画布节点');
+    if(!canvasNodeId) throw Object.assign(Error('提交前没有识别到唯一可见的任务视频节点'),{uiTimeout:true});
     state.canvasNodeId=canvasNodeId;
     state.stage='submitting'; save();
     await report('submitting');
     await update(task,'submitting','正在提交，重启后禁止重复提交');
-    await driver.ax({action:'submit',role:'AXTextArea',label:input.value});
-    await driver.waitFor(tree=>driver.busy(tree),20000);
+    await driver.ax({action:'submit',role:'AXTextArea',label:input.value,canvasNodeId,canvasNodeTitle:'豆包任务-'+task.id});
+    await driver.waitFor(tree=>driver.busy(tree),20000,'点击生成后 20 秒内未看到豆包受理状态');
     state.stage='running'; save();
     await update(task,'running','豆包正在生成，账号已锁定');
     await finish(task);
   } catch (error) {
+    state.error=error.message;
     if(currentTask) {
       const latest=await api('tasks/'+currentTask.id).catch(()=>null);
       if(latest?.state==='cancelling') {await finishCancellation(currentTask);return;}
-      if(latest) await report(transient(error)?'retrying':'needs_attention');
+      const phase=failurePhase || 'claimed';
+      const attempts=(state.interruption?.attempts||0)+1;
+      const beforeSubmit=['claimed','prepared'].includes(latest?.state||currentTask.state) && state.stage!=='submitting';
+      const safeToRecheck=beforeSubmit || (state.stage==='submitting' && !!state.canvasNodeId);
+      const automatic=process.argv.includes('--watch') && attempts<=WATCH_RETRIES &&
+        Boolean(transient(error) || (safeToRecheck && error.uiTimeout));
+      const code=error.cause?.code;
+      const message=error.message||'执行器发生未知错误';
+      const reason=code ? `${message}（${code}）` : message;
+      state.interruption={phase,attempts,automatic,reason:String(reason).slice(0,500),
+        recovery:automatic ? `执行器将在 10 秒后继续原任务（第 ${attempts}/${WATCH_RETRIES} 次自动重试）。` : recoveryHint(phase,state.stage)};
+      save();
+      if(latest) await publishInterruption();
+      console.error(`豆包任务 ${currentTask.id} 在 ${phase} 中断：${reason} ${state.interruption.recovery}`);
+      if(process.argv.includes('--watch')) return;
     }
-    state.error=error.message; save();
+    save();
     throw error;
   } finally {
     clearInterval(heartbeat);

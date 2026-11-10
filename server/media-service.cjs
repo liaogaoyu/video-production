@@ -22,7 +22,7 @@ function sniff(bytes) {
   return null;
 }
 
-function createMediaService({ root }) {
+function createMediaService({ root, oss = null }) {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const resolvedRoot = fs.realpathSync(root);
 
@@ -38,12 +38,32 @@ function createMediaService({ root }) {
     return file;
   }
 
-  async function writeAtomic(storageKey, bytes) {
+  async function ensureLocal(storageKey) {
+    const file = locate(storageKey);
+    if (fs.existsSync(file)) return file;
+    if (!oss?.enabled) throw new ApiError(404, "media_not_found", "媒体不存在");
+    await oss.ensureLocal(storageKey, file);
+    return file;
+  }
+
+  async function ensureOnOss(storageKey, mime = "application/octet-stream") {
+    if (!oss?.enabled) return null;
+    if (await oss.exists(storageKey)) return oss.ossUri(storageKey);
+    const file = locate(storageKey);
+    if (!fs.existsSync(file)) throw new ApiError(404, "media_not_found", "媒体不存在");
+    const bytes = await fs.promises.readFile(file);
+    return oss.put(storageKey, bytes, mime);
+  }
+
+  async function writeAtomic(storageKey, bytes, mime) {
     const file = locate(storageKey);
     await fs.promises.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     const partial = `${file}.partial`;
     await fs.promises.writeFile(partial, bytes, { mode: 0o600 });
     await fs.promises.rename(partial, file);
+    if (oss?.enabled) {
+      await oss.put(storageKey, bytes, mime || "application/octet-stream");
+    }
     return file;
   }
 
@@ -80,7 +100,7 @@ function createMediaService({ root }) {
     return { start, end, size };
   }
 
-  return { root: resolvedRoot, locate, writeAtomic, inspect, parseRange, sniff };
+  return { root: resolvedRoot, locate, ensureLocal, ensureOnOss, writeAtomic, inspect, parseRange, sniff, oss };
 }
 
 module.exports = { createMediaService, sniff };

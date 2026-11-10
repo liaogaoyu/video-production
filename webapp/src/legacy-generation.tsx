@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { App, Alert, Form, Modal, Select, Typography } from "antd";
+import { App, Alert, Checkbox, Form, Modal, Select, Typography } from "antd";
 import { api, id } from "./api";
 import { useWorkspace } from "./context";
 import type { Account } from "./types";
@@ -45,6 +45,7 @@ export function LegacyGeneration({
         form={form}
         layout="vertical"
         initialValues={{
+          appendDisplayRules: true,
           channel: "jimeng",
           model: "seedance2.0",
           resolution: "720p",
@@ -61,6 +62,7 @@ export function LegacyGeneration({
               "POST",
               {
                 kind,
+                appendDisplayRules: v.appendDisplayRules !== false,
                 sourceIds,
                 ratio: project!.data.settings.ratio,
                 ...(web
@@ -83,6 +85,7 @@ export function LegacyGeneration({
           }
         }}
       >
+        {kind === "image" && <Form.Item name="appendDisplayRules" valuePropName="checked"><Checkbox>追加多视角展示要求（角色设定板、场景四视图、道具单图）</Checkbox></Form.Item>}
         {kind === "video" && (
           <>
             <Form.Item name="channel" label="视频渠道">

@@ -14,6 +14,9 @@ function registerCommercialApi(app, s) {
         throw new ApiError(403, "admin_required", "仅限管理员");
       return u;
     };
+  app.get('/api/v1/admin/seedance-api', async r => { admin(r); return s.seedanceApi.config(); });
+  app.put('/api/v1/admin/seedance-api', async r => { admin(r); return s.seedanceApi.save(r.body || {}); });
+  app.post('/api/v1/admin/seedance-api/check', async r => { admin(r); return s.seedanceApi.check(); });
   app.get("/api/v1/model-offers", async () => ({
     items: b.listOffers(),
     enabled: b.pricing.get().enabled,
