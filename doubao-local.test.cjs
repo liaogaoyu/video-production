@@ -50,6 +50,29 @@ test('upload is idempotent, appears as a shot video and releases lock only after
   assert.equal(services.db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE id=?').get(task.id).n,1);
   assert.equal(queue.claim('mac',accounts).task.request_key,'next');
 });
+test('OSS credential failure leaves the returned video playable and releases the queue lock',async t=>{
+  const {queue,services,shot}=setup(t);
+  services.oss.enabled=true;
+  t.mock.method(services.oss,'put',async (key,bytes,mime,{signal})=>{
+    assert.equal(mime,'video/mp4');
+    assert(signal instanceof AbortSignal);
+    throw Object.assign(Error('OSS rejected this request'),{
+      statusCode:403, body:Buffer.from('<Code>InvalidAccessKeyId</Code>'),
+    });
+  });
+  const task=queue.enqueue(shot.id,'video');
+  queue.enqueue(shot.id,'next');
+  queue.claim('mac',accounts);runToVideo(queue,task.id);
+  const bytes=fixture();
+  const [result,retry]=await Promise.all([queue.upload(task.id,'mac',bytes),queue.upload(task.id,'mac',bytes)]);
+  assert.equal(result.state,'succeeded');
+  assert.equal(retry.media_id,result.media_id);
+  assert.match(result.note,/OSS 暂未同步.*AccessKey 无效或已停用/);
+  const media=services.db.prepare('SELECT storage_key FROM media WHERE id=?').get(result.media_id);
+  assert.deepEqual(fs.readFileSync(await services.media.ensureLocal(media.storage_key)),bytes);
+  assert.equal(services.db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE id=?').get(task.id).n,1);
+  assert.equal(queue.claim('mac',accounts).task.request_key,'next');
+});
 test('daily quota is shared by account identity across organizations and moves to next account',async t=>{
   const {queue,shot}=setup(t);
   const pool=[accounts[0],{label:'甲账号其他组织',quotaKey:'user-a'},accounts[1]];

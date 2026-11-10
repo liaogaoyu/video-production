@@ -55,14 +55,24 @@ function createMediaService({ root, oss = null }) {
     return oss.put(storageKey, bytes, mime);
   }
 
-  async function writeAtomic(storageKey, bytes, mime) {
+  async function writeAtomic(storageKey, bytes, mime, { onOssError } = {}) {
     const file = locate(storageKey);
     await fs.promises.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const partial = `${file}.partial`;
-    await fs.promises.writeFile(partial, bytes, { mode: 0o600 });
-    await fs.promises.rename(partial, file);
+    const partial = `${file}.${crypto.randomUUID()}.partial`;
+    try {
+      await fs.promises.writeFile(partial, bytes, { mode: 0o600, flag: "wx" });
+      await fs.promises.rename(partial, file);
+    } finally {
+      await fs.promises.rm(partial, { force: true });
+    }
     if (oss?.enabled) {
-      await oss.put(storageKey, bytes, mime || "application/octet-stream");
+      const options = onOssError ? { signal: AbortSignal.timeout(12000) } : undefined;
+      try {
+        await oss.put(storageKey, bytes, mime || "application/octet-stream", options);
+      } catch (error) {
+        if (!onOssError) throw error;
+        onOssError(error);
+      }
     }
     return file;
   }

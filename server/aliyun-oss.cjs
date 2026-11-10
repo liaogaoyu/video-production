@@ -43,7 +43,7 @@ function createOssStore(config = {}) {
     return headers;
   }
 
-  function request(method, key, { headers = {}, body, queries = "" } = {}) {
+  function request(method, key, { headers = {}, body, queries = "", signal } = {}) {
     const encoded = encodeKey(key);
     const hdrs = sign(method, key, { ...headers }, queries);
     const url = new URL(`https://${bucket}.${endpoint}/${encoded}${queries}`);
@@ -56,6 +56,7 @@ function createOssStore(config = {}) {
           port: url.port || undefined,
           path: url.pathname + url.search,
           method,
+          signal,
           headers: {
             ...hdrs,
             Host: url.host,
@@ -84,12 +85,13 @@ function createOssStore(config = {}) {
     });
   }
 
-  async function put(storageKey, bytes, mime = "application/octet-stream") {
+  async function put(storageKey, bytes, mime = "application/octet-stream", { signal } = {}) {
     if (!enabled) throw new Error("OSS 未启用");
     const key = objectKey(storageKey);
     await request("PUT", key, {
       headers: { "Content-Type": mime },
       body: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes),
+      signal,
     });
     return ossUri(storageKey);
   }

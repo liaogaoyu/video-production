@@ -7,6 +7,13 @@ const phases = new Set(['claimed','switching_account','opening_canvas','fetching
   'uploading_references','setting_parameters','prepared','checking_submission','submitting','generating','downloading','uploading',
   'cancelling','retrying','needs_attention','resume_requested']);
 
+function ossFailureReason(error) {
+  if (/InvalidAccessKeyId/.test(String(error.body || error.message || ''))) return 'AccessKey 无效或已停用';
+  if (error.statusCode === 403) return 'OSS 拒绝写入，请检查权限';
+  if (error.code === 'ABORT_ERR' || error.name === 'TimeoutError') return 'OSS 同步超时';
+  return Number.isInteger(error.statusCode) ? `OSS 返回 HTTP ${error.statusCode}` : '无法连接 OSS';
+}
+
 function createDoubaoQueue(services) {
   const { db } = services;
   db.exec(`CREATE TABLE IF NOT EXISTS doubao_local_tasks (
@@ -258,7 +265,11 @@ function createDoubaoQueue(services) {
       throw new ApiError(409, 'not_running', '任务尚未提交');
     const metadata = inspectMp4(bytes);
     const sha = crypto.createHash('sha256').update(bytes).digest('hex');
-    const stored = await services.repos.content.saveMedia({ projectId: original.project_id, bytes, source: 'doubao_local', video: true, jobId: id });
+    let ossWarning;
+    const stored = await services.repos.content.saveMedia({
+      projectId: original.project_id, bytes, source: 'doubao_local', video: true, jobId: id,
+      onOssError: error => { ossWarning = ossFailureReason(error); },
+    });
     return transaction(db, () => {
       const current = owned(id, workerId);
       if (current.state === 'succeeded') return current;
@@ -268,8 +279,9 @@ function createDoubaoQueue(services) {
       db.prepare(`INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,provider,model,config_snapshot,input_snapshot,result_json,media_id,created_at,updated_at,completed_at)
         VALUES(?,?,?,?,'video','succeeded','doubao_local',?,?,?,?,?,?,?,?)`)
         .run(id, original.project_id, original.shot_id, id, original.model, JSON.stringify({ratio:original.ratio,duration:original.duration,model:original.model}), JSON.stringify({promptOriginal: original.prompt_original||original.prompt,promptSubmitted:original.prompt,references:JSON.parse(original.references_json),ratio:original.ratio,duration:original.duration}),
-          JSON.stringify({accountLabel: original.account_label, sha256: sha, videoMetadata: metadata}), stored.id, now, now, now);
-      db.prepare("UPDATE doubao_local_tasks SET state='succeeded',note='成片已保存，账号锁已释放',media_id=?,updated_at=? WHERE id=?").run(stored.id, now, id);
+          JSON.stringify({accountLabel: original.account_label, sha256: sha, videoMetadata: metadata, ossWarning}), stored.id, now, now, now);
+      const note = ossWarning ? `成片已保存到服务器，OSS 暂未同步（${ossWarning}）` : '成片已保存，账号锁已释放';
+      db.prepare("UPDATE doubao_local_tasks SET state='succeeded',note=?,media_id=?,updated_at=? WHERE id=?").run(note, stored.id, now, id);
       services.repos.record('job.succeeded', {jobId:id,projectId:original.project_id,sourceId:original.shot_id,source:'doubao_local'});
       return get(id);
     });

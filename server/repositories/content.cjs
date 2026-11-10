@@ -211,16 +211,19 @@ function createContentRepository(db, { media, record }) {
     return { deleted: true };
   }
 
-  async function saveMedia({ projectId, bytes, source, video = false, assetId = "", jobId = "" }) {
+  async function saveMedia({ projectId, bytes, source, video = false, assetId = "", jobId = "", onOssError }) {
     mustProject(projectId);
     const info = media.inspect(bytes, { video });
-    const existing = db.prepare("SELECT * FROM media WHERE project_id=? AND sha256=? AND mime=?").get(projectId, info.sha256, info.mime);
-    if (existing) return existing;
+    const findExisting = db.prepare("SELECT * FROM media WHERE project_id=? AND sha256=? AND mime=?");
+    const existing = findExisting.get(projectId, info.sha256, info.mime);
+    if (existing && (!onOssError || fs.existsSync(media.locate(existing.storage_key)))) return existing;
     const id = crypto.randomUUID();
-    const storageKey = video
+    const storageKey = existing?.storage_key || (video
       ? `${projectId}/videos/${jobId || id}/output${info.ext}`
-      : `${projectId}/assets/${assetId || "shared"}/${info.sha256}${info.ext}`;
-    await media.writeAtomic(storageKey, bytes);
+      : `${projectId}/assets/${assetId || "shared"}/${info.sha256}${info.ext}`);
+    await media.writeAtomic(storageKey, bytes, info.mime, { onOssError });
+    const saved = findExisting.get(projectId, info.sha256, info.mime);
+    if (saved) return saved;
     const now = iso();
     db.prepare("INSERT INTO media(id,project_id,storage_key,mime,bytes,sha256,source,created_at) VALUES(?,?,?,?,?,?,?,?)")
       .run(id, projectId, storageKey, info.mime, info.bytes, info.sha256, source, now);
