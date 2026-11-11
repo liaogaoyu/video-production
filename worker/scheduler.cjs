@@ -120,6 +120,13 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
   async function exportOne() {
     const row = repos.accounts.nextExport();
     if (!row || !media) return;
+    async function publishArchive(storageKey, files) {
+      const file = media.locate(storageKey);
+      await writeExportArchive(file, files);
+      if (await media.mirrorLocalFile(storageKey, "application/zip")) {
+        await fs.promises.unlink(file).catch(error => console.error(publicMessage(error.message)));
+      }
+    }
     try {
       const project = presentProject(repos.content.graph(row.project_id));
       const previous = JSON.parse(row.manifest_json || "{}");
@@ -129,7 +136,7 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
         const plan = previous.plan || require('../server/asset-image-export.cjs').planAssetImageExport(project, db, media);
         if (!plan.files.length) throw new Error("当前项目没有可导出的资产图片");
         const storageKey = `exports/${row.id}.zip`;
-        await writeExportArchive(media.locate(storageKey), plan.files.map(file=>({name:file.file,sourcePath:media.locate(file.storageKey)})));
+        await publishArchive(storageKey, plan.files.map(file=>({name:file.file,sourcePath:media.locate(file.storageKey)})));
         repos.accounts.finishExport(row.id,{status:"succeeded",storageKey,manifest:{imageCount:plan.files.length,missing:plan.missing}});
         return;
       }
@@ -146,8 +153,7 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
         }
         files.push({ name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) });
         const storageKey = `exports/${row.id}.zip`;
-        await writeExportArchive(media.locate(storageKey), files);
-        await media.mirrorLocalFile(storageKey, "application/zip");
+        await publishArchive(storageKey, files);
         repos.accounts.finishExport(row.id, { status: "succeeded", storageKey, manifest });
         return;
       } else {
@@ -180,8 +186,7 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
       const manifest = { kind: row.kind === "videos" ? "storydock-video-pack" : "storydock-backup", schemaVersion: 1, media: packedMedia, missing: previous.missing || [], files: files.map((file) => file.name) };
       files.push({ name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) });
       const storageKey = `exports/${row.id}.zip`;
-      await writeExportArchive(media.locate(storageKey), files);
-      await media.mirrorLocalFile(storageKey, "application/zip");
+      await publishArchive(storageKey, files);
       repos.accounts.finishExport(row.id, { status: "succeeded", storageKey, manifest });
     } catch (error) {
       repos.accounts.finishExport(row.id, { status: "failed", errorMessage: publicMessage(error.message), manifest: {} });
