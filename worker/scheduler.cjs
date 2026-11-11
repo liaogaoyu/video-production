@@ -3,7 +3,6 @@ const { buildDraft } = require("../server/jianying/draft.cjs");
 const { writeExportArchive } = require("../server/export-archive.cjs");
 const { publicMessage } = require("../server/errors.cjs");
 const { presentProject } = require("../server/present.cjs");
-const { zipStore } = require("../server/zip.cjs");
 const fs = require("node:fs");
 
 function backoff(attempt) {
@@ -148,18 +147,41 @@ function createScheduler({ repos, providers, owner = "worker", db, media, imageC
         files.push({ name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) });
         const storageKey = `exports/${row.id}.zip`;
         await writeExportArchive(media.locate(storageKey), files);
+        await media.mirrorLocalFile(storageKey, "application/zip");
         repos.accounts.finishExport(row.id, { status: "succeeded", storageKey, manifest });
         return;
       } else {
         files.push({ name: "project.json", data: Buffer.from(JSON.stringify(project, null, 2)) });
         const mediaRows = db.prepare("SELECT * FROM media WHERE project_id=?").all(project.id);
         packedMedia = mediaRows.map(m => ({id:m.id,file:`media/${m.storage_key}`}));
-        for (const stored of mediaRows) files.push({ name: `media/${stored.storage_key}`, data: fs.readFileSync(media.locate(stored.storage_key)) });
+        for (const stored of mediaRows) {
+          const name = `media/${stored.storage_key}`;
+          const sourcePath = media.locate(stored.storage_key);
+          if (fs.existsSync(sourcePath) || !media.oss?.enabled) {
+            files.push({ name, sourcePath });
+          } else {
+            files.push({
+              name,
+              size: stored.bytes,
+              async openStream() {
+                const response = await fetch(media.oss.signedUrl(stored.storage_key), {
+                  signal: AbortSignal.timeout(15 * 60 * 1000),
+                });
+                if (!response.ok || !response.body) {
+                  await response.body?.cancel();
+                  throw new Error(`备份读取 OSS 媒体失败（HTTP ${response.status}）`);
+                }
+                return response.body;
+              },
+            });
+          }
+        }
       }
       const manifest = { kind: row.kind === "videos" ? "storydock-video-pack" : "storydock-backup", schemaVersion: 1, media: packedMedia, missing: previous.missing || [], files: files.map((file) => file.name) };
       files.push({ name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) });
       const storageKey = `exports/${row.id}.zip`;
-      await media.writeAtomic(storageKey, zipStore(files));
+      await writeExportArchive(media.locate(storageKey), files);
+      await media.mirrorLocalFile(storageKey, "application/zip");
       repos.accounts.finishExport(row.id, { status: "succeeded", storageKey, manifest });
     } catch (error) {
       repos.accounts.finishExport(row.id, { status: "failed", errorMessage: publicMessage(error.message), manifest: {} });

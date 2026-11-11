@@ -5,7 +5,7 @@ const {crc32}=require('./zip.cjs');
 async function writeExportArchive(target,files){
  const temp=target+'.partial',central=[];let offset=0;
  await fs.promises.mkdir(path.dirname(target),{recursive:true});
- const sizes=files.map(f=>f.sourcePath?fs.statSync(f.sourcePath).size:f.data.length);
+ const sizes=files.map(f=>f.openStream?f.size:f.sourcePath?fs.statSync(f.sourcePath).size:f.data.length);
  if(files.length>65535||sizes.reduce((a,b)=>a+b,0)>0xf0000000)throw Error('导出超过 3.75GB，请按项目拆分后导出');
  let fd;
  try{
@@ -14,7 +14,7 @@ async function writeExportArchive(target,files){
   for(const [index,file] of files.entries()){
    const name=Buffer.from(file.name,'utf8'),start=offset,local=Buffer.alloc(30);local.writeUInt32LE(0x04034b50);local.writeUInt16LE(20,4);local.writeUInt16LE(0x808,6);local.writeUInt16LE(name.length,26);
    await write(local);await write(name);let crc=0,size=0;
-   const chunks=file.sourcePath?fs.createReadStream(file.sourcePath):[file.data];
+   const chunks=file.openStream?await file.openStream():file.sourcePath?fs.createReadStream(file.sourcePath):[file.data];
    for await(const chunk of chunks){crc=crc32(chunk,crc^0xffffffff);size+=chunk.length;await write(chunk);}
    if(size!==sizes[index])throw Error('视频文件在导出过程中发生变化，请重新导出');
    const descriptor=Buffer.alloc(16);descriptor.writeUInt32LE(0x08074b50);descriptor.writeUInt32LE(crc,4);descriptor.writeUInt32LE(size,8);descriptor.writeUInt32LE(size,12);await write(descriptor);

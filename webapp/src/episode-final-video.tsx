@@ -11,6 +11,34 @@ type FinalVideo = {
   uploadedAt: string;
 };
 
+type UploadTicket = { direct: false } | {
+  direct: true;
+  uploadId: string;
+  url: string;
+  fields: Record<string, string>;
+};
+
+function sendToOss(ticket: Extract<UploadTicket, { direct: true }>, file: File, progress: (percent: number) => void) {
+  const form = new FormData();
+  for (const [name, value] of Object.entries(ticket.fields)) form.append(name, value);
+  form.append("file", file);
+  return new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", ticket.url);
+    request.timeout = 60 * 60 * 1000;
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) progress(Math.min(100, Math.floor(event.loaded / event.total * 100)));
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) resolve();
+      else reject(new Error(`OSS 上传失败（HTTP ${request.status}），请重试`));
+    };
+    request.onerror = () => reject(new Error("无法连接 OSS，请检查网络后重试"));
+    request.ontimeout = () => reject(new Error("OSS 上传超时，请重试"));
+    request.send(form);
+  });
+}
+
 export function EpisodeFinalVideo({
   projectId,
   episodeId,
@@ -23,6 +51,8 @@ export function EpisodeFinalVideo({
   const [video, setVideo] = useState<FinalVideo | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [pendingId, setPendingId] = useState("");
   const [preview, setPreview] = useState(false);
   const [previewError, setPreviewError] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -35,6 +65,14 @@ export function EpisodeFinalVideo({
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [endpoint]);
+
+  async function confirmUpload(uploadId: string) {
+    const result = await api<{ video: FinalVideo }>(`${endpoint}/complete`, "POST", { uploadId });
+    setVideo(result.video);
+    setPendingId("");
+    setLoadError("");
+    message.success("本集成片已保存");
+  }
 
   return (
     <Card title="本集成片" size="small" style={{ marginTop: 20 }}>
@@ -55,11 +93,20 @@ export function EpisodeFinalVideo({
                 return Upload.LIST_IGNORE;
               }
               setUploading(true);
+              setProgress(0);
+              setPendingId("");
               try {
-                const result = await upload(endpoint, file, 15 * 60 * 1000);
-                setVideo(result.video);
-                setLoadError("");
-                message.success("本集成片已保存");
+                const ticket = await api<UploadTicket>(`${endpoint}/upload`, "POST", { filename: file.name, bytes: file.size });
+                if (ticket.direct) {
+                  await sendToOss(ticket, file, setProgress);
+                  setPendingId(ticket.uploadId);
+                  await confirmUpload(ticket.uploadId);
+                } else {
+                  const result = await upload(endpoint, file, 15 * 60 * 1000);
+                  setVideo(result.video);
+                  setLoadError("");
+                  message.success("本集成片已保存");
+                }
               } catch (error) {
                 message.error((error as Error).message);
               } finally {
@@ -69,9 +116,15 @@ export function EpisodeFinalVideo({
             }}
           >
             <Button type={video ? "default" : "primary"} icon={<UploadOutlined />} loading={uploading}>
-              {uploading ? "正在上传…" : video ? "替换本集成片" : "上传本集成片"}
+              {uploading ? (progress === 100 || pendingId ? "正在确认…" : `正在上传 ${progress}%`) : video ? "替换本集成片" : "上传本集成片"}
             </Button>
           </Upload>
+          {pendingId && !uploading && <Button onClick={async () => {
+            setUploading(true);
+            try { await confirmUpload(pendingId); }
+            catch (error) { message.error((error as Error).message); }
+            finally { setUploading(false); }
+          }}>重试确认</Button>}
           {video && <Button icon={<PlayCircleOutlined />} onClick={() => {
             setPreviewError(false);
             setPreview(true);
@@ -82,7 +135,7 @@ export function EpisodeFinalVideo({
         {video && (previewError ? (
           <Space direction="vertical">
             <Alert type="info" title="当前浏览器无法播放此视频，可以下载原文件查看。" />
-            <Button href={video.url} download={video.filename}>下载原文件</Button>
+            <Button href={`${video.url}?download=1`} download={video.filename}>下载原文件</Button>
           </Space>
         ) : (
           <video className="preview-video" src={video.url} controls preload="metadata" onError={() => setPreviewError(true)} />

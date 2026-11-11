@@ -98,6 +98,31 @@ async function createHttpApp(services) {
   app.delete('/api/v1/dreamina-web/accounts/:id/login',async request=>web.closeLogin(request.params.id));
   app.post('/api/v1/projects/:id/web-video-jobs',async(request,reply)=>{reply.code(202);return web.batch(request.params.id,request.body||{},String(request.headers['idempotency-key']||''));});
   const global = services.global;
+  async function hrefFor(rows) {
+    const map = new Map();
+    const pending = (rows || []).filter((row) => row?.id && row.storage_key);
+    async function take() {
+      while (pending.length) {
+        const row = pending.pop();
+        let href = `/api/v1/media/${row.id}`;
+        if (media.oss?.enabled) href = (await media.deliveryUrl(row.storage_key)) || href;
+        map.set(row.id, href);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(8, pending.length) }, take));
+    return (id) => (id && map.get(id)) || (id ? `/api/v1/media/${id}` : "");
+  }
+  async function shownProject(graph) {
+    return presentProject(graph, await hrefFor(graph.mediaRows));
+  }
+  async function shownJobs(rows) {
+    const ids = [...new Set(rows.map((row) => row.media_id || row.mediaId).filter(Boolean))];
+    const stored = ids.length
+      ? services.db.prepare(`SELECT id, storage_key FROM media WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+      : [];
+    const href = await hrefFor(stored);
+    return rows.map((row) => presentJob(row, href));
+  }
   app.get("/api/v1/dreamina-global/runtime", async () => global.runtime());
   app.get("/api/v1/dreamina-global/accounts", async () => ({accounts:global.listAccounts()}));
   app.post("/api/v1/dreamina-global/accounts", async (request,reply) => {reply.code(201);return {account:global.createAccount(request.body||{})};});
@@ -111,15 +136,15 @@ async function createHttpApp(services) {
   app.post("/api/v1/global-previews/:id/approve", async (request,reply) => {reply.code(202);return global.approve(request.params.id,request.body||{});});
 
   app.get("/api/v1/projects", async () => ({
-    projects: repos.content.listProjects().map((row) => presentProject(repos.content.graph(row.id))),
+    projects: await Promise.all(repos.content.listProjects().map((row) => shownProject(repos.content.graph(row.id)))),
   }));
   app.post("/api/v1/projects", async (request, reply) => {
     const graph = repos.content.createProject(request.body || {});
     reply.code(201);
-    return { project: presentProject(graph) };
+    return { project: await shownProject(graph) };
   });
-  app.get("/api/v1/projects/:id", async (request) => ({ project: presentProject(repos.content.graph(request.params.id)) }));
-  app.patch("/api/v1/projects/:id", async (request) => ({ project: presentProject(repos.content.updateProject(request.params.id, request.body || {})) }));
+  app.get("/api/v1/projects/:id", async (request) => ({ project: await shownProject(repos.content.graph(request.params.id)) }));
+  app.patch("/api/v1/projects/:id", async (request) => ({ project: await shownProject(repos.content.updateProject(request.params.id, request.body || {})) }));
   app.delete("/api/v1/projects/:id", async (request) => repos.content.deleteProject(request.params.id));
 
   app.post("/api/v1/projects/:id/references", async (request, reply) => {
@@ -174,11 +199,11 @@ async function createHttpApp(services) {
     return result;
   });
   app.get("/api/v1/projects/:id/jobs", async (request) => ({
-    jobs: repos.jobs.rawJobs(request.params.id).map(presentJob),
+    jobs: await shownJobs(repos.jobs.rawJobs(request.params.id)),
   }));
   app.post("/api/v1/jobs/:id/retry", async (request, reply) => {
     reply.code(202);
-    return { job: presentJob(repos.jobs.retryJob(request.params.id, { confirm: Boolean(request.body?.confirm) })) };
+    return { job: (await shownJobs([repos.jobs.retryJob(request.params.id, { confirm: Boolean(request.body?.confirm) })]))[0] };
   });
   app.post("/api/v1/batches/:id/pause", async (request) => repos.jobs.pauseBatch(request.params.id));
 
@@ -276,13 +301,33 @@ async function createHttpApp(services) {
   app.get("/api/v1/media/:id", async (request, reply) => {
     const row = services.db.prepare("SELECT * FROM media WHERE id=?").get(request.params.id);
     if (!row) throw new ApiError(404, "media_not_found", "媒体不存在");
+    let disposition;
+    if (request.query?.download === "1") {
+      const storedName = services.db.prepare("SELECT filename FROM episode_final_videos WHERE media_id=?").get(row.id)?.filename;
+      const filename = (storedName || path.basename(row.storage_key)).toWellFormed();
+      const encoded = encodeURIComponent(filename).replace(/['()*]/g, char => "%" + char.charCodeAt(0).toString(16));
+      disposition = `attachment; filename*=UTF-8''${encoded}`;
+    }
+    reply.header("cache-control", "private, no-store");
+    reply.header("vary", "Cookie");
+    if (row.source === "episode-final" && media.oss?.enabled && !fs.existsSync(media.locate(row.storage_key))) {
+      return reply.redirect(media.oss.signedUrl(row.storage_key, 3600, {
+        method: request.method,
+        disposition,
+      }), 307);
+    }
+    const ossUrl = await media.deliveryUrl(row.storage_key, {
+      method: request.method,
+      mime: row.mime,
+      disposition,
+    });
+    if (ossUrl) return reply.redirect(ossUrl, 307);
     const file = await media.ensureLocal(row.storage_key);
     const stat = await fs.promises.stat(file);
     const range = media.parseRange(request.headers.range, stat.size);
     reply.header("accept-ranges", "bytes");
     reply.header("content-type", row.mime);
-    reply.header("cache-control", "private, no-store");
-    reply.header("vary", "Cookie");
+    if (disposition) reply.header("content-disposition", disposition);
     if (range?.unsatisfiable) {
       reply.code(416).header("content-range", `bytes */${stat.size}`);
       return reply.send();
@@ -299,7 +344,7 @@ async function createHttpApp(services) {
 
   app.post("/api/v1/projects/:id/exports", async (request, reply) => {
     const graph = repos.content.graph(request.params.id);
-    const project = presentProject(graph);
+    const project = await shownProject(graph);
     const kind = request.body?.kind || "backup";
     if (!["videos", "backup", "jianying", "asset-images"].includes(kind)) throw new ApiError(400, "invalid_export_kind", "不支持的导出格式");
     if(request.body?.episodeId && ["videos","jianying"].includes(kind)){
@@ -326,10 +371,23 @@ async function createHttpApp(services) {
   app.get("/api/v1/exports/:id/download", async (request, reply) => {
     const row = repos.accounts.getExport(request.params.id);
     if (!row || row.status !== "succeeded" || !row.storage_key) throw new ApiError(404, "export_not_ready", "归档还没有完成");
-    const file = await media.ensureLocal(row.storage_key);
     reply.header("cache-control", "private, no-store");
+    const disposition = `attachment; filename="storydock-${row.kind}.zip"`;
+    if (media.oss?.enabled && !fs.existsSync(media.locate(row.storage_key))) {
+      return reply.redirect(media.oss.signedUrl(row.storage_key, 3600, {
+        method: request.method,
+        disposition,
+      }), 307);
+    }
+    const ossUrl = await media.deliveryUrl(row.storage_key, {
+      method: request.method,
+      mime: "application/zip",
+      disposition,
+    });
+    if (ossUrl) return reply.redirect(ossUrl, 307);
+    const file = await media.ensureLocal(row.storage_key);
     reply.header("content-type", "application/zip");
-    reply.header("content-disposition", `attachment; filename="storydock-${row.kind}.zip"`);
+    reply.header("content-disposition", disposition);
     return reply.send(fs.createReadStream(file));
   });
 
@@ -413,7 +471,7 @@ async function createHttpApp(services) {
     }
     reply.code(201);
     return {
-      project: presentProject(repos.content.graph(projectId)),
+      project: await shownProject(repos.content.graph(projectId)),
       report: {
         projects: 1,
         assets: (source.data.assets || []).length,

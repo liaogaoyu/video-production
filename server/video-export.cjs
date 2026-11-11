@@ -6,7 +6,8 @@ function planVideoExport(project, db, media) {
   for(const shot of shots){
     const job=project.data.jobs.filter(j=>j.sourceId===shot.id&&j.status==='done'&&j.video)
       .sort((a,b)=>(b.createdAt||b.completedAt||'').localeCompare(a.createdAt||a.completedAt||'')||b.id.localeCompare(a.id))[0];
-    const stored=job&&db.prepare('SELECT * FROM media WHERE id=? AND project_id=?').get(job.video.split('/').pop(),project.id);
+    const mediaId=job&&(job.mediaId||String(job.video||'').split('/').filter(Boolean).pop());
+    const stored=mediaId&&db.prepare('SELECT * FROM media WHERE id=? AND project_id=?').get(mediaId,project.id);
     if(!stored||!fs.existsSync(media.locate(stored.storage_key))){missing.push({id:shot.id,episode:shot.episode,number:shot.number,title:shot.title,reason:'没有可下载的已完成视频'});continue;}
     const title=shot.title.replace(/[\\/:*?"<>|\x00-\x1f]/g,'_').slice(0,40).replace(/[. ]+$/,'')||'分镜';
     const file=`${String(clips.length+1).padStart(4,'0')}_E${String(shot.episode).padStart(3,'0')}_S${String(shot.number).padStart(4,'0')}_${title}_${shot.id.slice(0,8)}.mp4`;

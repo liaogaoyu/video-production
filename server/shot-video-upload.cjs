@@ -20,7 +20,8 @@ function registerShotVideoUpload(app,s){
    s.db.prepare(`INSERT INTO jobs(id,project_id,source_id,batch_id,kind,status,provider,model,config_snapshot,input_snapshot,result_json,media_id,created_at,updated_at,completed_at)
     VALUES(?,?,?,?,'video','succeeded','upload','手动上传',?,?,?,?,?,?,?)`).run(jobId,current.project_id,id,jobId,JSON.stringify({source:'upload'}),JSON.stringify({shotId:id,title:current.title,promptOriginal:current.prompt,duration:current.duration}),JSON.stringify({uploaded:true,filename,videoMetadata:metadata}),stored.id,time,time,time);
    s.repos.record('job.succeeded',{jobId,projectId:current.project_id,sourceId:id,source:'upload'});
-   return {jobId,mediaId:stored.id,url:'/api/v1/media/'+stored.id,metadata};
+   const direct=s.oss?.enabled&&typeof s.oss.publicUrl==='function'?s.oss.publicUrl(stored.storage_key):'';
+   return {jobId,mediaId:stored.id,url:direct||'/api/v1/media/'+stored.id,metadata};
   });
   reply.code(201);return result;
  });

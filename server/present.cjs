@@ -2,7 +2,7 @@ function mediaUrl(id) {
   return id ? `/api/v1/media/${id}` : "";
 }
 
-function presentJob(row) {
+function presentJob(row, urlFor = mediaUrl) {
   const input = JSON.parse(row.input_snapshot || row.inputSnapshot || "{}");
   const result = JSON.parse(row.result_json || row.resultJson || "{}");
   const hasCredit = result.creditKind === "preauthorized" && typeof result.creditAmount === "number" && Number.isFinite(result.creditAmount) && result.creditAmount >= 0;
@@ -20,8 +20,9 @@ function presentJob(row) {
     provider: row.provider || "",
     error: row.error_message || row.errorMessage || "",
     queueNote: row.queue_note || row.queueNote || "",
-    video: (row.kind === "video" || row.kind === "shot") && (row.media_id || row.mediaId) ? mediaUrl(row.media_id || row.mediaId) : "",
-    image: row.kind === "image" && (row.media_id || row.mediaId) ? mediaUrl(row.media_id || row.mediaId) : "",
+    mediaId: row.media_id || row.mediaId || "",
+    video: (row.kind === "video" || row.kind === "shot") && (row.media_id || row.mediaId) ? urlFor(row.media_id || row.mediaId) : "",
+    image: row.kind === "image" && (row.media_id || row.mediaId) ? urlFor(row.media_id || row.mediaId) : "",
     real: true,
     progress: 0,
     createdAt: row.created_at || row.createdAt,
@@ -50,7 +51,7 @@ function presentAccount(row, session) {
   };
 }
 
-function presentProject(graph) {
+function presentProject(graph, urlFor = mediaUrl) {
   const project = graph.project;
   const mediaById = new Map(graph.mediaRows.map((item) => [item.id, item]));
   const versionsByAsset = new Map();
@@ -68,7 +69,7 @@ function presentProject(graph) {
   const assets = graph.assets.map((asset) => {
     const versions = (versionsByAsset.get(asset.id) || []).map((version) => ({
       id: version.id,
-      image: mediaUrl(version.media_id),
+      image: urlFor(version.media_id),
       mediaId: version.media_id,
       prompt: version.prompt,
       source: version.source,
@@ -90,7 +91,7 @@ function presentProject(graph) {
       versions,
       references: (refsByAsset.get(asset.id) || []).map((reference) => ({
         id: reference.id,
-        url: mediaUrl(reference.media_id),
+        url: urlFor(reference.media_id),
         mediaId: reference.media_id,
         sha256: mediaById.get(reference.media_id)?.sha256 || "",
       })),
@@ -121,7 +122,7 @@ function presentProject(graph) {
       refAssetIds: linked.map((item) => item.asset_id),
     };
   });
-  const jobs = graph.jobs.map(presentJob);
+  const jobs = graph.jobs.map((job) => presentJob(job, urlFor));
   const runningJobs = jobs.filter((job) => ["submitting", "remote_running", "downloading", "submit_unknown"].includes(job.status)).length;
   return {
     id: project.id,
@@ -148,7 +149,7 @@ function presentProject(graph) {
         status:e.status||'draft',
         revision:e.revision,
       })),
-      projectReferences: (graph.projectReferences || []).map(r => ({ id:r.id, mediaId:r.media_id, url:mediaUrl(r.media_id) })),
+      projectReferences: (graph.projectReferences || []).map(r => ({ id:r.id, mediaId:r.media_id, url:urlFor(r.media_id) })),
       assets,
       shots,
       jobs,

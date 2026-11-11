@@ -25,6 +25,8 @@ function sniff(bytes) {
 function createMediaService({ root, oss = null }) {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const resolvedRoot = fs.realpathSync(root);
+  const availability = new Map();
+  const mirroring = new Map();
 
   function locate(storageKey) {
     if (!storageKey || storageKey.includes("..") || path.isAbsolute(storageKey)) {
@@ -51,8 +53,44 @@ function createMediaService({ root, oss = null }) {
     if (await oss.exists(storageKey)) return oss.ossUri(storageKey);
     const file = locate(storageKey);
     if (!fs.existsSync(file)) throw new ApiError(404, "media_not_found", "媒体不存在");
-    const bytes = await fs.promises.readFile(file);
-    return oss.put(storageKey, bytes, mime);
+    return oss.putFile(storageKey, file, mime);
+  }
+
+  function rememberAvailability(storageKey, result, ttl) {
+    if (availability.size >= 2048) availability.delete(availability.keys().next().value);
+    availability.set(storageKey, { result, expires: Date.now() + ttl });
+  }
+
+  function mirrorLocalFile(storageKey, mime) {
+    if (!oss?.enabled) return Promise.resolve(false);
+    if (mirroring.has(storageKey)) return mirroring.get(storageKey);
+    const sync = oss.putFile(storageKey, locate(storageKey), mime, { signal: AbortSignal.timeout(60000) })
+      .then(() => {
+        rememberAvailability(storageKey, Promise.resolve(true), 60000);
+        return true;
+      }, () => false)
+      .finally(() => mirroring.delete(storageKey));
+    mirroring.set(storageKey, sync);
+    return sync;
+  }
+
+  async function deliveryUrl(storageKey, options = {}) {
+    if (!oss?.enabled || options.disposition) return null;
+    let entry = availability.get(storageKey);
+    if (!entry || entry.expires <= Date.now()) {
+      const result = (typeof oss.isPublic === "function"
+        ? oss.isPublic(storageKey, { signal: AbortSignal.timeout(2500) })
+        : Promise.resolve(false)
+      ).catch(() => null);
+      rememberAvailability(storageKey, result, 10000);
+      entry = availability.get(storageKey);
+    }
+    const available = await entry.result;
+    if (available && typeof oss.publicUrl === "function") return oss.publicUrl(storageKey);
+    if (available === false && mirroring.size < 2 && fs.existsSync(locate(storageKey))) {
+      void mirrorLocalFile(storageKey, options.mime);
+    }
+    return null;
   }
 
   async function writeAtomic(storageKey, bytes, mime, { onOssError } = {}) {
@@ -110,7 +148,7 @@ function createMediaService({ root, oss = null }) {
     return { start, end, size };
   }
 
-  return { root: resolvedRoot, locate, ensureLocal, ensureOnOss, writeAtomic, inspect, parseRange, sniff, oss };
+  return { root: resolvedRoot, locate, ensureLocal, ensureOnOss, mirrorLocalFile, deliveryUrl, writeAtomic, inspect, parseRange, sniff, oss };
 }
 
 module.exports = { createMediaService, sniff };

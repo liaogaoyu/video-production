@@ -65,3 +65,78 @@ test('episode final videos stay separate across episodes and invalid replacement
     await f.close();
   }
 });
+
+test('authenticated media and archive requests redirect to OSS with local fallback for missing copies', async t => {
+  const f = await setup();
+  try {
+    const clip = (await upload(f, fixture())).json();
+    const exp = f.s.repos.accounts.createExport({ projectId: f.p.id, kind: 'videos', manifest: {} });
+    const key = `exports/${exp.id}.zip`;
+    f.s.repos.accounts.finishExport(exp.id, { status: 'succeeded', storageKey: key, manifest: {} });
+    f.s.oss.enabled = true;
+    const published = new Set([key]);
+    const mirror = t.mock.method(f.s.oss, 'putFile', async (storageKey) => { published.add(storageKey); });
+    t.mock.method(f.s.oss, 'isPublic', async (storageKey) => published.has(storageKey));
+    t.mock.method(f.s.oss, 'publicUrl', (storageKey, options = {}) => {
+      const url = new URL(storageKey, 'https://test.oss-cn-hangzhou.aliyuncs.com/');
+      if (options.disposition) url.searchParams.set('filename', options.disposition);
+      return url.href;
+    });
+    const cookies = { cookie: f.users[0].cookie };
+    const first = await f.app.inject({ url: clip.url, headers: { ...cookies, range: 'bytes=0-11' } });
+    assert.equal(first.statusCode, 206);
+    assert.deepEqual(first.rawPayload, fixture().subarray(0, 12));
+    assert.equal(mirror.mock.callCount(), 1);
+    const second = await f.app.inject({ url: clip.url, headers: cookies });
+    assert.equal(second.statusCode, 307);
+    assert.match(second.headers.location, /^https:\/\/test\.oss-cn-hangzhou\.aliyuncs\.com\//);
+    assert.equal((await f.app.inject({ url: clip.url, headers: { cookie: f.users[1].cookie } })).statusCode, 404);
+    assert.equal((await f.app.inject({ url: clip.url })).statusCode, 401);
+    const archivePath = f.s.media.locate(key);
+    fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+    fs.writeFileSync(archivePath, Buffer.from('zip-bytes'));
+    const archive = await f.app.inject({ url: `/api/v1/exports/${exp.id}/download`, headers: cookies });
+    assert.equal(archive.statusCode, 200);
+    assert.match(archive.headers['content-disposition'], /storydock-videos\.zip/);
+    assert.equal(archive.body, 'zip-bytes');
+  } finally {
+    await f.close();
+  }
+});
+
+test('OSS episode upload validates remote metadata, binds once and never creates a local video', async t => {
+  const f = await setup();
+  try {
+    const episode = f.s.repos.content.createEpisode(f.p.id, { title: 'OSS 成片' });
+    const route = `/api/v1/projects/${f.p.id}/episodes/${episode.id}/final-video`;
+    const post = (suffix, payload, user = f.users[0]) => f.app.inject({
+      method: 'POST', url: route + suffix, payload, headers: { cookie: user.cookie },
+    });
+    const video = fixture(3.5);
+    f.s.oss.enabled = true;
+    t.mock.method(f.s.oss, 'uploadForm', () => ({ url: 'https://test.aliyuncs.com/', fields: {} }));
+    t.mock.method(f.s.oss, 'statObject', async () => ({ bytes: video.length, etag: '"test"' }));
+    t.mock.method(f.s.oss, 'readRange', async (_key, offset, length) => video.subarray(offset, offset + length));
+    const copy = t.mock.method(f.s.oss, 'copyObject', async () => {});
+    t.mock.method(f.s.oss, 'deleteObject', async () => {});
+    t.mock.method(f.s.oss, 'signedUrl', (_key, _lifetime, options) => {
+      assert.match(options.disposition, /filename\*=UTF-8/);
+      return 'https://test.aliyuncs.com/final';
+    });
+    const ticket = (await post('/upload', { filename: '成片.mov', bytes: video.length })).json();
+    assert.equal(ticket.direct, true);
+    assert.equal((await post('/complete', { uploadId: ticket.uploadId }, f.users[1])).statusCode, 404);
+    const first = await post('/complete', { uploadId: ticket.uploadId });
+    assert.equal(first.statusCode, 201, first.body);
+    const saved = first.json().video;
+    assert.equal((await post('/complete', { uploadId: ticket.uploadId })).json().video.id, saved.id);
+    assert.equal(copy.mock.callCount(), 1);
+    const key = f.s.db.prepare('SELECT storage_key FROM media WHERE id=?').get(saved.id).storage_key;
+    assert.equal(fs.existsSync(f.s.media.locate(key)), false);
+    assert.equal((await f.app.inject({
+      url: saved.url + '?download=1', headers: { cookie: f.users[0].cookie },
+    })).statusCode, 307);
+  } finally {
+    await f.close();
+  }
+});
