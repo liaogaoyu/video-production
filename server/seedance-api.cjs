@@ -55,26 +55,33 @@ function createSeedanceApi(s,{fetchImpl=fetch,sleep=ms=>new Promise(r=>setTimeou
   const shot=db.prepare('SELECT * FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL').get(shotId,projectId),m=MODELS.find(m=>m.id===model);
   if(!shot||!m)throw new ApiError(400,'invalid_source','分镜或模型不存在');
   if(!Number.isInteger(shot.duration)||shot.duration<4||shot.duration>m.maxDuration||!m.resolutions.includes(resolution)||!['16:9','9:16','1:1','4:3','3:4','21:9'].includes(ratio))throw new ApiError(400,'invalid_parameters','该 API 模型不支持所选时长、画幅或分辨率');
-  const refs=uniqueAssetReferences(db.prepare('SELECT a.id assetId,a.name,v.media_id mediaId FROM shot_references r JOIN assets a ON a.id=r.asset_id AND a.deleted_at IS NULL LEFT JOIN asset_versions v ON v.id=a.locked_version_id WHERE r.shot_id=? ORDER BY r.position').all(shotId));
-  if(refs.length>m.referenceLimit)throw new ApiError(400,'too_many_references',`该模型最多支持 ${m.referenceLimit} 张参考图`);
-  if(refs.some(r=>!r.mediaId))throw new ApiError(400,'reference_not_ready','请先固定所有引用资产的图片');
+  const refs=uniqueAssetReferences(db.prepare('SELECT a.id assetId,a.name,a.type,v.media_id mediaId FROM shot_references r JOIN assets a ON a.id=r.asset_id AND a.deleted_at IS NULL LEFT JOIN asset_versions v ON v.id=a.locked_version_id WHERE r.shot_id=? ORDER BY r.position').all(shotId));
+  const voiceCount=refs.filter(r=>r.type==='音色').length;
+  const imageCount=refs.length-voiceCount;
+  const audioLimit=m.id==='seedance-2.5-draft'?10:3;
+  if(imageCount>m.referenceLimit||voiceCount>audioLimit)throw new ApiError(400,'too_many_references',`该模型最多支持 ${m.referenceLimit} 张参考图和 ${audioLimit} 段参考音频`);
+  if(voiceCount && !imageCount && m.id!=='seedance-2.5-draft')throw new ApiError(400,'image_reference_required','Seedance 2.0 使用参考音频时，请同时引用一张固定的角色图或场景图');
+  if(refs.some(r=>!r.mediaId))throw new ApiError(400,'reference_not_ready','请先固定所有引用资产的图片或音频版本');
   // Replace asset mentions once, longest names first, so generated tokens cannot be rebound.
-  const ordered=refs.map((r,i)=>({...r,index:i+1})).sort((a,b)=>b.name.length-a.name.length);
+  let imageIndex=0, audioIndex=0;
+  const bindings=new Map(refs.map(r=>[r.name,r.type==='音色'?`[@Audio ${++audioIndex}]`:`[@Image ${++imageIndex}]`]));
+  const ordered=[...refs].sort((a,b)=>b.name.length-a.name.length);
   const escaped=ordered.map(r=>r.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
-  const prompt=escaped.length?shot.prompt.replace(new RegExp('@('+escaped.join('|')+')(?=$|[\\s，。！？、；：,.!?:;])','g'),(_,name)=>`[@Image ${refs.findIndex(r=>r.name===name)+1}]`):shot.prompt;
+  const prompt=escaped.length?shot.prompt.replace(new RegExp('@('+escaped.join('|')+')(?=$|[\\s，。！？、；：,.!?:;])','g'),(_,name)=>bindings.get(name)):shot.prompt;
   return {shotId,title:shot.title,promptOriginal:shot.prompt,promptSubmitted:prompt,references:refs,model,resolution,ratio,duration:shot.duration};
  }
  async function upload(projectId,ref,secretId){
   const uploadCall=(path,options={})=>call(path,{...options,secretId});
-  const file=repos.content.readReferenceMedia(projectId,ref.mediaId);
+  const kind=ref.type==='音色'?'audio':'image';
+  const file=repos.content.readReferenceMedia(projectId,ref.mediaId,undefined,kind);
   const sha=crypto.createHash('sha256').update(file.bytes).digest('hex');
-  let data=await uploadCall('/api/v1/video-generations/uploads',{method:'POST',body:{sha256:sha,size_bytes:file.bytes.length,kind:'image',content_type:file.mime,idempotency_key:crypto.createHash('sha256').update('image:'+sha).digest('hex')}});
+  let data=await uploadCall('/api/v1/video-generations/uploads',{method:'POST',body:{sha256:sha,size_bytes:file.bytes.length,kind,content_type:file.mime,idempotency_key:crypto.createHash('sha256').update(kind+':'+sha).digest('hex')}});
   for(let attempt=0;data.disposition==='waiting'&&attempt<60;attempt++){await sleep(Math.max(1000,Math.min(10000,(data.retry_after_seconds||3)*1000)));data=await uploadCall('/api/v1/video-generations/uploads/wait',{method:'POST',body:{ticket:data.ticket}});}
   if(data.disposition==='reused'){const id=data.reference?.storage_object_id||data.storage_object_id;if(!id)throw Error('复用素材缺少编号');return id;}
   if(data.disposition!=='owner')throw Error('素材上传仍在等待，请稍后重试');
   const u=data.upload||data,session=data.session_token||u.session_token,generation=data.generation??u.generation;
   if(!session||generation==null)throw Error('上传会话返回不完整');
-  if(u.mode!=='single')throw Error('当前图片需分片上传，请压缩至单片大小后重试');
+  if(u.mode!=='single')throw Error('当前素材需分片上传，请压缩至单片大小后重试');
   const response=await uploadCall('/api/v1/video-generations/uploads/relay',{method:'PUT',body:file.bytes,headers:{'Content-Type':file.mime,'X-Upload-Session':session,'X-Upload-Generation':String(generation),'X-Upload-Part':'0'},raw:true});
   // Relay may return JSON metadata; completion is the authoritative verification.
   await response.arrayBuffer();
@@ -123,7 +130,10 @@ function createSeedanceApi(s,{fetchImpl=fetch,sleep=ms=>new Promise(r=>setTimeou
    const r=run(job);key(secretFor(job));const input=JSON.parse(job.inputSnapshot),request=JSON.parse(r.request_json);
    if(!input.references.length||request.content?.length===input.references.length)return;
    const content=[];
-   for(const ref of input.references)content.push({type:'image_url',role:'reference_image',storage_object_id:await upload(job.projectId,ref,secretFor(job))});
+   for(const ref of input.references) {
+    const kind=ref.type==='音色'?'audio':'image';
+    content.push({type:kind+'_url',role:'reference_'+kind,storage_object_id:await upload(job.projectId,ref,secretFor(job))});
+   }
    db.prepare('UPDATE seedance_api_runs SET request_json=? WHERE job_id=?').run(JSON.stringify(requestOf(input,content)),job.id);
   },
   async submit(job){const r=run(job);try{const data=await call('/api/v1/video-generations',{method:'POST',headers:{'X-Request-ID':r.request_id},body:JSON.parse(r.request_json),secretId:secretFor(job)});if(!data.id)return {outcome:'unknown',message:'API 已响应但缺少任务编号，请核对原请求'};return {outcome:'remote',remoteTaskId:String(data.id)};}catch(e){return e.uncertain||!e.statusCode?{outcome:'retry',message:'API 网络异常，将使用原请求号重试'}:{outcome:'failed',message:e.message};}},

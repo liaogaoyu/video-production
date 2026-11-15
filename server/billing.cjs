@@ -401,8 +401,12 @@ function createBilling(s) {
         )
         .get(id, projectId);
       if (!row) throw new ApiError(404, "source_missing", "资产或分镜不存在");
+      if (offer.kind === "image" && row.type === "音色") throw new ApiError(400, "invalid_field", "音色资产请上传 WAV 或 MP3");
       let units = 1000;
       if (offer.kind === "video") {
+        if (offer.provider !== "seedance_api" && db.prepare(
+          "SELECT 1 FROM shot_references r JOIN assets a ON a.id=r.asset_id WHERE r.shot_id=? AND a.type='音色' AND a.deleted_at IS NULL",
+        ).get(id)) throw new ApiError(400, "unsupported_audio_reference", "此渠道暂不支持音色资产，请选择 Seedance API 渠道");
         integer(row.duration, "时长", 4, offer.provider === "seedance_api" && offer.model === "seedance-2.5-draft" ? 30 : 15);
         const refs = db
           .prepare("SELECT COUNT(*) n FROM shot_references WHERE shot_id=?")

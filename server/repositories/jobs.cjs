@@ -70,6 +70,7 @@ function createJobRepository(db, { record }) {
     return accounts[0];
   }
   function freezeImage(asset, connection, ratio, appendDisplayRules = true) {
+    if (asset.type === "音色") throw new ApiError(400, "invalid_field", "音色资产请上传 WAV 或 MP3");
     const common = db.prepare(`SELECT r.position,r.media_id,m.sha256 FROM project_references r JOIN media m ON m.id=r.media_id WHERE r.project_id=? ORDER BY r.position,r.id`).all(asset.project_id);
     const own = db.prepare(`SELECT r.position,r.media_id,m.sha256 FROM asset_references r JOIN media m ON m.id=r.media_id WHERE r.asset_id=? ORDER BY r.position,r.id`).all(asset.id);
     const seen = new Set();
@@ -102,12 +103,13 @@ function createJobRepository(db, { record }) {
   }
   function freezeVideo(shot, request) {
     const refs = uniqueAssetReferences(db.prepare(`
-      SELECT sr.position, sr.asset_id, a.name, a.locked_version_id, v.media_id, v.id AS version_id
+      SELECT sr.position, sr.asset_id, a.name, a.type, a.locked_version_id, v.media_id, v.id AS version_id
       FROM shot_references sr
       JOIN assets a ON a.id=sr.asset_id AND a.deleted_at IS NULL
       LEFT JOIN asset_versions v ON v.id=a.locked_version_id
       WHERE sr.shot_id=? ORDER BY sr.position
     `).all(shot.id));
+    if (refs.some(item => item.type === "音色")) throw new ApiError(400, "unsupported_audio_reference", "此渠道暂不支持音色资产，请选择 Seedance API 渠道");
     const missing = refs.filter((item) => !item.media_id);
     if (missing.length) throw new ApiError(400, "reference_not_ready", `分镜“${shot.title}”的资产“${missing[0].name}”还没有固定图片`);
     const names = refs.map((item) => item.name);

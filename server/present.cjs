@@ -69,7 +69,8 @@ function presentProject(graph, urlFor = mediaUrl) {
   const assets = graph.assets.map((asset) => {
     const versions = (versionsByAsset.get(asset.id) || []).map((version) => ({
       id: version.id,
-      image: urlFor(version.media_id),
+      image: asset.type === "音色" ? "" : urlFor(version.media_id),
+      ...(asset.type === "音色" ? { audio: mediaUrl(version.media_id) } : {}),
       mediaId: version.media_id,
       prompt: version.prompt,
       source: version.source,
@@ -88,6 +89,7 @@ function presentProject(graph, urlFor = mediaUrl) {
       locked: Boolean(asset.locked_version_id),
       selectedVersionId: asset.selected_version_id || "",
       image: selected?.image || "",
+      ...(asset.type === "音色" ? { audio: selected?.audio || "" } : {}),
       versions,
       references: (refsByAsset.get(asset.id) || []).map((reference) => ({
         id: reference.id,

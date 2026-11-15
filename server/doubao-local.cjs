@@ -368,11 +368,12 @@ function authenticateDevice(services,request) {
 function freezeReferences(services,shot) {
   const {db}=services;
   const {uniqueAssetReferences,findMentions,freezePrompt}=require('./references.cjs');
-  const assets=uniqueAssetReferences(db.prepare(`SELECT r.asset_id,a.id AS resolved_id,a.name,a.deleted_at,
+  const assets=uniqueAssetReferences(db.prepare(`SELECT r.asset_id,a.id AS resolved_id,a.name,a.type,a.deleted_at,
     v.id AS version_id,v.media_id,m.sha256,m.mime FROM shot_references r
     LEFT JOIN assets a ON a.id=r.asset_id LEFT JOIN asset_versions v ON v.id=a.locked_version_id
     LEFT JOIN media m ON m.id=v.media_id AND m.project_id=a.project_id
     WHERE r.shot_id=? ORDER BY r.position,r.asset_id`).all(shot.id));
+  if(assets.some(a=>a.type==="音色"&&!a.deleted_at)) throw new ApiError(422,"unsupported_audio_reference","本地豆包暂不支持音色资产，请选择 Seedance API 渠道");
   const missing=assets.find(a=>!a.resolved_id||a.deleted_at||!a.media_id||!a.sha256||!a.mime?.startsWith('image/'));
   if(missing) throw new ApiError(422,'reference_not_ready',`资产“${missing.name||missing.asset_id}”缺少固定参考图`);
   findMentions(shot.prompt,assets.map(a=>({id:a.asset_id,name:a.name})));

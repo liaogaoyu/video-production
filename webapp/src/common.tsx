@@ -68,18 +68,20 @@ export function FileUpload({
   url,
   onDone,
   label = "上传图片",
+  accept = "image/png,image/jpeg,image/webp",
   disabled = false,
 }: {
   url: string;
   onDone: () => Promise<void>;
   label?: string;
+  accept?: string;
   disabled?: boolean;
 }) {
   const [busy, setBusy] = useState(false),
     { message } = App.useApp();
   return (
     <Upload
-      accept="image/png,image/jpeg,image/webp"
+      accept={accept}
       showUploadList={false}
       disabled={disabled || busy}
       beforeUpload={(file) => {

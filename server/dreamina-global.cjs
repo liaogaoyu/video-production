@@ -383,9 +383,10 @@ function createGlobalService(
       if (!source) throw new ApiError(404, "source_missing", "生成内容不存在");
       let refs = db
         .prepare(
-          "SELECT a.id AS asset_id,a.name,v.id AS version_id,v.media_id,m.sha256 FROM shot_references r JOIN assets a ON a.id=r.asset_id AND a.deleted_at IS NULL LEFT JOIN asset_versions v ON v.id=a.locked_version_id LEFT JOIN media m ON m.id=v.media_id WHERE r.shot_id=? ORDER BY r.position",
+          "SELECT a.id AS asset_id,a.name,a.type,v.id AS version_id,v.media_id,m.sha256 FROM shot_references r JOIN assets a ON a.id=r.asset_id AND a.deleted_at IS NULL LEFT JOIN asset_versions v ON v.id=a.locked_version_id LEFT JOIN media m ON m.id=v.media_id WHERE r.shot_id=? ORDER BY r.position",
         )
         .all(id);
+      if (refs.some((r) => r.type === "音色")) throw new ApiError(400, "unsupported_audio_reference", "此渠道暂不支持音色资产，请选择 Seedance API 渠道");
       if (refs.some((r) => !r.media_id))
         throw new ApiError(
           400,

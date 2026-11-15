@@ -36,6 +36,13 @@ import { Importer } from "./importer";
 import { Generation } from "./generation";
 import { ProjectReferences } from "./project-references";
 import type { Asset } from "./types";
+const audioAccept = ".wav,.mp3,audio/wav,audio/mpeg";
+
+function VoicePreview({ url }: { url?: string }) {
+  return url ? <audio aria-label="试听音色" controls preload="none" src={url} style={{ width: "100%" }} />
+    : <Blank text="待上传音频" />;
+}
+
 export function AssetsPage() {
   const { project, refreshProject } = useWorkspace(),
     assets = project!.data.assets,
@@ -50,19 +57,21 @@ export function AssetsPage() {
     [generating, setGenerating] = useState<string[] | null>(null),
     [form] = Form.useForm(),
     [pendingReferences, setPendingReferences] = useState<{uid: string; file: File}[]>([]),
-    [creationMode, setCreationMode] = useState<"generate" | "upload">("generate"),
-    [localImage, setLocalImage] = useState<File | null>(null),
+    [creationMode, setCreationMode] = useState<"generate" | "upload" | "voice">("generate"),
+    [localFile, setLocalFile] = useState<File | null>(null),
     [saving, setSaving] = useState(false),
     { message, modal } = App.useApp();
   const asset = assets.find((a) => a.id === editor);
-  const edit = (a?: Asset, mode: "generate" | "upload" = "generate") => {
+  const isVoice = asset ? asset.type === "音色" : creationMode === "voice";
+  const selectedImages = selected.filter((id) => assets.some((a) => a.id === id && a.type !== "音色"));
+  const edit = (a?: Asset, mode: "generate" | "upload" | "voice" = "generate") => {
     setCreationMode(mode);
-    setLocalImage(null);
+    setLocalFile(null);
     setPendingReferences([]);
     setEditor(a?.id || null);
     setDrawerOpen(true);
     form.setFieldsValue(
-      a || { name: "", type: "角色", description: "", prompt: "" },
+      a || { name: "", type: mode === "voice" ? "音色" : "角色", description: "", prompt: "" },
     );
   };
   const filtered = assets.filter(
@@ -70,19 +79,19 @@ export function AssetsPage() {
       (type === "all" || a.type === type) &&
       (!query || a.name.includes(query) || a.description.includes(query)) &&
       (status === "all" ||
-        (status === "missing" && !a.image) ||
+        (status === "missing" && !(a.image || a.audio)) ||
         (status === "locked" && a.locked) ||
-        (status === "unfixed" && a.image && !a.locked)),
+        (status === "unfixed" && (a.image || a.audio) && !a.locked)),
   );
   const lock = async (a: Asset, value: boolean) => {
-    if (value && !a.selectedVersionId) throw Error("请先生成或上传图片");
+    if (value && !a.selectedVersionId) throw Error("请先上传或生成素材");
     await api(`assets/${a.id}/locked-version`, "PUT", {
       versionId: value ? a.selectedVersionId : null,
     });
   };
   const save = async (v: any) => {
-    if (!asset && creationMode === "upload" && !localImage) {
-      message.error("请先选择要上传的资产图片"); return;
+    if (!asset && creationMode !== "generate" && !localFile) {
+      message.error(isVoice ? "请先选择 WAV 或 MP3 音色文件" : "请先选择要上传的资产图片"); return;
     }
     setSaving(true);
     try {
@@ -92,13 +101,13 @@ export function AssetsPage() {
         { ...v, ...(!asset && creationMode === "upload" ? {prompt: "", description: ""} : {}), ...(asset ? { revision: asset.revision } : {}) },
       );
       const assetId = editor || saved.id;
-      if (localImage || pendingReferences.length) {
+      if (localFile || pendingReferences.length) {
         // Keep the created asset ID so an upload retry never creates a duplicate.
         setEditor(assetId);
         await refreshProject();
-        if (localImage) {
-          await upload(`assets/${assetId}/versions`, localImage);
-          setLocalImage(null);
+        if (localFile) {
+          await upload(`assets/${assetId}/versions`, localFile);
+          setLocalFile(null);
         }
         for (const reference of pendingReferences) {
           await upload(`assets/${assetId}/references`, reference.file);
@@ -135,13 +144,14 @@ export function AssetsPage() {
       <section className="asset-workbench" aria-label="资产列表操作">
         <div className="asset-toolbar-row">
           <Segmented aria-label="资产分类" value={type} onChange={(v) => setType(String(v))}
-            options={["all", "角色", "场景", "道具"].map((v) => ({value: v,
+            options={["all", "角色", "场景", "道具", "音色"].map((v) => ({value: v,
               label: `${v === "all" ? "全部" : v} ${v === "all" ? assets.length : assets.filter((a) => a.type === v).length}`,
             }))} />
           <Space wrap>
             <AssetImageExport />
             <Button icon={<ImportOutlined />} onClick={() => setImporting(true)}>导入资产</Button>
             <Button icon={<UploadOutlined />} onClick={() => edit(undefined, "upload")}>上传资产</Button>
+            <Button icon={<UploadOutlined />} onClick={() => edit(undefined, "voice")}>上传音色</Button>
             <Button icon={<PlusOutlined />} onClick={() => edit()}>新建资产</Button>
           </Space>
         </div>
@@ -165,8 +175,8 @@ export function AssetsPage() {
                 : ids.filter((id) => !filtered.some((a) => a.id === id)))}>
               全选当前结果
             </Checkbox>
-            <Button type="link" size="small" disabled={!filtered.some((a) => !a.image)}
-              onClick={() => setSelected(filtered.filter((a) => !a.image).map((a) => a.id))}>选择待生成</Button>
+            <Button type="link" size="small" disabled={!filtered.some((a) => a.type !== "音色" && !a.image)}
+              onClick={() => setSelected(filtered.filter((a) => a.type !== "音色" && !a.image).map((a) => a.id))}>选择待生成</Button>
             {selected.length > 0 && <>
               <span className="asset-selection-count">已选 {selected.length} 项</span>
               <Button type="text" size="small" onClick={() => setSelected([])}>取消选择</Button>
@@ -176,7 +186,7 @@ export function AssetsPage() {
             {selected.length > 0 && <>
               <Action icon={<LockOutlined />} run={async () => {
                 const targets = assets.filter((a) => selected.includes(a.id));
-                if (targets.some((a) => !a.selectedVersionId)) throw Error("所选资产中有未生成图片的资产，请先生成后再固定");
+                if (targets.some((a) => !a.selectedVersionId)) throw Error("所选资产中有未上传或生成素材的资产");
                 for (const a of targets) await lock(a, true);
                 await refreshProject();
               }}>批量固定</Action>
@@ -188,8 +198,8 @@ export function AssetsPage() {
                 },
               })}>删除</Button>
             </>}
-            <Button type="primary" icon={<PlayCircleOutlined />} disabled={!selected.length}
-              onClick={() => setGenerating([...selected])}>{selected.length ? `生成所选 ${selected.length} 项` : "选择资产后生成"}</Button>
+            <Button type="primary" icon={<PlayCircleOutlined />} disabled={!selectedImages.length}
+              onClick={() => setGenerating(selectedImages)}>{selectedImages.length ? `生成所选 ${selectedImages.length} 项` : "选择资产后生成"}</Button>
           </Space>
         </div>
       </section>
@@ -214,7 +224,7 @@ export function AssetsPage() {
                   tabIndex={0}
                   onKeyDown={(e) => e.key === "Enter" && edit(a)}
                 >
-                  <Thumb url={a.image} />
+                  {a.type === "音色" ? <Blank text="参考音色" /> : <Thumb url={a.image} />}
                 </div>
                 <Checkbox
                   aria-label={`选择资产 ${a.name}`}
@@ -233,7 +243,7 @@ export function AssetsPage() {
                   icon={a.locked ? <LockOutlined /> : undefined}
                   color={a.locked ? "blue" : undefined}
                 >
-                  {a.locked ? "已固定" : a.image ? "待固定" : "待生成"}
+                  {a.locked ? "已固定" : (a.image || a.audio) ? "待固定" : a.type === "音色" ? "待上传" : "待生成"}
                 </Tag>
               </div>
             }
@@ -243,14 +253,16 @@ export function AssetsPage() {
               <Tag>{a.type}</Tag>
             </div>
             <p className="asset-description">{a.description || a.prompt}</p>
+            {a.audio && <VoicePreview url={a.audio} />}
             <Space wrap size={6} className="asset-card-actions">
-              <Button size="small" icon={<PlayCircleOutlined />} onClick={() => setGenerating([a.id])}>生成</Button>
+              {a.type !== "音色" && <Button size="small" icon={<PlayCircleOutlined />} onClick={() => setGenerating([a.id])}>生成</Button>}
               <Button size="small" onClick={() => edit(a)}>
                 编辑
               </Button>
               <FileUpload url={`assets/${a.id}/versions`} onDone={refreshProject}
-                label="上传" disabled={a.locked} />
-              {a.image && (
+                label="上传" accept={a.type === "音色" ? audioAccept : undefined} disabled={a.locked} />
+              {a.audio && <Button size="small" href={a.audio + "?download=1"}>下载音频</Button>}
+              {(a.image || a.audio) && (
                 <Action
                   size="small"
                   run={async () => {
@@ -275,7 +287,7 @@ export function AssetsPage() {
         />
       )}
       <Drawer
-        title={asset?.name || "新建资产"}
+        title={asset?.name || (isVoice ? "上传音色" : "新建资产")}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         afterOpenChange={(open) => {
@@ -297,38 +309,41 @@ export function AssetsPage() {
         }
         destroyOnHidden
       >
-        {!asset && <div className="asset-creation-mode spaced">
+        {!asset && !isVoice && <div className="asset-creation-mode spaced">
           <Typography.Paragraph strong>选择创建方式</Typography.Paragraph>
           <Segmented block value={creationMode} aria-label="资产创建方式"
             disabled={saving} options={[{value: "generate", label: "AI 生成"}, {value: "upload", label: "上传图片"}]}
-            onChange={(value) => {setCreationMode(value as "generate" | "upload"); setLocalImage(null); setPendingReferences([]);}} />
+            onChange={(value) => {setCreationMode(value as "generate" | "upload"); setLocalFile(null); setPendingReferences([]);}} />
           <Typography.Paragraph type="secondary" style={{marginTop: 10, marginBottom: 0}}>
             {creationMode === "upload" ? "上传已有图片，保存后直接作为资产使用。" : "填写提示词，可添加参考图，再生成资产图片。"}
           </Typography.Paragraph>
         </div>}
-        {!asset && creationMode === "upload" && <div className="spaced">
-          <Upload.Dragger accept="image/png,image/jpeg,image/webp" maxCount={1}
-            disabled={saving} fileList={localImage ? [{uid: "local-image", name: localImage.name, status: "done"}] : []}
+        {!asset && creationMode !== "generate" && <div className="spaced">
+          <Upload.Dragger accept={isVoice ? audioAccept : "image/png,image/jpeg,image/webp"} maxCount={1}
+            disabled={saving} fileList={localFile ? [{uid: "local-image", name: localFile.name, status: "done"}] : []}
             beforeUpload={(file) => {
-              if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+              if (isVoice && (!/\.(wav|mp3)$/i.test(file.name) || file.size > 15_000_000)) {
+                message.error("请选择 15 MB 以内的 WAV 或 MP3"); return Upload.LIST_IGNORE;
+              }
+              if (!isVoice && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
                 message.error("请选择 PNG、JPG 或 WebP 图片"); return Upload.LIST_IGNORE;
               }
-              setLocalImage(file);
+              setLocalFile(file);
               if (!form.getFieldValue("name")) form.setFieldValue("name", file.name.replace(/\.[^.]+$/, "").slice(0,80));
               return false;
-            }} onRemove={() => {setLocalImage(null); return true;}}>
+            }} onRemove={() => {setLocalFile(null); return true;}}>
             <p><UploadOutlined style={{fontSize: 26, color: "#3366ff"}} /></p>
-            <p>点击或拖入资产图片</p>
-            <Typography.Text type="secondary">PNG / JPG / WebP，可直接作为资产使用，无需生成</Typography.Text>
+            <p>{isVoice ? "点击或拖入参考音频" : "点击或拖入资产图片"}</p>
+            <Typography.Text type="secondary">{isVoice ? "WAV / MP3，最大 15 MB。固定版本后，在分镜中用 @资产名引用，由 Seedance API 作为参考音频提交。" : "PNG / JPG / WebP，可直接作为资产使用，无需生成"}</Typography.Text>
           </Upload.Dragger>
         </div>}
         {asset && (
           <>
             <div className="asset-preview">
-              <Thumb url={asset.image} large />
+              {isVoice ? <VoicePreview url={asset.audio} /> : <Thumb url={asset.image} large />}
             </div>
             <div className="version-strip">
-              {asset.versions.map((v) => (
+              {asset.versions.map((v, index) => (
                 <Button
                   key={v.id}
                   className={
@@ -348,7 +363,7 @@ export function AssetsPage() {
                     }
                   }}
                 >
-                  <img src={v.image} alt="图片版本" />
+                  {isVoice ? `音频版本 ${index + 1}` : <img src={v.image} alt="图片版本" />}
                 </Button>
               ))}
             </div>
@@ -356,7 +371,8 @@ export function AssetsPage() {
               <FileUpload
                 url={`assets/${asset.id}/versions`}
                 onDone={refreshProject}
-                label="上传图片版本"
+                label={isVoice ? "上传音频版本" : "上传图片版本"}
+                accept={isVoice ? audioAccept : undefined}
                 disabled={asset.locked}
               />
               <Action
@@ -380,7 +396,7 @@ export function AssetsPage() {
           <Form.Item name="name" label="资产名称" rules={[{ required: true }]}>
             <Input maxLength={80} />
           </Form.Item>
-          <Form.Item name="type" label="类型" rules={[{ required: true }]}>
+          <Form.Item name="type" hidden={isVoice} label="类型" rules={[{ required: true }]}>
             <Select
               options={["角色", "场景", "道具"].map((v) => ({
                 value: v,
@@ -388,10 +404,12 @@ export function AssetsPage() {
               }))}
             />
           </Form.Item>
-          {(asset || creationMode === "generate") && <>
+          {(asset || isVoice || creationMode === "generate") && (
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={2} />
           </Form.Item>
+          )}
+          {!isVoice && (asset || creationMode === "generate") && <>
           {(!asset || pendingReferences.length > 0) && <Form.Item label="生图参考图"
             extra={`仅用于引导 AI 生图，不会直接成为资产图片。自动继承 ${project!.data.projectReferences?.length || 0} 张公共参考图。`}>
             <Upload accept="image/png,image/jpeg,image/webp" multiple listType="picture"
@@ -415,7 +433,7 @@ export function AssetsPage() {
           <Form.Item
             name="prompt"
             label="图片生成提示词"
-            rules={[{ required: !localImage && !asset?.image, message: "请填写生图提示词，或上传资产图片" }]}
+            rules={[{ required: !localFile && !asset?.image, message: "请填写生图提示词，或上传资产图片" }]}
           >
             <Input.TextArea placeholder="上传图片直接使用时可不填；需要 AI 生图时填写" rows={8} />
           </Form.Item>
@@ -424,7 +442,7 @@ export function AssetsPage() {
             保存资产
           </Button>
         </Form>
-        {asset && (
+        {asset && !isVoice && (
           <section className="drawer-section">
             <div className="section-heading">
               <h3>资产专属参考图</h3>

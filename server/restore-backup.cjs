@@ -59,7 +59,7 @@ async function restoreBackup(services, manifest, files) {
     assetMap.set(a.id, created.id);
     const versions = new Map();
     for (const v of a.versions || []) {
-      const f = packed(v.image);
+      const f = packed(v.audio || v.image);
       if (!f) continue;
       const saved = await repos.content.addVersion(created.id, {
         bytes: f.data,
@@ -77,7 +77,7 @@ async function restoreBackup(services, manifest, files) {
     }
     let selected = versions.get(a.selectedVersionId);
     if (!selected && !(a.versions || []).length) {
-      const f = packed(a.image);
+      const f = packed(a.audio || a.image);
       if (f) {
         selected = (
           await repos.content.addVersion(created.id, {
