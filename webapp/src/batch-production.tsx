@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, App, Button, Card, Checkbox, Input, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Checkbox, Collapse, Input, Space, Tag, Typography } from "antd";
 import { api, copy, id } from "./api";
 import { useWorkspace } from "./context";
 import { EpisodeFinalVideo } from "./episode-final-video";
 import { downloadExport } from "./project-export";
+import { Replication } from "./replication";
 
 const example = () => {
   const key = id();
@@ -131,6 +132,8 @@ export default function BatchProductionPage() {
 
   return <Space orientation="vertical" size={16} style={{ width: "100%" }}>
     <Typography.Title level={2}>视频号生产台</Typography.Title>
+    <Replication projectId={projectId} />
+    <Collapse items={[{ key: "legacy", label: "分镜导入、豆包队列与成片工具", children: <>
     <Card title="导入多集分镜">
       <Space orientation="vertical" style={{ width: "100%" }}>
         <Space wrap>
@@ -182,6 +185,7 @@ export default function BatchProductionPage() {
       </Card>)}
       {rows.length === 0 && <Typography.Text type="secondary">导入分镜后，分集会出现在这里。</Typography.Text>}
     </Card>
+    </> }]} />
   </Space>;
 }
 
