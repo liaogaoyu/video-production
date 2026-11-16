@@ -667,3 +667,25 @@ test('reference slots freeze locked images, deduplicate shared pictures and repl
   services.db.prepare('UPDATE shots SET prompt=? WHERE id=?').run('@未知人物 走来',shot.id);
   assert.throws(()=>queue.enqueue(shot.id,'unresolved'),/未匹配/);
 });
+
+test('batch submission rolls back a partially valid request and reuses queued tasks', async t => {
+  const { services, shot, queue } = setup(t);
+  const projectId = services.db.prepare("SELECT project_id FROM shots WHERE id=?").get(shot.id).project_id;
+  const second = services.repos.content.createShot({ projectId, episode: 2, number: 1,
+    title: '第二集', prompt: '第二集提示词', duration: 15 });
+  const app = await require('./server/api.cjs').createHttpApp(services);
+  try {
+    const submit = (shotIds, requestKey) => app.inject({ method: 'POST', url: '/api/v1/doubao-local/batches',
+      payload: { projectId, shotIds, requestKey } });
+    const invalid = await submit([shot.id, 'missing'], 'initial');
+    assert.equal(invalid.statusCode, 404, invalid.body);
+    assert.equal(queue.list().length, 0);
+    const valid = await submit([shot.id, second.id], 'initial');
+    assert.equal(valid.statusCode, 200, valid.body);
+    assert.equal(valid.json().taskIds.length, 2);
+    assert.deepEqual((await submit([shot.id, second.id], 'retry')).json(), valid.json());
+    assert.equal(queue.list().length, 2);
+  } finally {
+    await app.close();
+  }
+});

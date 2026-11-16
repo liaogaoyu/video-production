@@ -322,6 +322,34 @@ function registerDoubaoLocal(app, services) {
     reply.type(file.mime).header('Cache-Control','no-store');return file.bytes;
   });
   app.post(prefix + '/tasks', async request => queue.enqueue(request.body?.shotId, request.body?.requestKey));
+  app.post(prefix + '/batches', async request => {
+    if (request.doubaoDevice) throw new ApiError(403, 'admin_required', '仅管理员可提交批量生成');
+    const {projectId, shotIds, requestKey} = request.body || {};
+    if (typeof projectId !== "string" || !projectId || !Array.isArray(shotIds) || !shotIds.length || shotIds.length > 200 ||
+        shotIds.some(id => typeof id !== 'string' || !id) ||
+        typeof requestKey !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(requestKey)) {
+      throw new ApiError(400, 'invalid_batch', '请选择 1–200 个分镜并提供有效请求编号');
+    }
+    services.repos.content.mustProject(projectId);
+    const db = services.db;
+    const shot = db.prepare('SELECT id FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL');
+    const complete = db.prepare("SELECT 1 FROM jobs WHERE project_id=? AND source_id=? AND kind='video' AND status='succeeded' AND media_id IS NOT NULL LIMIT 1");
+    const active = db.prepare("SELECT id FROM doubao_local_tasks WHERE shot_id=? AND state NOT IN ('succeeded','cancelled','failed')");
+    return transaction(db, () => {
+      const tasks = [];
+      const skipped = [];
+      for (const [index, id] of [...new Set(shotIds)].entries()) {
+        if (!shot.get(id, projectId)) throw new ApiError(404, 'shot_not_found', '分镜已删除或不属于当前项目');
+        if (complete.get(projectId, id)) {
+          skipped.push(id);
+          continue;
+        }
+        const running = active.get(id);
+        tasks.push(running || queue.enqueue(id, `batch-${requestKey}-${index}`));
+      }
+      return { taskIds: tasks.map(task => task.id), skipped };
+    });
+  });
   app.post(prefix+'/tasks/:id/cancel',async request=>queue.cancel(request.params.id));
   app.post(prefix+'/tasks/:id/resume',async request=>{
     if(request.doubaoDevice) throw new ApiError(403,'admin_required','仅管理员可恢复任务');
