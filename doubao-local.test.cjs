@@ -694,3 +694,41 @@ test('batch submission rolls back a partially valid request and reuses queued ta
     await app.close();
   }
 });
+
+test('studio generation saves a dedicated episode and returns the exact queued shot media', async t => {
+  const { services, shot, queue } = setup(t);
+  const original = services.db.prepare('SELECT project_id,episode_id FROM shots WHERE id=?').get(shot.id);
+  const app = await require('./server/api.cjs').createHttpApp(services);
+  try {
+    const route = '/api/v1/doubao-local/studio-generations';
+    const episode = { key: 'studio-episode', title: '桌面复刻',
+      shots: [{ key: 'studio-shot', title: '庭院', duration: 10, prompt: '老人坐在庭院里说话' }] };
+    const post = (requestKey, content = episode) => app.inject({ method: 'POST', url: route,
+      payload: { projectId: original.project_id, requestKey, episode: content } });
+    const invalid = await post('invalid', { ...episode, shots: [...episode.shots,
+      { key: 'bad-shot', title: '失败', duration: 16, prompt: '超出时长' }] });
+    assert.equal(invalid.statusCode, 400, invalid.body);
+    assert.equal(queue.list().length, 0);
+    assert.equal(services.db.prepare('SELECT count(*) AS n FROM episodes WHERE external_key=?').get(episode.key).n, 0);
+    const created = await post('studio-test');
+    assert.equal(created.statusCode, 200, created.body);
+    const generation = created.json();
+    assert.notEqual(generation.episodeId, original.episode_id);
+    const [item] = generation.shots;
+    assert.notEqual(item.shotId, shot.id);
+    assert.equal(services.db.prepare('SELECT episode_id FROM shots WHERE id=?').get(item.shotId).episode_id, generation.episodeId);
+    assert.deepEqual((await post('studio-test')).json(), generation);
+    assert.equal((await post('studio-test', { ...episode, title: '冲突' })).statusCode, 409);
+    assert.equal(queue.list().length, 1);
+    assert.equal(queue.claim('mac', accounts).task.id, item.taskId);
+    runToVideo(queue, item.taskId);
+    const complete = await queue.upload(item.taskId, 'mac', fixture());
+    const latest = (await app.inject({ url: route + '/studio-test' })).json();
+    assert.equal(latest.shots[0].video, '/api/v1/media/' + complete.media_id);
+    const media = await app.inject({ url: latest.shots[0].video });
+    assert.equal(media.statusCode, 200, media.body);
+    assert.deepEqual(media.rawPayload, fixture());
+  } finally {
+    await app.close();
+  }
+});

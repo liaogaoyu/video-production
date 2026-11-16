@@ -353,6 +353,61 @@ function registerDoubaoLocal(app, services) {
       return { taskIds: tasks.map(task => task.id), skipped };
     });
   });
+  const studioRoute = prefix + '/studio-generations';
+  const studioDb = services.db;
+  studioDb.exec(`CREATE TABLE IF NOT EXISTS studio_video_generations (
+    request_key TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    episode_id TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    shots_json TEXT NOT NULL
+  )`);
+  const studioRead = studioDb.prepare('SELECT * FROM studio_video_generations WHERE request_key=?');
+  function studioResult(row) {
+    services.repos.content.mustProject(row.project_id);
+    const shots = JSON.parse(row.shots_json).map(({ key, shotId, taskId }) => {
+      const task = queue.get(taskId);
+      return { key, shotId, taskId, state: task?.state || 'missing', note: task?.note || '',
+        video: task?.state === 'succeeded' && task.media_id ? '/api/v1/media/' + task.media_id : null };
+    });
+    return { generationId: row.request_key, projectId: row.project_id, episodeId: row.episode_id, shots };
+  }
+  app.get(studioRoute + '/:key', async request => {
+    const row = studioRead.get(request.params.key);
+    if (!row) throw new ApiError(404, 'generation_missing', '没有找到生成任务');
+    return studioResult(row);
+  });
+  app.post(studioRoute, async request => {
+    const { projectId, requestKey, episode } = request.body || {};
+    services.repos.content.mustProject(projectId);
+    if (typeof requestKey !== 'string' || !/^[a-zA-Z0-9_-]{1,60}$/.test(requestKey) ||
+        !Array.isArray(episode?.shots) || !episode.shots.length || episode.shots.length > 20) {
+      throw new ApiError(400, 'invalid_generation', '请提供任务编号及 1–20 个镜头');
+    }
+    const inputHash = crypto.createHash('sha256').update(JSON.stringify(episode)).digest('hex');
+    return transaction(studioDb, () => {
+      const previous = studioRead.get(requestKey);
+      if (previous) {
+        if (previous.project_id !== projectId || previous.input_hash !== inputHash) {
+          throw new ApiError(409, 'generation_conflict', '任务编号已被另一版分镜使用');
+        }
+        return studioResult(previous);
+      }
+      const result = services.repos.content.importStoryboard(projectId, {
+        schemaVersion: 2, kind: 'storyboard', mode: 'commit', episodes: [episode],
+      });
+      const episodeId = result.episodes[0].id;
+      const byKey = studioDb.prepare('SELECT id FROM shots WHERE episode_id=? AND external_key=? AND deleted_at IS NULL');
+      const shots = episode.shots.map((shot, index) => {
+        const { id: shotId } = byKey.get(episodeId, shot.key);
+        const task = queue.enqueue(shotId, `studio-${requestKey}-${index}`, { postProductionSubtitles: true });
+        return { key: shot.key, shotId, taskId: task.id };
+      });
+      studioDb.prepare('INSERT INTO studio_video_generations VALUES (?,?,?,?,?)')
+        .run(requestKey, projectId, episodeId, inputHash, JSON.stringify(shots));
+      return studioResult(studioRead.get(requestKey));
+    });
+  });
   app.post(prefix+'/tasks/:id/cancel',async request=>queue.cancel(request.params.id));
   app.post(prefix+'/tasks/:id/resume',async request=>{
     if(request.doubaoDevice) throw new ApiError(403,'admin_required','仅管理员可恢复任务');
