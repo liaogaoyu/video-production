@@ -77,6 +77,7 @@ async function createHttpApp(services) {
   require('./commercial-api.cjs').registerCommercialApi(app,services);
   require('./shot-video-upload.cjs').registerShotVideoUpload(app,services);
   require('./episode-video.cjs').registerEpisodeVideo(app,services);
+  require('./batch-production.cjs').registerBatchProduction(app,services);
   require('./doubao-local.cjs').registerDoubaoLocal(app,services);
   services.subtitleErase.register(app);
   const web=services.web;
