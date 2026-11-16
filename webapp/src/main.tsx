@@ -69,7 +69,7 @@ const pages: Record<string, string> = {
   script: "剧本",
   assets: "资产库",
   shots: "分镜故事板",
-  batch: "批量视频制作",
+  batch: "视频号生产台",
   jobs: "生成队列",
   settings: "模型与账号",
   wallet: "余额与账号",
@@ -234,7 +234,7 @@ function Workspace({
             onClick={(e) => go(e.key, project?.id || projects[0]?.id || "")}
             items={[
               { key: "projects", icon: <FolderOutlined />, label: "我的项目" },
-              { key: "batch", icon: <VideoCameraOutlined />, label: "批量视频制作" },
+              { key: "batch", icon: <VideoCameraOutlined />, label: "视频号生产台" },
               { key: "script", icon: <ReadOutlined />, label: "剧本" },
               { key: "assets", icon: <AppstoreOutlined />, label: "资产库" },
               {

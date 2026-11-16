@@ -130,7 +130,7 @@ export default function BatchProductionPage() {
   }
 
   return <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-    <Typography.Title level={2}>批量视频制作</Typography.Title>
+    <Typography.Title level={2}>视频号生产台</Typography.Title>
     <Card title="导入多集分镜">
       <Space orientation="vertical" style={{ width: "100%" }}>
         <Space wrap>
