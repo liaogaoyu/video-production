@@ -90,7 +90,7 @@ function createDoubaoQueue(services) {
     if(queueQuota(queued)?.available===0)
       throw new ApiError(409,'daily_limit','本地豆包今日额度已用完，任务未入队');
   }
-  function enqueue(shotId, requestKey) {
+  function enqueue(shotId, requestKey, { postProductionSubtitles = false } = {}) {
     if(typeof shotId!=='string'||!shotId||shotId.length>100) throw new ApiError(400,'shot_required','请选择分镜');
     if (typeof requestKey !== 'string' || !requestKey || requestKey.length > 100)
       throw new ApiError(400, 'request_key_required', '请提供唯一请求编号');
@@ -110,9 +110,12 @@ function createDoubaoQueue(services) {
       if(!['16:9','9:16','1:1','3:4','4:3','21:9'].includes(ratio)) throw new ApiError(422,'unsupported_ratio','豆包不支持项目当前画幅');
       checkQueueQuota();
       const binding=freezeReferences(services,shot);
+      const prompt = postProductionSubtitles
+        ? binding.prompt + '\n\n【后期字幕】请保留对白原声和口型。生成画面时禁止叠加字幕、台词文字或标题，画面字幕由后期工具添加。'
+        : binding.prompt;
       const id = crypto.randomUUID(), now = new Date().toISOString();
       db.prepare(`INSERT INTO doubao_local_tasks(id,shot_id,project_id,prompt,request_key,created_at,updated_at,references_json,prompt_original,duration,ratio,model)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, shotId, shot.project_id, binding.prompt, requestKey, now, now,JSON.stringify(binding.references),shot.prompt,shot.duration,ratio,'Seedance 2.0 Fast');
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, shotId, shot.project_id, prompt, requestKey, now, now,JSON.stringify(binding.references),shot.prompt,shot.duration,ratio,'Seedance 2.0 Fast');
       return get(id);
     });
   }
@@ -345,7 +348,7 @@ function registerDoubaoLocal(app, services) {
           continue;
         }
         const running = active.get(id);
-        tasks.push(running || queue.enqueue(id, `batch-${requestKey}-${index}`));
+        tasks.push(running || queue.enqueue(id, `batch-${requestKey}-${index}`, { postProductionSubtitles: true }));
       }
       return { taskIds: tasks.map(task => task.id), skipped };
     });

@@ -683,6 +683,11 @@ test('batch submission rolls back a partially valid request and reuses queued ta
     const valid = await submit([shot.id, second.id], 'initial');
     assert.equal(valid.statusCode, 200, valid.body);
     assert.equal(valid.json().taskIds.length, 2);
+    for (const task of queue.list()) {
+      assert.match(task.prompt, /保留对白原声和口型/);
+      assert.match(task.prompt, /禁止叠加字幕/);
+      assert.doesNotMatch(task.prompt_original, /后期字幕/);
+    }
     assert.deepEqual((await submit([shot.id, second.id], 'retry')).json(), valid.json());
     assert.equal(queue.list().length, 2);
   } finally {

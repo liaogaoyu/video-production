@@ -149,6 +149,9 @@ export default function BatchProductionPage() {
     </Card>
     {error && <Alert type="error" title={error} />}
     <Card title="生成与成片">
+      <Alert type="info" title="字幕在剪映里添加"
+        description="批量豆包任务保留对白和口型，提示模型输出无字幕画面。导出剪映草稿后，用「识别字幕」生成可编辑字幕，校对后再上传成片。"
+        style={{ marginBottom: 16 }} />
       <Space wrap style={{ marginBottom: 16 }}>
         {admin && <Button type="primary" disabled={!ids.length || ids.length > 200 || !!busy} loading={busy === "queue"} onClick={() => void enqueue()}>
           将选中分集的 {ids.length} 镜加入豆包队列
