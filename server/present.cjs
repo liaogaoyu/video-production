@@ -66,7 +66,10 @@ function presentProject(graph, urlFor = mediaUrl) {
     list.push(reference);
     refsByAsset.set(reference.asset_id, list);
   }
-  const assets = graph.assets.map((asset) => {
+  const assetsByCreation = [...graph.assets].sort((left, right) =>
+    right.created_at.localeCompare(left.created_at),
+  );
+  const assets = assetsByCreation.map((asset) => {
     const versions = (versionsByAsset.get(asset.id) || []).map((version) => ({
       id: version.id,
       image: urlFor(version.media_id),
