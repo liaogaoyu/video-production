@@ -404,6 +404,49 @@ test('an unconfirmed submission reports the failure and checks the same node on 
   assert.equal(task.state,'failed');
   assert.equal(JSON.parse(fs.readFileSync(state,'utf8')).stage,'failed');
 });
+test('a blank accepted node stops occupying the queue after the observation period',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'doubao-blank-node-'));
+  const config=path.join(root,'config.json'), state=path.join(root,'state.json');
+  const oldArgs=process.argv;
+  t.after(()=>{process.argv=oldArgs;fs.rmSync(root,{recursive:true,force:true});});
+  process.argv=['node','main.cjs',config,'--submit','--watch'];
+  const task={id:'stalled',state:'running',account_label:'原账号'};
+  fs.writeFileSync(config,JSON.stringify({
+    deviceId:'mac',deviceToken:'test',serverUrl:'http://127.0.0.1',stateDirectory:'.',
+    accounts:[{label:task.account_label,quotaKey:'test'}],
+  }),{mode:0o600});
+  fs.writeFileSync(state,JSON.stringify({workerId:'mac',taskId:task.id,stage:'running',canvasNodeId:'original'}));
+  t.mock.method(driver,'snapshot',async()=>[
+    {role:'AXPopUpButton',help:'⇧⌘,',title:task.account_label},
+    {role:'AXGroup',help:'双击编辑标题',parent:null},
+    {role:'AXStaticText',value:'豆包任务-'+task.id,parent:1},
+  ]);
+  t.mock.method(driver,'ax',async request=>{
+    if(request.action==='canvas-rejected') return false;
+    if(request.action==='canvas-node') return 'original';
+    assert.deepEqual(request,{action:'canvas-status',id:'original'});
+    return 'unknown';
+  });
+  let now=0;
+  t.mock.method(Date,'now',()=>now);
+  t.mock.method(global,'setTimeout',(resolve,ms)=>{now+=ms;queueMicrotask(resolve);});
+  let released=false;
+  t.mock.method(global,'fetch',async (url,options)=>{
+    if(url.pathname.endsWith('/claim')) return Response.json({task});
+    if(url.pathname.endsWith('/progress')) return Response.json({ok:true});
+    assert.equal(url.pathname,'/api/v1/doubao-local/tasks/stalled/state');
+    const change=JSON.parse(options.body);
+    assert.equal(change.state,'failed');
+    assert.match(change.note,/提交结果待核对/);
+    assert.ok(now>=90000);
+    released=true;
+    return Response.json({...task,state:'failed'});
+  });
+  await require('./worker/doubao-local/main.cjs').main();
+  assert.equal(released,true);
+  assert.equal(JSON.parse(fs.readFileSync(state,'utf8')).stage,'failed');
+});
+
 test('a finished previous task cannot block the next task on the Mac',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'doubao-stale-state-'));
   const config=path.join(root,'config.json');

@@ -145,6 +145,15 @@ async function main() {
     if(state.canvasNodeId!==id) {state.canvasNodeId=id;save();}
     return nodes;
   }
+  async function releaseUnconfirmedTask(task, reason) {
+    const note=reason+'。本次已停止等待，后续任务可继续。请先核对豆包原画布，再决定是否重跑';
+    await update(task,'failed',note);
+    state.stage='failed';
+    state.error='';
+    delete state.interruption;
+    save();
+    console.error('豆包任务 '+task.id+'：'+note);
+  }
   async function recoverSubmission(task, confirmedStatus) {
     await report('submitting');
     if(!state.canvasNodeId || driver.accountOf(await driver.snapshot())!==task.account_label)
@@ -157,7 +166,10 @@ async function main() {
       return;
     }
     await update(task,'running','已核对豆包原任务，继续跟踪视频结果');
-    state.stage='running';save();
+    state.stage='running';
+    state.error='';
+    delete state.interruption;
+    save();
     await finish(task);
   }
   async function finish(task) {
@@ -183,18 +195,20 @@ async function main() {
           complete=true; break;
         }
         const status=await driver.ax({action:'canvas-status',id:state.canvasNodeId});
-        if(status==='unknown') {
+        if(status==='unknown' && !driver.busy(nodes)) {
           missingStatusSince ??= Date.now();
-          if(Date.now()-missingStatusSince>=90000)
-            throw Error('原视频节点连续 90 秒无生成、失败或下载状态，暂停并保留原提交');
+          if(Date.now()-missingStatusSince>=90000) {
+            await releaseUnconfirmedTask(task,'原视频节点连续 90 秒无生成、失败或下载状态，提交结果待核对');
+            return;
+          }
         } else {
           missingStatusSince=null;
         }
-        const marker=nodes.findIndex(n=>n.role==='AXStaticText'&&n.value==='正在生成视频');
+        const marker=status==='running' ? nodes.findIndex(n=>n.role==='AXStaticText'&&n.value==='正在生成视频') : -1;
         const value=marker>=2&&nodes[marker-1].value==='%'?nodes[marker-2].value:'';
         const percent=/^\d{1,3}$/.test(value)?Number(value):null;
         if(percent!==null&&percent<=100) await report('generating',percent,100);
-        else if(latestProgress?.phase!=='generating') await report('generating');
+        else if(latestProgress?.phase!=='generating' || latestProgress.completed!==null) await report('generating');
         await pause(10000);
       }
       if(!complete) throw Error('等待生成超过一小时，保留原任务和账号锁');
