@@ -246,6 +246,17 @@ function createDoubaoQueue(services) {
   function update(id, workerId, state, note = '') {
     return transaction(db, () => {
       const task = owned(id, workerId);
+      if(state==='account_missing') {
+        if(!['claimed','prepared'].includes(task.state) || !task.account_label)
+          throw new ApiError(409,'already_submitting','只可换号处理尚未提交的任务');
+        db.prepare('INSERT OR IGNORE INTO doubao_local_excluded_accounts(worker_id,account_label) VALUES(?,?)')
+          .run(workerId,task.account_label);
+        db.prepare(`UPDATE doubao_local_tasks SET state='queued',worker_id=NULL,account_label=NULL,
+          quota_key=NULL,quota_day=NULL,note=?,updated_at=? WHERE id=?`)
+          .run('原账号已从豆包列表移除，等待分配其他账号',new Date().toISOString(),id);
+        db.prepare('DELETE FROM doubao_local_worker_status WHERE worker_id=? AND task_id=?').run(workerId,id);
+        return get(id);
+      }
       if (state !== task.state && !transitions[task.state]?.includes(state))
         throw new ApiError(409, 'invalid_transition', '任务状态不允许此操作');
       if (state === 'submitting' && task.state !== 'submitting') {
@@ -332,7 +343,12 @@ function registerDoubaoLocal(app, services) {
     if (!request.doubaoDevice) throw new ApiError(403,'device_required','账号名单仅接受设备凭据上报');
     return queue.reportAccounts(request.doubaoDevice.id,request.body?.labels);
   });
-  app.post(prefix + '/tasks/:id/state', async request => queue.update(request.params.id, request.body?.workerId, request.body?.state, request.body?.note));
+  app.post(prefix + '/tasks/:id/state', async request => {
+    const {workerId,state,note}=request.body || {};
+    if(state==='account_missing' && (!request.doubaoDevice || request.doubaoDevice.id!==workerId))
+      throw new ApiError(403,'device_required','仅领取任务的执行器可上报账号缺失');
+    return queue.update(request.params.id,workerId,state,note);
+  });
   app.post(prefix + '/tasks/:id/progress', async request => queue.progress(request.params.id,request.body?.workerId,request.body));
   app.post(prefix + '/tasks/:id/video', async request => {
     const file = await request.file({limits:{fileSize:500*1024*1024, files:1}});

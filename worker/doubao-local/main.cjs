@@ -388,6 +388,17 @@ async function main() {
       const phase=failurePhase || 'claimed';
       const attempts=(state.interruption?.attempts||0)+1;
       const beforeSubmit=['claimed','prepared'].includes(latest?.state||currentTask.state) && state.stage!=='submitting';
+      if(error.code==='account_missing' && phase==='switching_account' && beforeSubmit) {
+        state.taskId=null;
+        state.stage='idle';
+        delete state.canvasNodeId;
+        delete state.interruption;
+        state.error='';
+        save();
+        await update(currentTask,'account_missing');
+        console.log('已停用缺失豆包账号，原任务重新排队：'+currentTask.account_label);
+        return;
+      }
       const safeToRecheck=beforeSubmit || (state.stage==='submitting' && !!state.canvasNodeId);
       const automatic=process.argv.includes('--watch') && attempts<=WATCH_RETRIES &&
         Boolean(transient(error) || (safeToRecheck && error.uiTimeout));

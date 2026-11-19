@@ -99,8 +99,23 @@ async function switchAccount(target) {
   let account = nodes.find(n => n.role === 'AXMenuItem' && label(n) === 'avatar ' + target);
   if (!account) {
     await click('AXMenuItem', '更多账号');
-    nodes = await waitFor(tree => tree.some(n => n.role === 'AXMenuItem' && label(n) === 'avatar ' + target));
-    account = nodes.find(n => n.role === 'AXMenuItem' && label(n) === 'avatar ' + target);
+    const targetRow=tree=>tree.find(n=>n.role==='AXMenuItem'&&label(n)==='avatar '+target);
+    try {
+      nodes=await waitFor(targetRow,15000,'账号列表未显示目标账号');
+      account=targetRow(nodes);
+    } catch(error) {
+      if(!error.uiTimeout) throw error;
+      const list=await snapshot();
+      const names=list.filter(n=>n.role==='AXMenuItem'&&label(n).startsWith('avatar '))
+        .map(n=>label(n).slice(7).trim());
+      const displayName=name=>name.split(/\s+/)[0];
+      if(accountOf(list)===current && !busy(list) && names.includes(current) &&
+         list.some(n=>n.role==='AXMenuItem'&&label(n)==='添加账号') &&
+         !names.some(name=>displayName(name)===displayName(target))) {
+        throw Object.assign(Error('豆包完整账号列表中已没有该账号'),{code:'account_missing'});
+      }
+      throw error;
+    }
   }
   await click(account.role, label(account));
   await waitFor(tree => accountOf(tree) === target);

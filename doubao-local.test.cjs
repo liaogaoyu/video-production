@@ -37,6 +37,23 @@ test('desktop lock survives restart, blocks other accounts and workers, and forb
   queue.update(a.id,'mac','blocked','网络状态不确定');
   assert.equal(restarted.claim('mac',accounts).task.state,'blocked');
 });
+test('a missing account is excluded and the original task is claimed by another account',t=>{
+  const {queue,shot}=setup(t);
+  const original=queue.enqueue(shot.id,'first');
+  queue.enqueue(shot.id,'second');
+  assert.equal(queue.claim('mac',accounts).task.account_label,'甲账号');
+  assert.throws(()=>queue.update(original.id,'other','account_missing'),/执行器/);
+  const requeued=queue.update(original.id,'mac','account_missing');
+  assert.equal(requeued.state,'queued');
+  assert.equal(requeued.quota_key,null);
+  const next=queue.claim('mac',accounts).task;
+  assert.equal(next.id,original.id);
+  assert.equal(next.account_label,'乙账号');
+  queue.update(next.id,'mac','prepared');
+  queue.update(next.id,'mac','submitting');
+  assert.throws(()=>queue.update(next.id,'mac','account_missing'),{code:'already_submitting'});
+  assert.equal(queue.get(next.id).state,'submitting');
+});
 test('upload is idempotent, appears as a shot video and releases lock only after stored result',async t=>{
   const {queue,services,shot}=setup(t);
   const task=queue.enqueue(shot.id,'video');queue.enqueue(shot.id,'next');
