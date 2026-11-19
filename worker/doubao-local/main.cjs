@@ -145,11 +145,11 @@ async function main() {
     if(state.canvasNodeId!==id) {state.canvasNodeId=id;save();}
     return nodes;
   }
-  async function recoverSubmission(task) {
+  async function recoverSubmission(task, confirmedStatus) {
     await report('submitting');
     if(!state.canvasNodeId || driver.accountOf(await driver.snapshot())!==task.account_label)
       throw Error('无法核对上次提交，请打开原账号和原任务画布');
-    const result=await driver.ax({action:'canvas-status',id:state.canvasNodeId});
+    const result=confirmedStatus ?? await driver.ax({action:'canvas-status',id:state.canvasNodeId});
     if(result==='unknown') throw Object.assign(Error('豆包原节点暂未显示已受理或失败，提交结果仍待确认'),{retryable:true});
     if(result==='failed' || result==='rejected') {
       await update(task,'failed',result==='rejected'?'豆包审核不通过，生成已停止':'豆包原任务明确显示视频生成失败');
@@ -164,6 +164,7 @@ async function main() {
     if (state.stage === 'running') {
       const deadline=Date.now()+60*60*1000;
       let complete=false;
+      let missingStatusSince=null;
       while(Date.now()<deadline) {
         if(state.canvasNodeId && await driver.ax({action:'canvas-rejected',id:state.canvasNodeId})) {
           const observed=await driver.snapshot();
@@ -180,6 +181,14 @@ async function main() {
         }
         if(!driver.busy(nodes) && driver.hasVideoDownload(nodes)) {
           complete=true; break;
+        }
+        const status=await driver.ax({action:'canvas-status',id:state.canvasNodeId});
+        if(status==='unknown') {
+          missingStatusSince ??= Date.now();
+          if(Date.now()-missingStatusSince>=90000)
+            throw Error('原视频节点连续 90 秒无生成、失败或下载状态，暂停并保留原提交');
+        } else {
+          missingStatusSince=null;
         }
         const marker=nodes.findIndex(n=>n.role==='AXStaticText'&&n.value==='正在生成视频');
         const value=marker>=2&&nodes[marker-1].value==='%'?nodes[marker-2].value:'';
@@ -281,8 +290,17 @@ async function main() {
     heartbeat.unref();
     if(task.state==='cancelling') {await finishCancellation(task);return;}
     driver.setGuard(checkCancellation);
-    if (state.taskId && state.taskId !== task.id && !['uploaded','failed','cancelled'].includes(state.stage))
-      throw Error('本地仍有未完成任务，保持锁定，请核对任务状态');
+    if (state.taskId && state.taskId !== task.id && !['uploaded','failed','cancelled'].includes(state.stage)) {
+      const previous=await api('tasks/'+state.taskId);
+      if(!['succeeded','failed','cancelled'].includes(previous.state))
+        throw Error('本地仍有未完成任务，保持锁定，请核对任务状态');
+      state.taskId=null;
+      state.stage='idle';
+      delete state.canvasNodeId;
+      delete state.interruption;
+      state.error='';
+      save();
+    }
     const resumeRevision=task.resume_revision||0;
     const hadInterruption=state.taskId===task.id && !!state.interruption;
     const resumed=state.resumeRevision!==resumeRevision || process.argv.includes('--resume');
@@ -355,10 +373,13 @@ async function main() {
     await report('submitting');
     await update(task,'submitting','正在提交，重启后禁止重复提交');
     await driver.ax({action:'submit',role:'AXTextArea',label:input.value,canvasNodeId,canvasNodeTitle:'豆包任务-'+task.id});
-    await driver.waitFor(tree=>driver.busy(tree),20000,'点击生成后 20 秒内未看到豆包受理状态');
-    state.stage='running'; save();
-    await update(task,'running','豆包正在生成，账号已锁定');
-    await finish(task);
+    let confirmedStatus;
+    await driver.waitFor(async tree=>{
+      if(driver.accountOf(tree)!==task.account_label) return false;
+      confirmedStatus=await driver.ax({action:'canvas-status',id:canvasNodeId});
+      return ['running','ready','rejected','failed'].includes(confirmedStatus);
+    },20000,'点击生成后 20 秒内原视频节点未确认受理');
+    await recoverSubmission(task,confirmedStatus);
   } catch (error) {
     state.error=error.message;
     if(currentTask) {

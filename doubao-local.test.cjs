@@ -387,6 +387,37 @@ test('an unconfirmed submission reports the failure and checks the same node on 
   assert.equal(task.state,'failed');
   assert.equal(JSON.parse(fs.readFileSync(state,'utf8')).stage,'failed');
 });
+test('a finished previous task cannot block the next task on the Mac',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'doubao-stale-state-'));
+  const config=path.join(root,'config.json');
+  const state=path.join(root,'state.json');
+  const oldArgs=process.argv;
+  t.after(()=>{process.argv=oldArgs;fs.rmSync(root,{recursive:true,force:true});});
+  process.argv=['node','main.cjs',config,'--submit','--watch'];
+  const task={id:'next',state:'claimed',account_label:'备用账号'};
+  fs.writeFileSync(config,JSON.stringify({
+    deviceId:'mac',deviceToken:'test',serverUrl:'http://127.0.0.1',stateDirectory:'.',
+    accounts:[{label:task.account_label,quotaKey:'test'}],
+  }),{mode:0o600});
+  fs.writeFileSync(state,JSON.stringify({workerId:'mac',taskId:'old',stage:'running',canvasNodeId:'old-node'}));
+  let prepares=0;
+  t.mock.method(driver,'prepare',async()=>{
+    prepares++;
+    assert.equal(JSON.parse(fs.readFileSync(state,'utf8')).canvasNodeId,undefined);
+    throw Error('test stopped before submitting');
+  });
+  t.mock.method(global,'fetch',async (url)=>{
+    if(url.pathname.endsWith('/claim')) return Response.json({task});
+    if(url.pathname.endsWith('/tasks/old')) return Response.json({state:'succeeded'});
+    if(url.pathname.endsWith('/progress')) return Response.json({ok:true});
+    assert.equal(url.pathname,'/api/v1/doubao-local/tasks/next');
+    return Response.json(task);
+  });
+  await require('./worker/doubao-local/main.cjs').main();
+  assert.equal(prepares,1);
+  assert.equal(JSON.parse(fs.readFileSync(state,'utf8')).taskId,task.id);
+});
+
 test('background reopens the configured canvas after switching even if a canvas with the same title is still visible',async t=>{
   const previous={role:'AXPopUpButton',title:'原账号',help:'⇧⌘,'};
   const account={role:'AXPopUpButton',title:'备用账号',help:'⇧⌘,'};

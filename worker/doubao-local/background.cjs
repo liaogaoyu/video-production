@@ -55,6 +55,7 @@ class BackgroundAdapter {
       if(node.backendNodeId && ['AXButton','AXGroup','AXMenuItem'].includes(node.role) &&
          /^(创建|打开)画布(?:\s|$)/.test(label(node))) {
         node.identifier=await this.connection.callNode(node.backendNodeId,function(){
+          if (!(this instanceof Element)) return '';
           const legacy=this.getAttribute('data-testid')==='chat_input_suggestion_create-canvas';
           const current=this.closest('[data-testid="skill-panel-v2"]') &&
             this.getAttribute('data-suggestion-key')==='["client-custom","create-canvas"]';
@@ -172,7 +173,7 @@ class BackgroundAdapter {
       }
       await new Promise(resolve=>setTimeout(resolve,100));
     }
-    if(!target) throw Error('后台控件仍在刷新，已停止操作');
+    if(!target) throw Object.assign(Error('后台控件仍在刷新，已停止操作'),{uiTimeout:true});
     if(request.action==='search-canvas') {
       const draft=await this.connection.callNode(target.backendNodeId,function(){
         const text=this.innerText.trim();

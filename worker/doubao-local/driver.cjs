@@ -46,7 +46,7 @@ async function waitFor(check, timeout = 15000, message = '豆包界面未进入�
   do {
     if(guard) await guard();
     const nodes = await snapshot();
-    if (check(nodes)) return nodes;
+    if (await check(nodes)) return nodes;
     await pause(400);
   } while (Date.now() < until);
   throw Object.assign(Error(message),{uiTimeout:true});
@@ -89,10 +89,9 @@ async function collectAccounts() {
   }
 }
 async function switchAccount(target) {
-  let nodes = await snapshot();
+  let nodes = await waitFor(tree => accountOf(tree), 8000, '无法识别当前账号，请检查豆包是否已登录');
   if (busy(nodes)) throw Error('检测到正在生成的任务，禁止切换账号');
   const current = accountOf(nodes);
-  if (!current) throw Error('无法识别当前账号');
   if (current === target) return false;
   if (!nodes.some(n => n.role === 'AXMenuItem' && label(n) === '更多账号'))
     await click('AXPopUpButton', current);
