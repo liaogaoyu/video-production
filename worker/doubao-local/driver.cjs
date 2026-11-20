@@ -88,20 +88,31 @@ async function collectAccounts() {
     }
   }
 }
+async function waitForAccount(check, timeout, message) {
+  let dismissed=false;
+  return waitFor(async nodes=>{
+    if(background && nodes.some(node=>node.role==='AXDialog')) {
+      if(busy(nodes)) return false;
+      if(!dismissed) dismissed=await ax({action:'dismiss-switch-dialog'});
+      return false;
+    }
+    return check(nodes);
+  },timeout,message);
+}
 async function switchAccount(target) {
-  let nodes = await waitFor(tree => accountOf(tree), 8000, '无法识别当前账号，请检查豆包是否已登录');
+  let nodes = await waitForAccount(tree => accountOf(tree), 8000, '账号或弹窗尚未就绪，请检查豆包客户端');
   if (busy(nodes)) throw Error('检测到正在生成的任务，禁止切换账号');
   const current = accountOf(nodes);
   if (current === target) return false;
   if (!nodes.some(n => n.role === 'AXMenuItem' && label(n) === '更多账号'))
     await click('AXPopUpButton', current);
-  nodes = await waitFor(tree => tree.some(n => n.role === 'AXMenuItem' && label(n) === '更多账号'));
+  nodes = await waitForAccount(tree => tree.some(n => n.role === 'AXMenuItem' && label(n) === '更多账号'),15000,'豆包账号菜单尚未就绪');
   let account = nodes.find(n => n.role === 'AXMenuItem' && label(n) === 'avatar ' + target);
   if (!account) {
     await click('AXMenuItem', '更多账号');
     const targetRow=tree=>tree.find(n=>n.role==='AXMenuItem'&&label(n)==='avatar '+target);
     try {
-      nodes=await waitFor(targetRow,15000,'账号列表未显示目标账号');
+      nodes=await waitForAccount(targetRow,15000,'账号列表未显示目标账号');
       account=targetRow(nodes);
     } catch(error) {
       if(!error.uiTimeout) throw error;
@@ -110,6 +121,7 @@ async function switchAccount(target) {
         .map(n=>label(n).slice(7).trim());
       const displayName=name=>name.split(/\s+/)[0];
       if(accountOf(list)===current && !busy(list) && names.includes(current) &&
+         !list.some(n=>n.role==='AXDialog') &&
          list.some(n=>n.role==='AXMenuItem'&&label(n)==='添加账号') &&
          !names.some(name=>displayName(name)===displayName(target))) {
         throw Object.assign(Error('豆包完整账号列表中已没有该账号'),{code:'account_missing'});
@@ -118,14 +130,14 @@ async function switchAccount(target) {
     }
   }
   await click(account.role, label(account));
-  await waitFor(tree => accountOf(tree) === target);
+  await waitForAccount(tree => accountOf(tree) === target, 15000, '切换后目标账号或弹窗尚未就绪');
   return true;
 }
 async function prepare(task, config, report=async()=>{}) {
   await report('switching_account');
   const switched=await switchAccount(task.account_label);
   await report('opening_canvas');
-  let nodes = await snapshot();
+  let nodes = await waitForAccount(tree=>accountOf(tree)===task.account_label,8000,'打开画布前账号或弹窗尚未就绪');
   if (busy(nodes)) throw Error('当前画布已有生成任务，保持账号锁');
   const canvasOpen=tree=>tree.some(n=>n.role==='AXCheckBox'&&label(n)==='视频生成');
   const defaultChat='新画布 归档对话 更多';

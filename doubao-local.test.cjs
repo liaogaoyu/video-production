@@ -478,6 +478,58 @@ test('a finished previous task cannot block the next task on the Mac',async t=>{
   assert.equal(JSON.parse(fs.readFileSync(state,'utf8')).taskId,task.id);
 });
 
+test('account switch closes a blocking dialog before continuing with the chosen account',async t=>{
+  const current={role:'AXPopUpButton',title:'原账号',help:'⇧⌘,'};
+  const target={role:'AXPopUpButton',title:'备用账号',help:'⇧⌘,'};
+  const dialog={role:'AXDialog'};
+  let screen=[current,dialog],dismissals=0;
+  t.mock.method(BackgroundAdapter.prototype,'perform',async request=>{
+    if(request.action==='snapshot') return screen;
+    if(request.action==='dismiss-switch-dialog') {
+      dismissals++;
+      screen=screen.filter(node=>node!==dialog);
+      return true;
+    }
+    if(request.label===current.title) {
+      screen=[current,{role:'AXMenuItem',title:'更多账号'},{role:'AXMenuItem',title:'avatar '+target.title}];
+    } else if(request.label==='avatar '+target.title) {
+      screen=[target,dialog];
+    } else {
+      assert.fail('unexpected action '+request.action);
+    }
+  });
+  driver.useBackground();
+  try {
+    assert.equal(await driver.switchAccount(target.title),true);
+    assert.equal(dismissals,2);
+  } finally {driver.closeBackground();}
+});
+
+test('dialog dismissal clicks only a unique close control and leaves login prompts open',async()=>{
+  const button=name=>({
+    getClientRects:()=>[{}],closest:()=>null,
+    getAttribute:key=>key==='aria-label'?name:null,
+    click:()=>clicks++,
+  });
+  let title='使用提示', clicks=0, buttons=[button('关闭'),button('确定')];
+  const dialog={
+    getClientRects:()=>[{}],closest:()=>null,getAttribute:()=>null,
+    querySelector:selector=>selector.includes('dialog-title')?{textContent:title}:null,
+    querySelectorAll:()=>buttons,
+  };
+  const adapter=new BackgroundAdapter();
+  adapter.connection={evaluate:async expression=>vm.runInNewContext(expression,{
+    document:{querySelectorAll:()=>[dialog]},getComputedStyle:()=>({visibility:'visible'}),
+  })};
+  assert.equal(await adapter.perform({action:'dismiss-switch-dialog'}),true);
+  title='请登录';
+  assert.equal(await adapter.perform({action:'dismiss-switch-dialog'}),false);
+  title='使用提示';
+  buttons=[button('确定')];
+  assert.equal(await adapter.perform({action:'dismiss-switch-dialog'}),false);
+  assert.equal(clicks,1);
+});
+
 test('background reopens the configured canvas after switching even if a canvas with the same title is still visible',async t=>{
   const previous={role:'AXPopUpButton',title:'原账号',help:'⇧⌘,'};
   const account={role:'AXPopUpButton',title:'备用账号',help:'⇧⌘,'};

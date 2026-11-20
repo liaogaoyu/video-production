@@ -14,7 +14,7 @@ function mapRole(node) {
   if(role==='button') return props.hasPopup&&props.hasPopup!=='false'?'AXPopUpButton':props.pressed!==undefined?'AXCheckBox':'AXButton';
   return {StaticText:'AXStaticText',image:'AXImage',menu:'AXMenu',menuitem:'AXMenuItem',
     menuitemradio:'AXMenuItem',menuitemcheckbox:'AXMenuItem',toolbar:'AXToolbar',link:'AXLink',
-    slider:'AXSlider',progressbar:'AXProgressIndicator',checkbox:'AXCheckBox',textbox:'AXTextField',tab:'AXTab'}[role]||'AXGroup';
+    dialog:'AXDialog',alertdialog:'AXDialog',slider:'AXSlider',progressbar:'AXProgressIndicator',checkbox:'AXCheckBox',textbox:'AXTextField',tab:'AXTab'}[role]||'AXGroup';
 }
 
 class BackgroundAdapter {
@@ -112,6 +112,28 @@ class BackgroundAdapter {
       await this.connection.send('Input.dispatchKeyEvent',{type:'keyDown',...key});
       await this.connection.send('Input.dispatchKeyEvent',{type:'keyUp',...key});
       return {ok:true};
+    }
+    if(request.action==='dismiss-switch-dialog') {
+      return this.connection.evaluate(`(() => {
+        const visible=element=>element.getClientRects().length &&
+          !element.closest('[aria-hidden="true"],[hidden],[inert]') &&
+          getComputedStyle(element).visibility==='visible';
+        const dialogs=[...document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog[open]')].filter(visible);
+        if(dialogs.length!==1) return false;
+        const dialog=dialogs[0];
+        const title=dialog.querySelector('[data-slot="dialog-title"],h1,h2,h3')?.textContent || '';
+        if(/登录|验证码|验证身份|授权|权限|支付|退出|删除|确认切换/.test(title+' '+dialog.getAttribute('aria-label'))) return false;
+        if(dialog.querySelector('input:not([type="hidden"]), [contenteditable="true"]')) return false;
+        const close=[...dialog.querySelectorAll('button,[role="button"]')].filter(button=>{
+          const name=(button.getAttribute('aria-label') || button.title || button.textContent || '').trim();
+          return visible(button) && !button.disabled && button.getAttribute('aria-disabled')!=='true' &&
+            (/^(关闭|关闭弹窗|关闭对话框|close|dismiss|×|✕)$/i.test(name) ||
+              (!name && button.getAttribute('data-slot')==='dialog-close'));
+        });
+        if(close.length!==1) return false;
+        close[0].click();
+        return true;
+      })()`);
     }
     if(request.action==='canvas-node') {
       return this.connection.evaluate(`(title => {
