@@ -26,8 +26,6 @@ function createDoubaoQueue(services) {
     duration INTEGER NOT NULL DEFAULT 10, ratio TEXT NOT NULL DEFAULT 'auto', model TEXT NOT NULL DEFAULT 'Seedance 2.0 Fast',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
-  CREATE UNIQUE INDEX IF NOT EXISTS doubao_one_desktop_task
-    ON doubao_local_tasks((1)) WHERE state NOT IN ('queued','succeeded','cancelled','failed');
   CREATE TABLE IF NOT EXISTS doubao_local_usage_seed (
     quota_key TEXT NOT NULL, quota_day TEXT NOT NULL, used INTEGER NOT NULL,
     PRIMARY KEY(quota_key,quota_day)
@@ -63,9 +61,14 @@ function createDoubaoQueue(services) {
     db.exec("ALTER TABLE doubao_local_tasks ADD COLUMN model TEXT NOT NULL DEFAULT 'Seedance 2.0 Mini'");
     db.prepare("UPDATE doubao_local_tasks SET model='Seedance 2.0 Fast' WHERE state IN ('queued','claimed','prepared','cancelling')").run();
   }
-  if(!db.prepare("SELECT sql FROM sqlite_master WHERE name='doubao_one_desktop_task'").get().sql.includes("'failed'")) {
-    transaction(db,()=>db.exec("DROP INDEX doubao_one_desktop_task; CREATE UNIQUE INDEX doubao_one_desktop_task ON doubao_local_tasks((1)) WHERE state NOT IN ('queued','succeeded','cancelled','failed');"));
-  }
+  const activeStates = "state NOT IN ('queued','succeeded','cancelled','failed')";
+  transaction(db,()=>db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS doubao_one_task_per_worker
+      ON doubao_local_tasks(worker_id) WHERE ${activeStates};
+    CREATE UNIQUE INDEX IF NOT EXISTS doubao_one_task_per_account
+      ON doubao_local_tasks(quota_key) WHERE ${activeStates};
+    DROP INDEX IF EXISTS doubao_one_desktop_task;
+  `));
   const day = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
   const get = id => db.prepare('SELECT * FROM doubao_local_tasks WHERE id=?').get(id);
   const seedUsed = (key, date) => db.prepare('SELECT used FROM doubao_local_usage_seed WHERE quota_key=? AND quota_day=?').get(key,date)?.used || 0;
@@ -140,14 +143,16 @@ function createDoubaoQueue(services) {
           ON CONFLICT(quota_key,quota_day) DO UPDATE SET used=MAX(used,excluded.used)`)
           .run(account.quotaKey,today,account.usedToday);
       }
-      const active = db.prepare("SELECT * FROM doubao_local_tasks WHERE state NOT IN ('queued','succeeded','cancelled','failed')").get();
+      const active = db.prepare(`SELECT * FROM doubao_local_tasks WHERE worker_id=? AND ${activeStates}`).get(workerId);
       const now=new Date().toISOString();
       db.prepare(`INSERT INTO doubao_local_worker_status(worker_id,seen_at) VALUES(?,?)
         ON CONFLICT(worker_id) DO UPDATE SET seen_at=excluded.seen_at`).run(workerId,now);
       // A lost heartbeat never releases a desktop/account lock.
-      if (active) return { task: active.worker_id === workerId ? active : null, reason: 'desktop_locked' };
-      const available = eligible.find(account => remaining(account.quotaKey,today)>0);
-      if (!available) return { task: null, reason: 'daily_limit' };
+      if (active) return { task: active, reason: 'desktop_locked' };
+      const lockedAccounts = new Set(db.prepare(`SELECT quota_key FROM doubao_local_tasks WHERE ${activeStates}`)
+        .all().map(task=>task.quota_key));
+      const available = eligible.find(account => !lockedAccounts.has(account.quotaKey) && remaining(account.quotaKey,today)>0);
+      if (!available) return { task: null, reason: eligible.some(account=>lockedAccounts.has(account.quotaKey)) ? 'desktop_locked' : 'daily_limit' };
       const task = db.prepare("SELECT * FROM doubao_local_tasks WHERE state='queued' ORDER BY created_at,rowid LIMIT 1").get();
       if (!task) return { task: null, reason: 'empty' };
       db.prepare(`UPDATE doubao_local_tasks SET state='claimed',worker_id=?,account_label=?,quota_key=?,quota_day=?,updated_at=? WHERE id=?`)

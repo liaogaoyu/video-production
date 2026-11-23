@@ -28,14 +28,34 @@ test('desktop lock survives restart, blocks other accounts and workers, and forb
   const a=queue.enqueue(shot.id,'a');queue.enqueue(shot.id,'b');
   assert.equal(queue.enqueue(shot.id,'a').id,a.id);
   assert.equal(queue.claim('mac',accounts).task.id,a.id);
-  assert.equal(queue.claim('another-mac',accounts).task,null);
+  assert.equal(queue.claim('another-mac',[accounts[0]]).task,null);
   runToVideo(queue,a.id);
   const restarted=createDoubaoQueue(services);
   assert.equal(restarted.claim('mac',accounts).task.id,a.id);
-  assert.equal(restarted.claim('other',accounts).reason,'desktop_locked');
+  assert.equal(restarted.claim('other',[accounts[0]]).reason,'desktop_locked');
   assert.throws(()=>queue.update(a.id,'mac','succeeded'),/状态/);
   queue.update(a.id,'mac','blocked','网络状态不确定');
   assert.equal(restarted.claim('mac',accounts).task.state,'blocked');
+});
+test('legacy active task survives migration and two Macs can claim distinct accounts',async t=>{
+  const {queue,services,shot}=setup(t);
+  const first=queue.enqueue(shot.id,'legacy');
+  const second=queue.enqueue(shot.id,'parallel');
+  assert.equal(queue.claim('mac',accounts).task.id,first.id);
+  runToVideo(queue,first.id);
+  services.db.exec("CREATE UNIQUE INDEX doubao_one_desktop_task ON doubao_local_tasks((1)) WHERE state NOT IN ('queued','succeeded','cancelled','failed')");
+  const before=queue.get(first.id);
+  const migrated=createDoubaoQueue(services);
+  assert.deepEqual(migrated.get(first.id),before);
+  const alias={label:'同一账号的另一个组织',quotaKey:accounts[0].quotaKey};
+  assert.equal(migrated.claim('second-mac',[alias]).reason,'desktop_locked');
+  assert.equal(migrated.claim('second-mac',[alias,accounts[1]]).task.id,second.id);
+  assert.equal(migrated.get(second.id).quota_key,accounts[1].quotaKey);
+  assert.deepEqual(migrated.overview().active.map(task=>task.id),[first.id,second.id]);
+  assert.equal(migrated.claim('mac',accounts).task.id,first.id);
+  await migrated.upload(first.id,'mac',fixture());
+  assert.equal(migrated.get(first.id).state,'succeeded');
+  assert.equal(migrated.get(second.id).state,'claimed');
 });
 test('a missing account is excluded and the original task is claimed by another account',t=>{
   const {queue,shot}=setup(t);
@@ -60,7 +80,7 @@ test('upload is idempotent, appears as a shot video and releases lock only after
   queue.claim('mac',accounts);runToVideo(queue,task.id);
   await assert.rejects(()=>queue.upload(task.id,'other',fixture()),/执行器/);
   await assert.rejects(()=>queue.upload(task.id,'mac',Buffer.from('bad')),/视频/);
-  assert.equal(queue.claim('other',accounts).task,null);
+  assert.equal(queue.claim('other',[accounts[0]]).task,null);
   const result=await queue.upload(task.id,'mac',fixture());
   assert.equal(result.state,'succeeded');
   assert.equal((await queue.upload(task.id,'mac',fixture())).media_id,result.media_id);
@@ -171,7 +191,7 @@ test('a paused task reports the cause and can be resumed without changing its st
   queue.progress(task.id,'mac',{phase:'needs_attention',interruption,resumeRevision:0});
   assert.equal(queue.overview().active[0].phase,'resume_requested');
   assert.equal(queue.get(task.id).resume_revision,1);
-  assert.equal(queue.claim('other',accounts).task,null);
+  assert.equal(queue.claim('other',[accounts[0]]).task,null);
   assert.equal(queue.claim('mac',accounts).task.state,'submitting');
   queue.progress(task.id,'mac',{phase:'submitting',resumeRevision:1});
   assert.equal(queue.overview().active[0].interruption,null);
@@ -214,7 +234,7 @@ test('pending tasks default to Fast and cancellation releases the desktop only a
   assert.equal(queue.cancel(task.id).state,'cancelling');
   assert.equal(queue.cancel(task.id).state,'cancelling');
   queue.enqueue(shot.id,'after-cancel');
-  assert.equal(queue.claim('other',accounts).task,null);
+  assert.equal(queue.claim('other',[accounts[0]]).task,null);
   assert.throws(()=>queue.update(task.id,'mac','submitting'),/状态/);
   assert.throws(()=>queue.update(task.id,'other','cancelled'),/执行器/);
   queue.update(task.id,'mac','cancelled');
