@@ -1,18 +1,29 @@
 import {useEffect, useRef, useState} from 'react';
-import {Alert, App, Button, List, Modal, Space, Tag, Typography} from 'antd';
+import {Alert, App, Button, Input, InputNumber, List, Modal, Space, Tag, Typography} from 'antd';
 import {api, id, time} from './api';
 import {useWorkspace} from './context';
 
 type LocalTask = {
-  id:string; shot_id:string; state:string; note:string; phase?:string;
+  id:string; shot_id:string; state:string; note:string; phase?:string; duration?:number;
   title?:string; episode?:number; number?:number; project_name?:string; account_label?:string;
   completed?:number|null; total?:number|null; updated_at?:string; seen_at?:string;
   interruption?:{phase:string; reason:string; recovery:string}|null;
+};
+type AccountUsage = {
+  quotaKey:string; accountLabel?:string|null; dbCount:number; dbSeconds:number;
+  seedCount:number; seedSeconds:number; usedCount:number; usedSeconds:number;
+  canAccept:boolean; remainingBeforeLimit:number; standardSlots:number;
+};
+type QuotaDetails = {
+  mode:string; preSubmitSecondsLimit:number; maxTasksPerDay:number;
+  usedSecondsTotal:number; queuedSecondsTotal:number; openAccounts:number;
+  maxRemainingSeconds:number; accounts:AccountUsage[];
 };
 type LocalQueue = {
   active:LocalTask[]; waiting:LocalTask[]; recent:LocalTask[];
   worker:{online:boolean; seen_at:string|null};
   quota?:{available:number; total:number}|null;
+  quota_details?:QuotaDetails|null;
   account_reports?:{id:string; label:string; labels:string[]; seen_at:string}[];
 };
 const labels:Record<string,string> = {
@@ -45,6 +56,7 @@ function QueueList({title,tasks,waiting=false,onResume,resuming}:{title:string;t
       renderItem={(task,index)=><List.Item>
         <List.Item.Meta title={<Space wrap>
           {waiting && <Tag>第 {index+1} 位</Tag>}
+          {typeof task.duration==='number' && <Tag>{task.duration}s</Tag>}
           <span>{task.episode&&task.number?`第 ${task.episode} 集 · 分镜 ${task.number}`:'分镜'}{task.title?` · ${task.title}`:''}</span>
         </Space>} description={<div>
           <div>{[task.project_name,task.account_label,time(task.seen_at||task.updated_at)].filter(Boolean).join(' · ')}</div>
@@ -74,6 +86,9 @@ export function DoubaoLocal({shotId, saved, onComplete}:{shotId:string; saved:bo
   const [queueError,setQueueError] = useState(false);
   const [busy,setBusy] = useState(false);
   const [resuming,setResuming] = useState('');
+  const [seedTarget,setSeedTarget] = useState('');
+  const [seedSeconds,setSeedSeconds] = useState<number>(27);
+  const [seeding,setSeeding] = useState(false);
   const requestKey = useRef(id());
   const completed = useRef('');
   const admin = !user || user.role === 'admin';
@@ -101,6 +116,7 @@ export function DoubaoLocal({shotId, saved, onComplete}:{shotId:string; saved:bo
   if(!admin) return null;
   const active=task && !terminal.includes(task.state);
   const quota=queue?.quota;
+  const quotaDetails=queue?.quota_details;
   const resume=async (paused:LocalTask)=>{
     setResuming(paused.id);
     try {
@@ -110,6 +126,22 @@ export function DoubaoLocal({shotId, saved, onComplete}:{shotId:string; saved:bo
       message.success('已通知绑定的 Mac 继续原任务');
     } catch(error) {message.error((error as Error).message);}
     finally {setResuming('');}
+  };
+  const submitSeed=async ()=>{
+    const target=seedTarget.trim();
+    if(!target) {message.warning('请填写或点选需要补录的账号名称或 quotaKey');return;}
+    setSeeding(true);
+    try {
+      const matchedKey=quotaDetails?.accounts.find(a=>a.quotaKey===target||a.accountLabel===target)?.quotaKey;
+      const payload=matchedKey
+        ? {quotaKey:matchedKey,totalUsedSeconds:seedSeconds}
+        : {accountLabel:target,totalUsedSeconds:seedSeconds};
+      await api('doubao-local/usage-seed','POST',payload);
+      const fresh=await api<LocalQueue>('doubao-local/queue');
+      setQueue(fresh);
+      message.success(`已记录「${target}」今日累计已用 ${seedSeconds}s`);
+    } catch(error) {message.error((error as Error).message);}
+    finally {setSeeding(false);}
   };
   return <Space wrap>
     <Button size="small" disabled={!saved || !!active} loading={busy} onClick={async()=>{
@@ -122,7 +154,11 @@ export function DoubaoLocal({shotId, saved, onComplete}:{shotId:string; saved:bo
       finally {setBusy(false);}
     }}>本地豆包生成</Button>
     <Button size="small" onClick={()=>setQueueOpen(true)}>豆包队列{queue? `（${queue.active.length+queue.waiting.length}）`:''}</Button>
-    {quota && !queueError && <Tag color={quota.available?'blue':'default'}>豆包今日剩余 {quota.available} 次</Tag>}
+    {quota && !queueError && <Tag
+      color={quota.available?'blue':'default'}
+      title={quotaDetails?`可继续提交 ${quotaDetails.openAccounts} 个号 · 最高约 ${quotaDetails.maxRemainingSeconds}s`:undefined}>
+      豆包今日剩余 {quota.available} 次
+    </Tag>}
     {task && ['queued','claimed','prepared'].includes(task.state) && <Button size="small" danger loading={busy} onClick={async()=>{
       setBusy(true);
       try {
@@ -132,16 +168,59 @@ export function DoubaoLocal({shotId, saved, onComplete}:{shotId:string; saved:bo
       finally {setBusy(false);}
     }}>终止操作</Button>}
     {task && <Typography.Text type="secondary" title={task.note}>{status(task)}</Typography.Text>}
-    <Modal title="本地豆包队列" open={queueOpen} onCancel={()=>setQueueOpen(false)} footer={null} width={720}>
+    <Modal title="本地豆包队列" open={queueOpen} onCancel={()=>setQueueOpen(false)} footer={null} width={760}>
       {queueError && <Alert type="warning" showIcon message="队列刷新失败，当前显示上一次同步的数据。"/>}
       {queue ? <Space direction="vertical" size="middle" style={{width:'100%'}}>
-        {quota && <Typography.Text>
-          今日可新提交 <strong>{quota.available}</strong> 次 / 总额度 {quota.total} 次
-          <Typography.Text type="secondary">（已扣除排队预留）</Typography.Text>
-        </Typography.Text>}
+        {quota && <Space direction="vertical" size={2}>
+          <Typography.Text>
+            今日可新提交 <strong>{quota.available}</strong> 次 / 总额度 {quota.total} 次
+            <Typography.Text type="secondary">（已扣除排队预留）</Typography.Text>
+          </Typography.Text>
+          {quotaDetails && <Typography.Text type="secondary" style={{fontSize:12}}>
+            按实测规则：提交前累计 &lt; {quotaDetails.preSubmitSecondsLimit} 秒放行（支持末条 15s 压轴）· 当前 {quotaDetails.openAccounts} 个号可继续提交，最高可再排约 {quotaDetails.maxRemainingSeconds} 秒
+          </Typography.Text>}
+        </Space>}
         <Alert showIcon type={queue.worker.online?'success':'warning'}
           message={queue.worker.online?'本地执行器在线':'本地执行器暂时失联'}
           description={queue.worker.seen_at?`最后连接：${time(queue.worker.seen_at)}`:'尚未收到执行器的连接记录。'}/>
+        {quotaDetails && !!quotaDetails.accounts.length && <details>
+          <summary>各账号今日秒数与手动额度补录（{quotaDetails.accounts.length} 个账号）</summary>
+          <Space direction="vertical" size="small" style={{width:'100%',marginTop:8}}>
+            <Space wrap>
+              {quotaDetails.accounts.map(acc=><Tag
+                key={acc.quotaKey}
+                color={acc.canAccept?'green':'default'}
+                style={{cursor:'pointer'}}
+                onClick={()=>{
+                  setSeedTarget(acc.accountLabel||acc.quotaKey);
+                  setSeedSeconds(acc.usedSeconds||0);
+                }}>
+                {acc.accountLabel||acc.quotaKey}：已用 {acc.usedSeconds}s{acc.seedSeconds>0?`（含补录 ${acc.seedSeconds}s）`:''} · {acc.canAccept?`可再凑 ${acc.remainingBeforeLimit}s + 15s`:'已满门槛'}
+              </Tag>)}
+            </Space>
+            <Space wrap>
+              <Input
+                size="small"
+                style={{width:220}}
+                placeholder="账号名称或 quotaKey（如 用户295813）"
+                value={seedTarget}
+                onChange={e=>setSeedTarget(e.target.value)}
+              />
+              <InputNumber
+                size="small"
+                min={0}
+                max={300}
+                addonBefore="累计已用"
+                addonAfter="秒"
+                value={seedSeconds}
+                onChange={v=>setSeedSeconds(typeof v==='number'?v:0)}
+              />
+              <Button size="small" type="primary" loading={seeding} onClick={()=>void submitSeed()}>
+                保存今日已用秒数
+              </Button>
+            </Space>
+          </Space>
+        </details>}
         {!!queue.account_reports?.length && <details>
           <summary>执行器上报的账号（{queue.account_reports.length} 台设备）</summary>
           {queue.account_reports.map(report=><section key={report.id}>

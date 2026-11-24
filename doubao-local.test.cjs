@@ -830,3 +830,199 @@ test('reference slots freeze locked images, deduplicate shared pictures and repl
   services.db.prepare('UPDATE shots SET prompt=? WHERE id=?').run('@未知人物 走来',shot.id);
   assert.throws(()=>queue.enqueue(shot.id,'unresolved'),/未匹配/);
 });
+test('smart packing packs 9+9+15 onto single accounts so 3 accounts run 4x(15+9) episodes (96s)',async t=>{
+  const {services,shot:shot10,queue}=setup(t);
+  const projectId=services.db.prepare('SELECT project_id FROM shots WHERE id=?').get(shot10.id).project_id;
+  const shot15=services.repos.content.createShot({projectId,episode:1,number:2,title:'长镜',prompt:'十五秒提示词',duration:15});
+  const shot9=services.repos.content.createShot({projectId,episode:1,number:3,title:'短镜',prompt:'九秒提示词',duration:9});
+  const shot4=services.repos.content.createShot({projectId,episode:1,number:4,title:'超短',prompt:'四秒提示词',duration:4});
+  const pool=[accounts[0],accounts[1],{label:'丙账号',quotaKey:'user-c'}];
+  assert.equal(queue.claim('mac',pool).reason,'empty');
+  for(let i=0;i<4;i++) {
+    assert.equal(queue.enqueue(shot15.id,`ep${i}-15`).duration,15);
+    assert.equal(queue.enqueue(shot9.id,`ep${i}-9`).duration,9);
+  }
+  assert.equal(queue.overview().waiting.length,8);
+  assert.throws(()=>queue.enqueue(shot4.id,'overflow-9th'),{code:'daily_limit'});
+  const perAccount={};
+  for(let i=0;i<8;i++) {
+    const claimed=queue.claim('mac',pool).task;
+    assert(claimed,`Expected claim #${i+1} to succeed`);
+    perAccount[claimed.quota_key]=perAccount[claimed.quota_key]||[];
+    perAccount[claimed.quota_key].push(claimed.duration);
+    runToVideo(queue,claimed.id);
+    await queue.upload(claimed.id,'mac',fixture());
+  }
+  assert.equal(queue.claim('mac',pool).reason,'daily_limit');
+  assert.deepEqual(perAccount['user-a'],[9,9,15]);
+  assert.deepEqual(perAccount['user-b'],[9,9,15]);
+  assert.deepEqual(perAccount['user-c'],[15,15]);
+});
+test('short-pack claims 7+7+4+15 (33s) on 1 account even when 15s was queued before 4s',async t=>{
+  const {services,shot:shot10,queue}=setup(t);
+  const projectId=services.db.prepare('SELECT project_id FROM shots WHERE id=?').get(shot10.id).project_id;
+  const shot7=services.repos.content.createShot({projectId,episode:1,number:2,title:'七秒',prompt:'七秒提示词',duration:7});
+  const shot15=services.repos.content.createShot({projectId,episode:1,number:3,title:'十五',prompt:'十五秒提示词',duration:15});
+  const shot4=services.repos.content.createShot({projectId,episode:1,number:4,title:'四秒',prompt:'四秒提示词',duration:4});
+  const pool=[accounts[0]];
+  assert.equal(queue.claim('mac',pool).reason,'empty');
+  queue.enqueue(shot7.id,'s1');
+  queue.enqueue(shot7.id,'s2');
+  queue.enqueue(shot15.id,'s3-long');
+  queue.enqueue(shot4.id,'s4-short');
+  assert.throws(()=>queue.enqueue(shot4.id,'s5-overflow'),{code:'daily_limit'});
+  const order=[];
+  for(let i=0;i<4;i++) {
+    const task=queue.claim('mac',pool).task;
+    assert(task);
+    order.push(task.duration);
+    runToVideo(queue,task.id);
+    await queue.upload(task.id,'mac',fixture());
+  }
+  assert.deepEqual(order,[7,7,4,15]);
+  assert.equal(queue.claim('mac',pool).reason,'daily_limit');
+});
+test('15+10 (25s >= 19) stops a 3rd 4s task matching live Doubao boundary',async t=>{
+  const {services,shot:shot10,queue}=setup(t);
+  const projectId=services.db.prepare('SELECT project_id FROM shots WHERE id=?').get(shot10.id).project_id;
+  const shot15=services.repos.content.createShot({projectId,episode:1,number:2,title:'十五',prompt:'十五秒提示词',duration:15});
+  const shot4=services.repos.content.createShot({projectId,episode:1,number:3,title:'四秒',prompt:'四秒提示词',duration:4});
+  const pool=[accounts[0]];
+  assert.equal(queue.claim('mac',pool).reason,'empty');
+  for(const [reqKey,shot] of [['first-15',shot15],['second-10',shot10]]) {
+    queue.enqueue(shot.id,reqKey);
+    const claimed=queue.claim('mac',pool).task;
+    assert.equal(claimed.request_key,reqKey);
+    runToVideo(queue,claimed.id);
+    await queue.upload(claimed.id,'mac',fixture());
+  }
+  assert.throws(()=>queue.enqueue(shot4.id,'third-4-rejected'),{code:'daily_limit'});
+  assert.equal(queue.claim('mac',pool).reason,'daily_limit');
+});
+test('manual off-StoryDock usage seeding blocks remaining threshold via API and enforces admin auth',async t=>{
+  const {services,shot:shot10,queue}=setup(t);
+  const projectId=services.db.prepare('SELECT project_id FROM shots WHERE id=?').get(shot10.id).project_id;
+  const shot7=services.repos.content.createShot({projectId,episode:1,number:2,title:'七秒',prompt:'七秒提示词',duration:7});
+  const shot4=services.repos.content.createShot({projectId,episode:1,number:3,title:'四秒',prompt:'四秒提示词',duration:4});
+  const pool=[{label:'用户295813',quotaKey:'u-295813'}];
+  queue.claim('mac',pool);
+  queue.enqueue(shot10.id,'db-10');
+  queue.enqueue(shot7.id,'db-7');
+  for(let i=0;i<2;i++) {
+    const task=queue.claim('mac',pool).task;
+    runToVideo(queue,task.id);
+    await queue.upload(task.id,'mac',fixture());
+  }
+  assert.equal(queue.overview().quota_details.accounts[0].usedSeconds,17);
+  assert.equal(queue.overview().quota_details.accounts[0].canAccept,true);
+
+  const {hashPassword}=require('./server/auth-http.cjs');
+  const password=await hashPassword('fixture-password');
+  const now=new Date().toISOString();
+  for(const role of ['admin','user']) services.db.prepare(`INSERT INTO app_users
+    (id,username,password_hash,role,email,email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)`)
+    .run(role,role,password,role,role+'@example.com',now,now);
+  const app=await require('./server/api.cjs').createHttpApp(services);
+  try {
+    const device=require('./server/doubao-local.cjs').issueDevice(services,'seed-device');
+    const login=async role=>{
+      const r=await app.inject({method:'POST',url:'/api/v1/auth/login',payload:{username:role,password:'fixture-password'}});
+      return r.headers['set-cookie'].split(';')[0];
+    };
+    const [adminCookie,userCookie]=await Promise.all([login('admin'),login('user')]);
+    assert.equal((await app.inject({method:'POST',url:'/api/v1/doubao-local/usage-seed',headers:{cookie:userCookie},payload:{accountLabel:'用户295813',totalUsedSeconds:27}})).statusCode,403);
+    assert.equal((await app.inject({method:'POST',url:'/api/v1/doubao-local/usage-seed',headers:{'x-doubao-device':device.token},payload:{accountLabel:'用户295813',totalUsedSeconds:27}})).statusCode,403);
+    const seededRes=await app.inject({method:'POST',url:'/api/v1/doubao-local/usage-seed',headers:{cookie:adminCookie},payload:{accountLabel:'用户295813',totalUsedSeconds:27}});
+    assert.equal(seededRes.statusCode,200,seededRes.body);
+    assert.equal(seededRes.json().seedSeconds,10);
+    assert.equal(seededRes.json().usedSeconds,27);
+    assert.equal(seededRes.json().canAccept,false);
+    assert.throws(()=>queue.enqueue(shot4.id,'blocked-after-seed'),{code:'daily_limit'});
+    assert.equal(queue.claim('mac',pool).reason,'daily_limit');
+    const adjusted=await app.inject({method:'POST',url:'/api/v1/doubao-local/usage-seed',headers:{cookie:adminCookie},payload:{quotaKey:'u-295813',totalUsedSeconds:17}});
+    assert.equal(adjusted.statusCode,200,adjusted.body);
+    assert.equal(adjusted.json().canAccept,true);
+    assert.equal(queue.enqueue(shot4.id,'allowed-after-adjust').duration,4);
+  } finally {await app.close();}
+});
+test('worker usedSecondsToday=18 permits one final 15s shot and cannot be lowered by later poll',async t=>{
+  const {services,shot:shot10,queue}=setup(t);
+  const projectId=services.db.prepare('SELECT project_id FROM shots WHERE id=?').get(shot10.id).project_id;
+  const shot15=services.repos.content.createShot({projectId,episode:1,number:2,title:'十五',prompt:'十五秒提示词',duration:15});
+  const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const seeded=[{...accounts[0],usedToday:2,usedSecondsToday:18,usageDate:date}];
+  assert.equal(queue.claim('mac',seeded).reason,'empty');
+  assert.equal(queue.overview().quota_details.accounts[0].usedSeconds,18);
+  assert.equal(queue.overview().quota_details.accounts[0].canAccept,true);
+  const finalShot=queue.enqueue(shot15.id,'final-15');
+  const claimed=queue.claim('mac',seeded).task;
+  assert.equal(claimed.id,finalShot.id);
+  runToVideo(queue,claimed.id);
+  await queue.upload(claimed.id,'mac',fixture());
+  assert.throws(()=>queue.enqueue(shot10.id,'after-33'),{code:'daily_limit'});
+  assert.equal(queue.claim('mac',[{...accounts[0],usedToday:0,usedSecondsToday:5,usageDate:date}]).reason,'daily_limit');
+});
+test('POST /api/v1/doubao-local/batches enforces admin auth, appends post-production subtitles, and respects 19s threshold packing',async t=>{
+  const {services,shot:shot10,queue}=setup(t);
+  const projectId=services.db.prepare('SELECT project_id FROM shots WHERE id=?').get(shot10.id).project_id;
+  const shot9a=services.repos.content.createShot({projectId,episode:1,number:2,title:'九秒一',prompt:'九秒提示词一',duration:9});
+  const shot9b=services.repos.content.createShot({projectId,episode:1,number:3,title:'九秒二',prompt:'九秒提示词二',duration:9});
+  const shot15=services.repos.content.createShot({projectId,episode:1,number:4,title:'十五秒',prompt:'十五秒提示词',duration:15});
+  const shot4=services.repos.content.createShot({projectId,episode:1,number:5,title:'四秒',prompt:'四秒提示词',duration:4});
+  const pool=[accounts[0]];
+  assert.equal(queue.claim('mac',pool).reason,'empty');
+
+  const {hashPassword}=require('./server/auth-http.cjs');
+  const password=await hashPassword('fixture-password');
+  const now=new Date().toISOString();
+  services.db.prepare(`INSERT INTO app_users(id,username,password_hash,role,email,email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)`)
+    .run('admin','admin',password,'admin','admin@example.com',now,now);
+  const app=await require('./server/api.cjs').createHttpApp(services);
+  try {
+    const device=require('./server/doubao-local.cjs').issueDevice(services,'batch-device');
+    const loginRes=await app.inject({method:'POST',url:'/api/v1/auth/login',payload:{username:'admin',password:'fixture-password'}});
+    const adminCookie=loginRes.headers['set-cookie'].split(';')[0];
+
+    const deviceRes=await app.inject({
+      method:'POST',
+      url:'/api/v1/doubao-local/batches',
+      headers:{'x-doubao-device':device.token},
+      payload:{projectId,shotIds:[shot9a.id],requestKey:'dev-rejected'},
+    });
+    assert.equal(deviceRes.statusCode,403);
+
+    const batchRes=await app.inject({
+      method:'POST',
+      url:'/api/v1/doubao-local/batches',
+      headers:{cookie:adminCookie},
+      payload:{projectId,shotIds:[shot9a.id,shot9b.id,shot15.id],requestKey:'batch_ok_1'},
+    });
+    assert.equal(batchRes.statusCode,200,batchRes.body);
+    const {taskIds,skipped}=batchRes.json();
+    assert.equal(taskIds.length,3);
+    assert.deepEqual(skipped,[]);
+    for(const id of taskIds) {
+      assert.match(queue.get(id).prompt,/【后期字幕】请保留对白原声和口型/);
+    }
+
+    const overflowRes=await app.inject({
+      method:'POST',
+      url:'/api/v1/doubao-local/batches',
+      headers:{cookie:adminCookie},
+      payload:{projectId,shotIds:[shot4.id],requestKey:'batch_overflow'},
+    });
+    assert.equal(overflowRes.statusCode,409);
+    assert.equal(overflowRes.json().error.code,'daily_limit');
+
+    const claimedOrder=[];
+    for(let i=0;i<3;i++) {
+      const task=queue.claim('mac',pool).task;
+      assert(task);
+      claimedOrder.push(task.duration);
+      runToVideo(queue,task.id);
+      await queue.upload(task.id,'mac',fixture());
+    }
+    assert.deepEqual(claimedOrder,[9,9,15]);
+    assert.equal(queue.claim('mac',pool).reason,'daily_limit');
+  } finally {await app.close();}
+});

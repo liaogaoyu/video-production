@@ -2,10 +2,109 @@ const crypto = require('node:crypto');
 const { ApiError } = require('./errors.cjs');
 const { transaction } = require('./db.cjs');
 const { inspectMp4 } = require('./video-export.cjs');
-const DAILY_QUOTA_PER_ACCOUNT = 2;
+const DAILY_PRE_SUBMIT_SECONDS_LIMIT = Math.max(
+  1,
+  Number(process.env.STORYDOCK_DOUBAO_PRE_SUBMIT_SECONDS) || 19,
+);
+const MAX_TASKS_PER_ACCOUNT_PER_DAY = Math.max(
+  2,
+  Number(process.env.STORYDOCK_DOUBAO_MAX_TASKS_PER_DAY) || 6,
+);
+const LEGACY_USED_SLOT_SECONDS = 15;
+const PACK_WINDOW_SIZE = 24;
 const phases = new Set(['claimed','switching_account','opening_canvas','fetching_references','writing_prompt',
   'uploading_references','setting_parameters','prepared','checking_submission','submitting','generating','downloading','uploading',
   'cancelling','retrying','needs_attention','resume_requested']);
+
+function standardSlotsForUsage(
+  usedSeconds,
+  usedCount = 0,
+  limit = DAILY_PRE_SUBMIT_SECONDS_LIMIT,
+  maxTasks = MAX_TASKS_PER_ACCOUNT_PER_DAY,
+) {
+  if (usedSeconds >= limit || usedCount >= maxTasks) return 0;
+  return Math.min(maxTasks - usedCount, Math.floor((limit - 1 - usedSeconds) / 10) + 1);
+}
+
+function selectNextAssignment(accountStates, queuedTasks, options = {}) {
+  const limit = Number(options.preSubmitSecondsLimit) || DAILY_PRE_SUBMIT_SECONDS_LIMIT;
+  const maxTasks = Number(options.maxTasksPerDay) || MAX_TASKS_PER_ACCOUNT_PER_DAY;
+  const openAccounts = (Array.isArray(accountStates) ? accountStates : [])
+    .filter(a => a && a.usedSeconds < limit && a.usedCount < maxTasks);
+  if (!openAccounts.length || !Array.isArray(queuedTasks) || !queuedTasks.length) return null;
+
+  const windowTasks = queuedTasks.slice(0, PACK_WINDOW_SIZE).map((task, idx) => ({
+    ...task,
+    duration: Number(task.duration) || 10,
+    order: task.order ?? idx,
+  }));
+
+  // 1. Close out started accounts that cannot accept any keep-alive short shot (< limit) with their longest available shot.
+  const closingAccounts = openAccounts
+    .filter(a => a.usedSeconds > 0 && !windowTasks.some(t => a.usedSeconds + t.duration < limit && a.usedCount + 1 < maxTasks))
+    .sort((a, b) => (b.usedSeconds - a.usedSeconds) || (a.order - b.order));
+  if (closingAccounts.length) {
+    const account = closingAccounts[0];
+    const task = [...windowTasks].sort((a, b) => (b.duration - a.duration) || (a.order - b.order))[0];
+    return { account, task, strategy: 'closeout_longest' };
+  }
+
+  // 2. Pack short keep-alive shots onto started accounts toward (limit - 1)s before using their final overdraft shot.
+  let bestPartial = null;
+  for (const account of openAccounts) {
+    if (account.usedSeconds <= 0) continue;
+    for (const task of windowTasks) {
+      const after = account.usedSeconds + task.duration;
+      if (after >= limit || account.usedCount + 1 >= maxTasks) continue;
+      if (
+        !bestPartial ||
+        after > bestPartial.after ||
+        (after === bestPartial.after && (
+          account.usedSeconds > bestPartial.account.usedSeconds ||
+          (account.usedSeconds === bestPartial.account.usedSeconds && (
+            task.duration > bestPartial.task.duration ||
+            (task.duration === bestPartial.task.duration && (
+              account.order < bestPartial.account.order ||
+              (account.order === bestPartial.account.order && task.order < bestPartial.task.order)
+            ))
+          ))
+        ))
+      ) {
+        bestPartial = { account, task, after, strategy: 'pack_partial' };
+      }
+    }
+  }
+  if (bestPartial) return { account: bestPartial.account, task: bestPartial.task, strategy: bestPartial.strategy };
+
+  // 3. Start a fresh account: pair short shots when another queued shot can follow (< limit), otherwise lead with longest.
+  const freshAccount = openAccounts
+    .filter(a => a.usedSeconds === 0)
+    .sort((a, b) => a.order - b.order)[0];
+  if (freshAccount) {
+    let bestPair = null;
+    if (maxTasks >= 3) {
+      for (let i = 0; i < windowTasks.length; i += 1) {
+        for (let j = i + 1; j < windowTasks.length; j += 1) {
+          const sum = windowTasks[i].duration + windowTasks[j].duration;
+          if (sum >= limit) continue;
+          if (!bestPair || sum > bestPair.sum) {
+            bestPair = { task: windowTasks[i], sum };
+          }
+        }
+      }
+    }
+    if (bestPair) {
+      return { account: freshAccount, task: bestPair.task, strategy: 'start_short_pair' };
+    }
+    const longest = [...windowTasks].sort((a, b) => (b.duration - a.duration) || (a.order - b.order))[0];
+    return { account: freshAccount, task: longest, strategy: 'start_longest' };
+  }
+
+  // 4. Fallback: highest-usage open account + longest available shot.
+  const fallbackAccount = [...openAccounts].sort((a, b) => (b.usedSeconds - a.usedSeconds) || (a.order - b.order))[0];
+  const fallbackTask = [...windowTasks].sort((a, b) => (b.duration - a.duration) || (a.order - b.order))[0];
+  return { account: fallbackAccount, task: fallbackTask, strategy: 'fallback' };
+}
 
 function ossFailureReason(error) {
   if (/InvalidAccessKeyId/.test(String(error.body || error.message || ''))) return 'AccessKey 无效或已停用';
@@ -27,7 +126,8 @@ function createDoubaoQueue(services) {
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS doubao_local_usage_seed (
-    quota_key TEXT NOT NULL, quota_day TEXT NOT NULL, used INTEGER NOT NULL,
+    quota_key TEXT NOT NULL, quota_day TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,
+    used_seconds INTEGER,
     PRIMARY KEY(quota_key,quota_day)
   );
   CREATE TABLE IF NOT EXISTS doubao_local_devices (
@@ -61,6 +161,11 @@ function createDoubaoQueue(services) {
     db.exec("ALTER TABLE doubao_local_tasks ADD COLUMN model TEXT NOT NULL DEFAULT 'Seedance 2.0 Mini'");
     db.prepare("UPDATE doubao_local_tasks SET model='Seedance 2.0 Fast' WHERE state IN ('queued','claimed','prepared','cancelling')").run();
   }
+  const usageSeedColumns = db.prepare('PRAGMA table_info(doubao_local_usage_seed)').all().map(column => column.name);
+  if (!usageSeedColumns.includes('used_seconds')) {
+    db.exec('ALTER TABLE doubao_local_usage_seed ADD COLUMN used_seconds INTEGER');
+    db.prepare(`UPDATE doubao_local_usage_seed SET used_seconds = used * ${LEGACY_USED_SLOT_SECONDS} WHERE used_seconds IS NULL`).run();
+  }
   const activeStates = "state NOT IN ('queued','succeeded','cancelled','failed')";
   transaction(db,()=>db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS doubao_one_task_per_worker
@@ -71,29 +176,122 @@ function createDoubaoQueue(services) {
   `));
   const day = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
   const get = id => db.prepare('SELECT * FROM doubao_local_tasks WHERE id=?').get(id);
-  const seedUsed = (key, date) => db.prepare('SELECT used FROM doubao_local_usage_seed WHERE quota_key=? AND quota_day=?').get(key,date)?.used || 0;
-  function remaining(key, date, excludeId = '') {
+  function seedUsage(key, date) {
+    const row = db.prepare('SELECT used, used_seconds FROM doubao_local_usage_seed WHERE quota_key=? AND quota_day=?').get(key, date);
+    const usedCount = Number(row?.used || 0);
+    const usedSeconds =
+      row?.used_seconds !== null && row?.used_seconds !== undefined
+        ? Number(row.used_seconds)
+        : usedCount * LEGACY_USED_SLOT_SECONDS;
+    return { usedCount, usedSeconds };
+  }
+  function accountUsage(key, date, excludeId = '') {
     // The worker records this note only after verifying the rejection on the task's own canvas.
-    const used=db.prepare(`SELECT COUNT(*) AS used FROM doubao_local_tasks
+    const row = db.prepare(`SELECT COUNT(*) AS used_count, COALESCE(SUM(duration), 0) AS used_seconds FROM doubao_local_tasks
       WHERE quota_key=? AND quota_day=? AND id<>? AND state NOT IN ('queued','cancelled')
-        AND NOT (state='failed' AND note=?)`).get(key,date,excludeId,'豆包审核不通过，生成已停止').used;
-    return Math.max(0,DAILY_QUOTA_PER_ACCOUNT-used-seedUsed(key,date));
+        AND NOT (state='failed' AND note=?)`).get(key, date, excludeId, '豆包审核不通过，生成已停止');
+    const seed = seedUsage(key, date);
+    const dbCount = Number(row?.used_count || 0);
+    const dbSeconds = Number(row?.used_seconds || 0);
+    const usedCount = dbCount + seed.usedCount;
+    const usedSeconds = dbSeconds + seed.usedSeconds;
+    const canAccept = usedSeconds < DAILY_PRE_SUBMIT_SECONDS_LIMIT && usedCount < MAX_TASKS_PER_ACCOUNT_PER_DAY;
+    return {
+      quotaKey: key,
+      dbCount,
+      dbSeconds,
+      seedCount: seed.usedCount,
+      seedSeconds: seed.usedSeconds,
+      usedCount,
+      usedSeconds,
+      canAccept,
+      remainingBeforeLimit: canAccept ? Math.max(0, DAILY_PRE_SUBMIT_SECONDS_LIMIT - 1 - usedSeconds) : 0,
+      standardSlots: standardSlotsForUsage(usedSeconds, usedCount),
+    };
   }
-  function queueQuota(queued) {
-    const keys=db.prepare(`SELECT DISTINCT entries.value AS quota_key FROM doubao_local_account_pools pools
+  function activePoolKeys() {
+    return db.prepare(`SELECT DISTINCT entries.value AS quota_key FROM doubao_local_account_pools pools
       LEFT JOIN doubao_local_devices devices ON devices.id=pools.worker_id
-      JOIN json_each(pools.quota_keys_json) entries WHERE devices.revoked_at IS NULL`).all();
-    if(!keys.length) return null;
-    const today=day();
-    const capacity=keys.reduce((total,{quota_key})=>total+remaining(quota_key,today),0);
-    return {available:Math.max(0,capacity-queued),total:keys.length*DAILY_QUOTA_PER_ACCOUNT};
+      JOIN json_each(pools.quota_keys_json) entries WHERE devices.revoked_at IS NULL
+      ORDER BY entries.value`).all().map(row => row.quota_key);
   }
-  function checkQueueQuota() {
-    const queued=db.prepare("SELECT COUNT(*) AS count FROM doubao_local_tasks WHERE state='queued'").get().count;
-    if(queueQuota(queued)?.available===0)
-      throw new ApiError(409,'daily_limit','本地豆包今日额度已用完，任务未入队');
+  function simulateQueueOnPool(keys, queuedTasks, today) {
+    const states = keys.map((quotaKey, order) => {
+      const usage = accountUsage(quotaKey, today);
+      return { quotaKey, usedSeconds: usage.usedSeconds, usedCount: usage.usedCount, order };
+    });
+    const pending = queuedTasks.map((task, order) => ({
+      id: task.id ?? `sim-${order}`,
+      duration: Number(task.duration) || 10,
+      order,
+    }));
+    while (pending.length) {
+      const pick = selectNextAssignment(states, pending);
+      if (!pick) {
+        return { allFit: false, remainingAccounts: states, unplacedCount: pending.length };
+      }
+      pick.account.usedSeconds += pick.task.duration;
+      pick.account.usedCount += 1;
+      const idx = pending.findIndex(item => item.id === pick.task.id);
+      if (idx >= 0) pending.splice(idx, 1);
+      else pending.shift();
+    }
+    return { allFit: true, remainingAccounts: states, unplacedCount: 0 };
   }
-  function enqueue(shotId, requestKey) {
+  function queueQuotaDetails(queuedTasks) {
+    const keys = activePoolKeys();
+    if (!keys.length) return null;
+    const today = day();
+    const labelRows = db.prepare(
+      'SELECT quota_key, account_label FROM doubao_local_tasks WHERE quota_key IS NOT NULL AND account_label IS NOT NULL ORDER BY updated_at DESC, rowid DESC'
+    ).all();
+    const labelsByKey = new Map();
+    for (const row of labelRows) {
+      if (!labelsByKey.has(row.quota_key)) labelsByKey.set(row.quota_key, row.account_label);
+    }
+    const perAccount = keys.map(key => ({
+      ...accountUsage(key, today),
+      accountLabel: labelsByKey.get(key) || null,
+    }));
+    const sim = simulateQueueOnPool(keys, queuedTasks, today);
+    const available = sim.remainingAccounts.reduce(
+      (total, acc) => total + standardSlotsForUsage(acc.usedSeconds, acc.usedCount),
+      0,
+    );
+    const total = keys.length * standardSlotsForUsage(0, 0);
+    const openAccounts = sim.remainingAccounts.filter(
+      acc => acc.usedSeconds < DAILY_PRE_SUBMIT_SECONDS_LIMIT && acc.usedCount < MAX_TASKS_PER_ACCOUNT_PER_DAY,
+    ).length;
+    const maxRemainingSeconds = sim.remainingAccounts.reduce((totalSecs, acc) => {
+      if (acc.usedSeconds >= DAILY_PRE_SUBMIT_SECONDS_LIMIT || acc.usedCount >= MAX_TASKS_PER_ACCOUNT_PER_DAY) {
+        return totalSecs;
+      }
+      return totalSecs + (DAILY_PRE_SUBMIT_SECONDS_LIMIT - 1 - acc.usedSeconds) + 15;
+    }, 0);
+    return {
+      quota: { available, total },
+      details: {
+        mode: 'seconds_threshold',
+        preSubmitSecondsLimit: DAILY_PRE_SUBMIT_SECONDS_LIMIT,
+        maxTasksPerDay: MAX_TASKS_PER_ACCOUNT_PER_DAY,
+        usedSecondsTotal: perAccount.reduce((sum, acc) => sum + acc.usedSeconds, 0),
+        queuedSecondsTotal: queuedTasks.reduce((sum, task) => sum + (Number(task.duration) || 10), 0),
+        openAccounts,
+        maxRemainingSeconds,
+        accounts: perAccount,
+      },
+    };
+  }
+  function checkQueueQuota(newDuration) {
+    const keys = activePoolKeys();
+    if (!keys.length) return;
+    const queuedTasks = db.prepare("SELECT id, duration FROM doubao_local_tasks WHERE state='queued' ORDER BY created_at,rowid").all();
+    const sim = simulateQueueOnPool(keys, [...queuedTasks, { id: '__incoming__', duration: Number(newDuration) || 10 }], day());
+    if (!sim.allFit) {
+      throw new ApiError(409, 'daily_limit', '本地豆包今日额度已用完，任务未入队');
+    }
+  }
+  function enqueue(shotId, requestKey, { postProductionSubtitles = false } = {}) {
     if(typeof shotId!=='string'||!shotId||shotId.length>100) throw new ApiError(400,'shot_required','请选择分镜');
     if (typeof requestKey !== 'string' || !requestKey || requestKey.length > 100)
       throw new ApiError(400, 'request_key_required', '请提供唯一请求编号');
@@ -111,11 +309,14 @@ function createDoubaoQueue(services) {
         throw new ApiError(422,'unsupported_duration','本地豆包支持4至15秒镜头');
       const ratio=db.prepare('SELECT ratio FROM projects WHERE id=?').get(shot.project_id).ratio;
       if(!['16:9','9:16','1:1','3:4','4:3','21:9'].includes(ratio)) throw new ApiError(422,'unsupported_ratio','豆包不支持项目当前画幅');
-      checkQueueQuota();
+      checkQueueQuota(shot.duration);
       const binding=freezeReferences(services,shot);
+      const prompt = postProductionSubtitles
+        ? binding.prompt + '\n\n【后期字幕】请保留对白原声和口型。生成画面时禁止叠加字幕、台词文字或标题，画面字幕由后期工具添加。'
+        : binding.prompt;
       const id = crypto.randomUUID(), now = new Date().toISOString();
       db.prepare(`INSERT INTO doubao_local_tasks(id,shot_id,project_id,prompt,request_key,created_at,updated_at,references_json,prompt_original,duration,ratio,model)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, shotId, shot.project_id, binding.prompt, requestKey, now, now,JSON.stringify(binding.references),shot.prompt,shot.duration,ratio,'Seedance 2.0 Fast');
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, shotId, shot.project_id, prompt, requestKey, now, now,JSON.stringify(binding.references),shot.prompt,shot.duration,ratio,'Seedance 2.0 Fast');
       return get(id);
     });
   }
@@ -126,8 +327,10 @@ function createDoubaoQueue(services) {
       if (typeof account?.label !== 'string' || !account.label.trim() || account.label.length > 200 ||
           typeof account.quotaKey !== 'string' || !account.quotaKey.trim() || account.quotaKey.length > 100)
         throw new ApiError(400, 'invalid_account', '账号需要界面名称和额度归属编号');
-      if(account.usedToday!==undefined && (!Number.isInteger(account.usedToday)||account.usedToday<0||account.usedToday>2||!/^\d{4}-\d{2}-\d{2}$/.test(account.usageDate || '')))
-        throw new ApiError(400,'invalid_usage','初始使用次数需要日期和0至2的次数');
+      if(account.usedToday!==undefined && (!Number.isInteger(account.usedToday)||account.usedToday<0||account.usedToday>MAX_TASKS_PER_ACCOUNT_PER_DAY||!/^\d{4}-\d{2}-\d{2}$/.test(account.usageDate || '')))
+        throw new ApiError(400,'invalid_usage',`初始使用次数需要日期和0至${MAX_TASKS_PER_ACCOUNT_PER_DAY}的次数`);
+      if(account.usedSecondsToday!==undefined && (!Number.isInteger(account.usedSecondsToday)||account.usedSecondsToday<0||account.usedSecondsToday>300||!/^\d{4}-\d{2}-\d{2}$/.test(account.usageDate || '')))
+        throw new ApiError(400,'invalid_usage','初始已用秒数需要日期和0至300的整数秒数');
     }
     return transaction(db, () => {
       const excluded=new Set(db.prepare('SELECT account_label FROM doubao_local_excluded_accounts WHERE worker_id=?')
@@ -139,9 +342,16 @@ function createDoubaoQueue(services) {
         WHERE quota_keys_json<>excluded.quota_keys_json`).run(workerId,keys);
       const today = day();
       for(const account of eligible) {
-        if(account.usedToday!==undefined && account.usageDate===today) db.prepare(`INSERT INTO doubao_local_usage_seed VALUES(?,?,?)
-          ON CONFLICT(quota_key,quota_day) DO UPDATE SET used=MAX(used,excluded.used)`)
-          .run(account.quotaKey,today,account.usedToday);
+        const hasCount = account.usedToday !== undefined;
+        const hasSec = account.usedSecondsToday !== undefined;
+        if((hasCount || hasSec) && account.usageDate===today) {
+          const seedCount = hasCount ? account.usedToday : 0;
+          const seedSecs = hasSec ? account.usedSecondsToday : seedCount * LEGACY_USED_SLOT_SECONDS;
+          db.prepare(`INSERT INTO doubao_local_usage_seed(quota_key,quota_day,used,used_seconds) VALUES(?,?,?,?)
+            ON CONFLICT(quota_key,quota_day) DO UPDATE SET used=MAX(used,excluded.used),
+              used_seconds=MAX(COALESCE(used_seconds, used*${LEGACY_USED_SLOT_SECONDS}), excluded.used_seconds)`)
+            .run(account.quotaKey,today,seedCount,seedSecs);
+        }
       }
       const active = db.prepare(`SELECT * FROM doubao_local_tasks WHERE worker_id=? AND ${activeStates}`).get(workerId);
       const now=new Date().toISOString();
@@ -151,13 +361,34 @@ function createDoubaoQueue(services) {
       if (active) return { task: active, reason: 'desktop_locked' };
       const lockedAccounts = new Set(db.prepare(`SELECT quota_key FROM doubao_local_tasks WHERE ${activeStates}`)
         .all().map(task=>task.quota_key));
-      const available = eligible.find(account => !lockedAccounts.has(account.quotaKey) && remaining(account.quotaKey,today)>0);
-      if (!available) return { task: null, reason: eligible.some(account=>lockedAccounts.has(account.quotaKey)) ? 'desktop_locked' : 'daily_limit' };
-      const task = db.prepare("SELECT * FROM doubao_local_tasks WHERE state='queued' ORDER BY created_at,rowid LIMIT 1").get();
-      if (!task) return { task: null, reason: 'empty' };
+      const openStates = [];
+      const seenQuotaKeys = new Set();
+      let anyLocked = false;
+      eligible.forEach((account, order) => {
+        if (lockedAccounts.has(account.quotaKey)) {
+          anyLocked = true;
+          return;
+        }
+        if (seenQuotaKeys.has(account.quotaKey)) return;
+        const usage = accountUsage(account.quotaKey, today);
+        if (!usage.canAccept) return;
+        seenQuotaKeys.add(account.quotaKey);
+        openStates.push({
+          quotaKey: account.quotaKey,
+          account,
+          usedSeconds: usage.usedSeconds,
+          usedCount: usage.usedCount,
+          order,
+        });
+      });
+      if (!openStates.length) return { task: null, reason: anyLocked ? 'desktop_locked' : 'daily_limit' };
+      const queuedTasks = db.prepare("SELECT id, duration FROM doubao_local_tasks WHERE state='queued' ORDER BY created_at,rowid").all();
+      if (!queuedTasks.length) return { task: null, reason: 'empty' };
+      const pick = selectNextAssignment(openStates, queuedTasks);
+      if (!pick) return { task: null, reason: 'daily_limit' };
       db.prepare(`UPDATE doubao_local_tasks SET state='claimed',worker_id=?,account_label=?,quota_key=?,quota_day=?,updated_at=? WHERE id=?`)
-        .run(workerId, available.label, available.quotaKey, today, now, task.id);
-      return { task: get(task.id) };
+        .run(workerId, pick.account.account.label, pick.account.quotaKey, today, now, pick.task.id);
+      return { task: get(pick.task.id) };
     });
   }
   function owned(id, workerId) {
@@ -199,7 +430,7 @@ function createDoubaoQueue(services) {
     });
   }
   function overview() {
-    const fields=`t.id,t.shot_id,t.state,t.note,t.account_label,t.created_at,t.updated_at,
+    const fields=`t.id,t.shot_id,t.state,t.note,t.account_label,t.duration,t.created_at,t.updated_at,
       p.name AS project_name,s.episode,s.number,s.title,
       w.phase,w.completed,w.total,w.seen_at,w.interruption_json`;
     const joins=`FROM doubao_local_tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN shots s ON s.id=t.shot_id
@@ -216,8 +447,16 @@ function createDoubaoQueue(services) {
     const account_reports=db.prepare(`SELECT d.id,d.label,r.labels_json,r.seen_at FROM doubao_local_account_reports r
       JOIN doubao_local_devices d ON d.id=r.worker_id WHERE d.revoked_at IS NULL ORDER BY r.seen_at DESC`).all()
       .map(({labels_json,...device})=>({...device,labels:JSON.parse(labels_json)}));
-    return {active,waiting,recent,account_reports,quota:queueQuota(waiting.length),
-      worker:{seen_at,online:!!seen_at&&Date.now()-Date.parse(seen_at)<60000}};
+    const quotaInfo = queueQuotaDetails(waiting);
+    return {
+      active,
+      waiting,
+      recent,
+      account_reports,
+      quota: quotaInfo ? quotaInfo.quota : null,
+      quota_details: quotaInfo ? quotaInfo.details : null,
+      worker:{seen_at,online:!!seen_at&&Date.now()-Date.parse(seen_at)<60000},
+    };
   }
   const transitions = { claimed: ['prepared', 'blocked'], prepared: ['submitting', 'blocked'], submitting: ['running', 'blocked', 'failed'], running: ['awaiting_video', 'blocked', 'failed'], awaiting_video: ['blocked'], blocked: [], cancelling:['cancelled'] };
   function resume(id) {
@@ -266,7 +505,7 @@ function createDoubaoQueue(services) {
         throw new ApiError(409, 'invalid_transition', '任务状态不允许此操作');
       if (state === 'submitting' && task.state !== 'submitting') {
         const today=day();
-        if(!remaining(task.quota_key,today,id)) throw new ApiError(409,'daily_limit','该账号今日额度已用完，保留任务供核对');
+        if(!accountUsage(task.quota_key,today,id).canAccept) throw new ApiError(409,'daily_limit','该账号今日额度已用完，保留任务供核对');
         db.prepare('UPDATE doubao_local_tasks SET quota_day=? WHERE id=?').run(today,id);
       }
       db.prepare('UPDATE doubao_local_tasks SET state=?,note=?,updated_at=? WHERE id=?')
@@ -302,7 +541,57 @@ function createDoubaoQueue(services) {
       return get(id);
     });
   }
-  return { enqueue, claim, update, upload, get, cancel, resume, progress, reportAccounts, overview, list: () => db.prepare('SELECT * FROM doubao_local_tasks ORDER BY created_at DESC,rowid DESC LIMIT 200').all() };
+  function seedManualUsage({ quotaKey, accountLabel, quotaDay, extraSeconds, totalUsedSeconds, usedCount } = {}) {
+    const targetDay = quotaDay === undefined ? day() : String(quotaDay || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDay)) {
+      throw new ApiError(400, 'invalid_usage', '日期格式需为 YYYY-MM-DD');
+    }
+    return transaction(db, () => {
+      let resolvedKey = typeof quotaKey === 'string' && quotaKey.trim() ? quotaKey.trim() : '';
+      if (!resolvedKey && typeof accountLabel === 'string' && accountLabel.trim()) {
+        const matched = db.prepare(
+          'SELECT quota_key FROM doubao_local_tasks WHERE account_label=? AND quota_key IS NOT NULL ORDER BY updated_at DESC, rowid DESC LIMIT 1'
+        ).get(accountLabel.trim());
+        if (!matched?.quota_key) {
+          throw new ApiError(404, 'account_not_found', `未找到账号「${accountLabel.trim()}」的额度归属记录`);
+        }
+        resolvedKey = matched.quota_key;
+      }
+      if (!resolvedKey || resolvedKey.length > 100) {
+        throw new ApiError(400, 'invalid_account', '请提供有效的 quotaKey 或已运行过任务的账号名称');
+      }
+      let seedCount = 0;
+      if (usedCount !== undefined) {
+        if (!Number.isInteger(usedCount) || usedCount < 0 || usedCount > MAX_TASKS_PER_ACCOUNT_PER_DAY) {
+          throw new ApiError(400, 'invalid_usage', `初始使用次数需为0至${MAX_TASKS_PER_ACCOUNT_PER_DAY}的整数`);
+        }
+        seedCount = usedCount;
+      }
+      const dbRow = db.prepare(`SELECT COALESCE(SUM(duration), 0) AS used_seconds FROM doubao_local_tasks
+        WHERE quota_key=? AND quota_day=? AND state NOT IN ('queued','cancelled')
+          AND NOT (state='failed' AND note=?)`).get(resolvedKey, targetDay, '豆包审核不通过，生成已停止');
+      const dbSeconds = Number(dbRow?.used_seconds || 0);
+      let seedSeconds;
+      if (totalUsedSeconds !== undefined) {
+        if (!Number.isInteger(totalUsedSeconds) || totalUsedSeconds < 0 || totalUsedSeconds > 300) {
+          throw new ApiError(400, 'invalid_usage', '今日累计已用秒数需为0至300的整数');
+        }
+        seedSeconds = Math.max(0, totalUsedSeconds - dbSeconds);
+      } else if (extraSeconds !== undefined) {
+        if (!Number.isInteger(extraSeconds) || extraSeconds < 0 || extraSeconds > 300) {
+          throw new ApiError(400, 'invalid_usage', '追加已用秒数需为0至300的整数');
+        }
+        seedSeconds = extraSeconds;
+      } else {
+        throw new ApiError(400, 'invalid_usage', '请提供 totalUsedSeconds 或 extraSeconds');
+      }
+      db.prepare(`INSERT INTO doubao_local_usage_seed(quota_key,quota_day,used,used_seconds) VALUES(?,?,?,?)
+        ON CONFLICT(quota_key,quota_day) DO UPDATE SET used=excluded.used, used_seconds=excluded.used_seconds`)
+        .run(resolvedKey, targetDay, seedCount, seedSeconds);
+      return accountUsage(resolvedKey, targetDay);
+    });
+  }
+  return { enqueue, claim, update, upload, get, cancel, resume, progress, reportAccounts, seedManualUsage, overview, list: () => db.prepare('SELECT * FROM doubao_local_tasks ORDER BY created_at DESC,rowid DESC LIMIT 200').all() };
 }
 
 function registerDoubaoLocal(app, services) {
@@ -338,6 +627,34 @@ function registerDoubaoLocal(app, services) {
     reply.type(file.mime).header('Cache-Control','no-store');return file.bytes;
   });
   app.post(prefix + '/tasks', async request => queue.enqueue(request.body?.shotId, request.body?.requestKey));
+  app.post(prefix + '/batches', async request => {
+    if (request.doubaoDevice) throw new ApiError(403, 'admin_required', '仅管理员可提交批量生成');
+    const {projectId, shotIds, requestKey} = request.body || {};
+    if (typeof projectId !== "string" || !projectId || !Array.isArray(shotIds) || !shotIds.length || shotIds.length > 200 ||
+        shotIds.some(id => typeof id !== 'string' || !id) ||
+        typeof requestKey !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(requestKey)) {
+      throw new ApiError(400, 'invalid_batch', '请选择 1–200 个分镜并提供有效请求编号');
+    }
+    services.repos.content.mustProject(projectId);
+    const db = services.db;
+    const shot = db.prepare('SELECT id FROM shots WHERE id=? AND project_id=? AND deleted_at IS NULL');
+    const complete = db.prepare("SELECT 1 FROM jobs WHERE project_id=? AND source_id=? AND kind='video' AND status='succeeded' AND media_id IS NOT NULL LIMIT 1");
+    const active = db.prepare("SELECT id FROM doubao_local_tasks WHERE shot_id=? AND state NOT IN ('succeeded','cancelled','failed')");
+    return transaction(db, () => {
+      const tasks = [];
+      const skipped = [];
+      for (const [index, id] of [...new Set(shotIds)].entries()) {
+        if (!shot.get(id, projectId)) throw new ApiError(404, 'shot_not_found', '分镜已删除或不属于当前项目');
+        if (complete.get(projectId, id)) {
+          skipped.push(id);
+          continue;
+        }
+        const running = active.get(id);
+        tasks.push(running || queue.enqueue(id, `batch-${requestKey}-${index}`, { postProductionSubtitles: true }));
+      }
+      return { taskIds: tasks.map(task => task.id), skipped };
+    });
+  });
   app.post(prefix+'/tasks/:id/cancel',async request=>queue.cancel(request.params.id));
   app.post(prefix+'/tasks/:id/resume',async request=>{
     if(request.doubaoDevice) throw new ApiError(403,'admin_required','仅管理员可恢复任务');
@@ -347,6 +664,10 @@ function registerDoubaoLocal(app, services) {
   app.post(prefix + '/account-report', async request => {
     if (!request.doubaoDevice) throw new ApiError(403,'device_required','账号名单仅接受设备凭据上报');
     return queue.reportAccounts(request.doubaoDevice.id,request.body?.labels);
+  });
+  app.post(prefix + '/usage-seed', async request => {
+    if (request.doubaoDevice) throw new ApiError(403, 'admin_required', '仅管理员可调整账号已用额度');
+    return queue.seedManualUsage(request.body || {});
   });
   app.post(prefix + '/tasks/:id/state', async request => {
     const {workerId,state,note}=request.body || {};
@@ -389,11 +710,12 @@ function authenticateDevice(services,request) {
 function freezeReferences(services,shot) {
   const {db}=services;
   const {uniqueAssetReferences,findMentions,freezePrompt}=require('./references.cjs');
-  const assets=uniqueAssetReferences(db.prepare(`SELECT r.asset_id,a.id AS resolved_id,a.name,a.deleted_at,
+  const assets=uniqueAssetReferences(db.prepare(`SELECT r.asset_id,a.id AS resolved_id,a.name,a.type,a.deleted_at,
     v.id AS version_id,v.media_id,m.sha256,m.mime FROM shot_references r
     LEFT JOIN assets a ON a.id=r.asset_id LEFT JOIN asset_versions v ON v.id=a.locked_version_id
     LEFT JOIN media m ON m.id=v.media_id AND m.project_id=a.project_id
     WHERE r.shot_id=? ORDER BY r.position,r.asset_id`).all(shot.id));
+  if(assets.some(a=>a.type==="音色"&&!a.deleted_at)) throw new ApiError(422,"unsupported_audio_reference","本地豆包暂不支持音色资产，请选择 Seedance API 渠道");
   const missing=assets.find(a=>!a.resolved_id||a.deleted_at||!a.media_id||!a.sha256||!a.mime?.startsWith('image/'));
   if(missing) throw new ApiError(422,'reference_not_ready',`资产“${missing.name||missing.asset_id}”缺少固定参考图`);
   findMentions(shot.prompt,assets.map(a=>({id:a.asset_id,name:a.name})));
@@ -408,4 +730,12 @@ function freezeReferences(services,shot) {
   if(prompt.includes('@')) throw new ApiError(422,'unresolved_reference','提示词包含未匹配的资产引用，请核对分镜参考资产');
   return {prompt,references};
 }
-module.exports = { createDoubaoQueue, registerDoubaoLocal, issueDevice, authenticateDevice, freezeReferences };
+module.exports = {
+  createDoubaoQueue,
+  registerDoubaoLocal,
+  issueDevice,
+  authenticateDevice,
+  freezeReferences,
+  selectNextAssignment,
+  standardSlotsForUsage,
+};
