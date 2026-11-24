@@ -11,6 +11,8 @@ const MAX_TASKS_PER_ACCOUNT_PER_DAY = Math.max(
   Number(process.env.STORYDOCK_DOUBAO_MAX_TASKS_PER_DAY) || 6,
 );
 const LEGACY_USED_SLOT_SECONDS = 15;
+const MIN_VIDEO_SECONDS = 4;
+const MAX_VIDEO_SECONDS = 15;
 const PACK_WINDOW_SIZE = 24;
 const phases = new Set(['claimed','switching_account','opening_canvas','fetching_references','writing_prompt',
   'uploading_references','setting_parameters','prepared','checking_submission','submitting','generating','downloading','uploading',
@@ -24,6 +26,20 @@ function standardSlotsForUsage(
 ) {
   if (usedSeconds >= limit || usedCount >= maxTasks) return 0;
   return Math.min(maxTasks - usedCount, Math.floor((limit - 1 - usedSeconds) / 10) + 1);
+}
+
+function packableHeadroomSeconds(
+  usedSeconds,
+  usedCount = 0,
+  limit = DAILY_PRE_SUBMIT_SECONDS_LIMIT,
+  maxTasks = MAX_TASKS_PER_ACCOUNT_PER_DAY,
+) {
+  if (usedSeconds >= limit || usedCount >= maxTasks) return 0;
+  const remainingTasks = maxTasks - usedCount;
+  if (remainingTasks < 2) return 0;
+  const raw = Math.max(0, limit - 1 - usedSeconds);
+  if (raw < MIN_VIDEO_SECONDS) return 0;
+  return Math.min(raw, (remainingTasks - 1) * MAX_VIDEO_SECONDS);
 }
 
 function selectNextAssignment(accountStates, queuedTasks, options = {}) {
@@ -205,7 +221,7 @@ function createDoubaoQueue(services) {
       usedCount,
       usedSeconds,
       canAccept,
-      remainingBeforeLimit: canAccept ? Math.max(0, DAILY_PRE_SUBMIT_SECONDS_LIMIT - 1 - usedSeconds) : 0,
+      remainingBeforeLimit: canAccept ? packableHeadroomSeconds(usedSeconds, usedCount) : 0,
       standardSlots: standardSlotsForUsage(usedSeconds, usedCount),
     };
   }
@@ -266,7 +282,7 @@ function createDoubaoQueue(services) {
       if (acc.usedSeconds >= DAILY_PRE_SUBMIT_SECONDS_LIMIT || acc.usedCount >= MAX_TASKS_PER_ACCOUNT_PER_DAY) {
         return totalSecs;
       }
-      return totalSecs + (DAILY_PRE_SUBMIT_SECONDS_LIMIT - 1 - acc.usedSeconds) + 15;
+      return totalSecs + packableHeadroomSeconds(acc.usedSeconds, acc.usedCount) + MAX_VIDEO_SECONDS;
     }, 0);
     return {
       quota: { available, total },
@@ -305,7 +321,7 @@ function createDoubaoQueue(services) {
       if (!shot) throw new ApiError(404, 'shot_not_found', '分镜不存在');
       require('./tenant.cjs').own(db, shot.project_id);
       if (!shot.prompt.trim()) throw new ApiError(422, 'prompt_required', '请先保存分镜提示词');
-      if(!Number.isInteger(shot.duration)||shot.duration<4||shot.duration>15)
+      if(!Number.isInteger(shot.duration)||shot.duration<MIN_VIDEO_SECONDS||shot.duration>MAX_VIDEO_SECONDS)
         throw new ApiError(422,'unsupported_duration','本地豆包支持4至15秒镜头');
       const ratio=db.prepare('SELECT ratio FROM projects WHERE id=?').get(shot.project_id).ratio;
       if(!['16:9','9:16','1:1','3:4','4:3','21:9'].includes(ratio)) throw new ApiError(422,'unsupported_ratio','豆包不支持项目当前画幅');
@@ -793,4 +809,5 @@ module.exports = {
   freezeReferences,
   selectNextAssignment,
   standardSlotsForUsage,
+  packableHeadroomSeconds,
 };

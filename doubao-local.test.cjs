@@ -1091,3 +1091,28 @@ test('studio generation saves a dedicated episode and returns the exact queued s
     await app.close();
   }
 });
+
+test('packableHeadroomSeconds and overview respect 4s minimum video duration and task slots',async t=>{
+  const {packableHeadroomSeconds}=require('./server/doubao-local.cjs');
+  assert.equal(packableHeadroomSeconds(0,0),18);
+  assert.equal(packableHeadroomSeconds(14,2),4);
+  assert.equal(packableHeadroomSeconds(15,1),0);
+  assert.equal(packableHeadroomSeconds(18,2),0);
+  assert.equal(packableHeadroomSeconds(10,5),0);
+
+  const {queue}=setup(t);
+  const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const pool=[
+    {...accounts[0],usedToday:1,usedSecondsToday:15,usageDate:date},
+    {...accounts[1],usedToday:2,usedSecondsToday:14,usageDate:date},
+  ];
+  assert.equal(queue.claim('mac',pool).reason,'empty');
+  const details=queue.overview().quota_details;
+  const acc15=details.accounts.find(a=>a.quotaKey===accounts[0].quotaKey);
+  const acc14=details.accounts.find(a=>a.quotaKey===accounts[1].quotaKey);
+  assert.equal(acc15.canAccept,true);
+  assert.equal(acc15.remainingBeforeLimit,0);
+  assert.equal(acc14.canAccept,true);
+  assert.equal(acc14.remainingBeforeLimit,4);
+  assert.equal(details.maxRemainingSeconds,34);
+});

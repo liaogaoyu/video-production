@@ -195,7 +195,7 @@ export function DoubaoLocal({shotId, saved, onComplete}:{shotId:string; saved:bo
                   setSeedTarget(acc.accountLabel||acc.quotaKey);
                   setSeedSeconds(acc.usedSeconds||0);
                 }}>
-                {acc.accountLabel||acc.quotaKey}：已用 {acc.usedSeconds}s{acc.seedSeconds>0?`（含补录 ${acc.seedSeconds}s）`:''} · {acc.canAccept?`可再凑 ${acc.remainingBeforeLimit}s + 15s`:'已满门槛'}
+                {acc.accountLabel||acc.quotaKey}：已用 {acc.usedSeconds}s{acc.seedSeconds>0?`（含补录 ${acc.seedSeconds}s）`:''} · {acc.canAccept?(acc.remainingBeforeLimit>=4?`可再凑 ${acc.remainingBeforeLimit}s + 15s`:'还可再接 1 条（最长 15s）'):'已满门槛'}
               </Tag>)}
             </Space>
             <Space wrap>
