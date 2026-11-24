@@ -62,11 +62,14 @@ const WalletPage = lazy(() =>
   import("./account-ui").then((m) => ({ default: m.WalletPage })),
 );
 const CommercialAdminPage=lazy(()=>import('./commercial-admin').then(m=>({default:m.CommercialAdminPage})));
+const BatchProductionPage = lazy(() => import("./batch-production"));
+
 const pages: Record<string, string> = {
   projects: "我的项目",
   script: "剧本",
   assets: "资产库",
   shots: "分镜故事板",
+  batch: "视频号生产台",
   jobs: "生成队列",
   settings: "模型与账号",
   wallet: "余额与账号",
@@ -231,6 +234,7 @@ function Workspace({
             onClick={(e) => go(e.key, project?.id || projects[0]?.id || "")}
             items={[
               { key: "projects", icon: <FolderOutlined />, label: "我的项目" },
+              { key: "batch", icon: <VideoCameraOutlined />, label: "视频号生产台" },
               { key: "script", icon: <ReadOutlined />, label: "剧本" },
               { key: "assets", icon: <AppstoreOutlined />, label: "资产库" },
               {
@@ -350,6 +354,8 @@ function Workspace({
                   <ScriptPage key={project.id} />
                 ) : where.page === "assets" ? (
                   <AssetsPage key={project.id} />
+                ) : where.page === "batch" ? (
+                  <BatchProductionPage key={project.id} />
                 ) : where.page === "shots" ? (
                   <ShotsPage key={project.id} />
                 ) : (

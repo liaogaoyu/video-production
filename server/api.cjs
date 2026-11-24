@@ -59,6 +59,7 @@ async function createHttpApp(services) {
   const commercialSettings=require('./registration.cjs').registerRegistration(app,services);
   app.addHook("onRequest", async (request) => {
     if (!request.url.startsWith("/api/")) return;
+    if (require("./replication.cjs").authenticateReplicationWorker(request)) return;
     const endpoint=request.url.split("?")[0];
     if (request.headers['x-doubao-device'] && require('./doubao-local.cjs').authenticateDevice(services,request)) return;
     if (["session","login","logout","registration","register","email/verify","email/resend","password/forgot","password/reset"].some(p=>endpoint==='/api/v1/auth/'+p)) {if(!['GET','HEAD'].includes(request.method))auth.sameOrigin(request);return;}
@@ -77,6 +78,8 @@ async function createHttpApp(services) {
   require('./commercial-api.cjs').registerCommercialApi(app,services);
   require('./shot-video-upload.cjs').registerShotVideoUpload(app,services);
   require('./episode-video.cjs').registerEpisodeVideo(app,services);
+  require('./batch-production.cjs').registerBatchProduction(app,services);
+  require('./replication.cjs').registerReplication(app,services);
   require('./doubao-local.cjs').registerDoubaoLocal(app,services);
   services.subtitleErase.register(app);
   const web=services.web;
