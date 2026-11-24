@@ -111,10 +111,34 @@ function createOssStore(config = {}) {
     return ossUri(storageKey);
   }
 
+  function publicGet(key) {
+    const url = new URL(`https://${bucket}.${endpoint.replace("-internal", "")}/${encodeKey(key)}`);
+    return new Promise((resolve, reject) => {
+      const req = https.request(
+        { hostname: url.hostname, path: url.pathname, method: "GET", headers: { Host: url.host } },
+        (res) => {
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => resolve(res.statusCode === 200 ? Buffer.concat(chunks) : null));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
   async function get(storageKey) {
     if (!enabled) throw new Error("OSS 未启用");
-    const result = await request("GET", objectKey(storageKey));
-    return result.body;
+    const key = objectKey(storageKey);
+    try {
+      const result = await request("GET", key);
+      return result.body;
+    } catch (error) {
+      if (error.statusCode !== 403) throw error;
+      const bytes = await publicGet(key);
+      if (bytes) return bytes;
+      throw error;
+    }
   }
 
   async function putFile(storageKey, file, mime, { signal } = {}) {
@@ -224,11 +248,17 @@ function createOssStore(config = {}) {
 
   async function exists(storageKey) {
     if (!enabled) return false;
+    const key = objectKey(storageKey);
     try {
-      await request("HEAD", objectKey(storageKey));
+      await request("HEAD", key);
       return true;
     } catch (error) {
       if (error.statusCode === 404) return false;
+      if (error.statusCode === 403) {
+        const status = await publicStatus("HEAD", key);
+        if (status === 200) return true;
+        if (status === 404) return false;
+      }
       throw error;
     }
   }

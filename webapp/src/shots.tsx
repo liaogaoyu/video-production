@@ -27,7 +27,7 @@ import {
   ClockCircleOutlined,
   ClearOutlined,
 } from "@ant-design/icons";
-import { api, labels } from "./api";
+import { api, labels, time } from "./api";
 import { useWorkspace } from "./context";
 import { Blank, Thumb } from "./common";
 import { Importer } from "./importer";
@@ -36,7 +36,7 @@ import { downloadExport } from "./project-export";
 import { PromptMentions } from "./prompt-mentions";
 import { ReferenceTags } from "./reference-tags";
 import { formatPromptForReading } from "./prompt-layout.mjs";
-import type { Episode, Shot } from "./types";
+import type { Episode, Job, Shot } from "./types";
 
 function episodeLabel(e: Episode) {
   return `第 ${e.number} 集 · ${e.title}`;
@@ -49,6 +49,34 @@ function activeStatuses(status?: string) {
   return ["queued", "preparing", "submitting", "remote_running", "downloading"].includes(
     status || "",
   );
+}
+function isEraseJob(job: Job) {
+  return job.provider === "aliyun_ims_detext" || (job.model || "").startsWith("subtitle-erase");
+}
+function eraseStatus(job: Job) {
+  const detail = job.error || job.queueNote || "";
+  switch (job.status) {
+    case "queued":
+      return { label: "已提交，等待擦除", short: "等待擦除", color: "blue" as const, detail };
+    case "preparing":
+      return { label: "正在准备视频", short: "等待擦除", color: "blue" as const, detail };
+    case "submitting":
+      return { label: "正在提交擦除", short: "等待擦除", color: "blue" as const, detail };
+    case "remote_running":
+      return { label: "正在擦除字幕", short: "擦除中", color: "processing" as const, detail: detail || "阿里云正在处理，完成后会自动更新视频" };
+    case "downloading":
+      return { label: "正在取回擦除结果", short: "取回中", color: "blue" as const, detail };
+    case "done":
+      return { label: "字幕已擦除", short: "已擦除", color: "green" as const, detail: "" };
+    case "failed":
+      return { label: "擦除失败", short: "擦除失败", color: "red" as const, detail };
+    case "download_failed":
+      return { label: "擦除结果下载失败", short: "擦除失败", color: "red" as const, detail };
+    case "submit_unknown":
+      return { label: "擦除提交待确认", short: "待确认", color: "orange" as const, detail };
+    default:
+      return { label: labels[job.status] || "擦除处理中", short: "擦除中", color: "blue" as const, detail };
+  }
 }
 
 export function ShotsPage() {
@@ -63,6 +91,7 @@ export function ShotsPage() {
   const [importing, setImporting] = useState(false);
   const [generating, setGenerating] = useState<string[] | null>(null);
   const [preview, setPreview] = useState("");
+  const [historyShotId, setHistoryShotId] = useState("");
   const [exporting, setExporting] = useState(false);
   const [naming, setNaming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -124,10 +153,20 @@ export function ShotsPage() {
 
   const latest = (shot: Shot) =>
     [...jobs].reverse().find((j) => j.sourceId === shot.id);
+  const eraseOf = (shot: Shot) =>
+    [...jobs].reverse().find((j) => j.sourceId === shot.id && isEraseJob(j));
   const videoOf = (shot: Shot) =>
     [...jobs].reverse().find((j) => j.sourceId === shot.id && j.video)?.video ||
     "";
+  const historyVideos = selected
+    ? jobs.filter((job) => job.sourceId === selected.id && job.video).reverse()
+    : [];
   const statusOf = (shot: Shot) => {
+    const erase = eraseOf(shot);
+    if (erase && activeStatuses(erase.status)) {
+      const state = eraseStatus(erase);
+      return { label: state.short, color: state.color };
+    }
     if (
       selected?.id === shot.id &&
       (draft.title !== shot.title ||
@@ -136,6 +175,16 @@ export function ShotsPage() {
     )
       return { label: "正在编辑", color: "gold" as const };
     const job = latest(shot);
+    if (erase && job?.id === erase.id && erase.status === "done")
+      return { label: "已擦除", color: "green" as const };
+    if (
+      erase &&
+      job?.id === erase.id &&
+      ["failed", "download_failed", "submit_unknown"].includes(erase.status)
+    ) {
+      const state = eraseStatus(erase);
+      return { label: state.short, color: state.color };
+    }
     if (job?.status === "done") return { label: "已完成", color: "green" as const };
     if (activeStatuses(job?.status)) return { label: "生成中", color: "blue" as const };
     if (
@@ -651,7 +700,22 @@ export function ShotsPage() {
               <div className="storyboard-result">
                 <div className="storyboard-result-copy">
                   {videoOf(selected) ? <div className="storyboard-result-thumb"><Thumb url={videoOf(selected)} video /></div> : <VideoCameraOutlined />}
-                  <div className="storyboard-result-label"><strong>{videoOf(selected) ? "当前视频" : "等待视频"}</strong><span>{videoOf(selected) ? "可预览、上传替换或导出" : "上传已有视频，或生成这个镜头的视频"}</span></div>
+                  <div className="storyboard-result-label">
+                    <strong>{videoOf(selected) ? "当前视频" : "等待视频"}</strong>
+                    {(() => {
+                      const erase = eraseOf(selected);
+                      const current = erase && (activeStatuses(erase.status) || erase.id === latest(selected)?.id) ? eraseStatus(erase) : null;
+                      if (!current) {
+                        return <span>{videoOf(selected) ? "可预览、上传替换或导出" : "上传已有视频，或生成这个镜头的视频"}</span>;
+                      }
+                      return (
+                        <>
+                          <Tag color={current.color}>{current.label}</Tag>
+                          {current.detail && <span>{current.detail}</span>}
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
                 <Space wrap>
                   <ShotVideoUpload key={selected.id} shotId={selected.id} onUploaded={refreshProject}/>
@@ -660,11 +724,17 @@ export function ShotsPage() {
                       预览视频
                     </Button>
                   )}
+                  {historyVideos.length > 0 && (
+                    <Button size="small" icon={<ClockCircleOutlined />} onClick={() => setHistoryShotId(selected.id)}>
+                      历史视频（{historyVideos.length}）
+                    </Button>
+                  )}
                   {videoOf(selected) && (
                     <Button
                       size="small"
                       icon={<ClearOutlined />}
-                      loading={erasing}
+                      loading={erasing || activeStatuses(eraseOf(selected)?.status)}
+                      disabled={activeStatuses(eraseOf(selected)?.status)}
                       onClick={async () => {
                         try {
                           setErasing(true);
@@ -678,7 +748,7 @@ export function ShotsPage() {
                         }
                       }}
                     >
-                      擦除字幕
+                      {activeStatuses(eraseOf(selected)?.status) ? "擦除中" : "擦除字幕"}
                     </Button>
                   )}
                 </Space>
@@ -707,6 +777,31 @@ export function ShotsPage() {
           onClose={() => setGenerating(null)}
         />
       )}
+      <Modal
+        title={`历史视频 · ${selected?.title || ""}`}
+        open={!!historyShotId && historyShotId === selected?.id}
+        footer={null}
+        onCancel={() => setHistoryShotId("")}
+        destroyOnHidden
+      >
+        <Space orientation="vertical" size="middle" style={{ width: "100%", maxHeight: "55vh", overflowY: "auto" }}>
+          {historyVideos.map((job, index) => (
+            <div key={job.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <Space wrap>
+                  <span>{job.provider === "upload" ? "手动上传" : job.model || "分镜视频"}</span>
+                  {index === 0 && <Tag color="blue">当前视频</Tag>}
+                </Space>
+                <Typography.Text type="secondary">{time(job.completedAt || job.createdAt)}</Typography.Text>
+              </div>
+              <Space>
+                <Button size="small" icon={<PlayCircleOutlined />} onClick={() => setPreview(job.video)}>预览</Button>
+                <Button size="small" icon={<DownloadOutlined />} href={job.video} download>下载</Button>
+              </Space>
+            </div>
+          ))}
+        </Space>
+      </Modal>
       <Modal
         title="视频预览"
         open={!!preview}
