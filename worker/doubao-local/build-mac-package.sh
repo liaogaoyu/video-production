@@ -10,7 +10,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 package="$stage/Storydock-Doubao-Mac"
 mkdir -p "$package/worker/doubao-local" "$package/server"
-for name in main.cjs driver.cjs cdp.cjs background.cjs mac-setup.cjs; do
+for name in main.cjs driver.cjs cdp.cjs background.cjs public-ip-whitelist.cjs mac-setup.cjs; do
   cp "$root/worker/doubao-local/$name" "$package/worker/doubao-local/"
 done
 cp "$root/server/video-export.cjs" "$root/server/errors.cjs" "$package/server/"

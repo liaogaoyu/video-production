@@ -39,6 +39,8 @@ async function main() {
   const exit=()=>{try{fs.unlinkSync(lockFile);}catch{}};
   const interrupt=()=>{exit();process.exit(130);};
   process.once('SIGINT',interrupt);process.once('SIGTERM',interrupt);
+  if(require.main===module && process.argv.includes('--watch'))
+    require('./public-ip-whitelist.cjs').startWhitelistWatcher(configPath);
   const stateFile = path.join(directory, 'state.json');
   let state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {workerId:crypto.randomUUID()};
   if(config.deviceId) {

@@ -68,3 +68,19 @@ Git 和安装包只存程序及说明。真实连接配置、私钥、设备令�
 ## 给新 Mac 上的部署 agent
 
 > 请在这台 Mac 上部署 Storydock 的 mac-doubao 本地执行器，并接入我已有的 Storydock 工作台。我会提供安装 ZIP 或仓库路径。请读取 `worker/doubao-local/MAC-INSTALL.md`，检查环境并沿用已有 SSH 密钥；首次登记时只把本机公钥交给我。收到 `连接配置.json` 后安装、启动豆包后台，并验证执行器已上报账号名单。若配置已有生成账号，也请验证执行器正在轮询。验收时不要提交测试视频。
+
+## 家宽公网 IPv4 白名单自动更新
+
+只在连接家宽的 Mac 启用。在执行器 `config.json` 同目录创建权限为 `600` 的 `public-ip-whitelist.json`，填写以下字段：
+
+```json
+{
+  "regionId": "cn-hangzhou",
+  "securityGroupId": "sg-替换为安全组ID",
+  "ruleId": "sgr-替换为18456规则ID",
+  "accessKeyId": "替换为RAM AccessKey ID",
+  "accessKeySecret": "替换为RAM AccessKey Secret"
+}
+```
+
+RAM 凭据需要 `ecs:DescribeSecurityGroupAttribute` 和 `ecs:ModifySecurityGroupRule`。执行器启动后立即核对，之后每 5 分钟检查一次。只有公网 IPv4 变化时才修改指定的 TCP 18456 单 IP 放行规则。VPN 接管 IPv4 默认路由时跳过检查。白名单更新失败记入本机日志，豆包任务照常运行。请在固定家宽的设备上启用，避免另一台 Mac 覆盖同一条规则。

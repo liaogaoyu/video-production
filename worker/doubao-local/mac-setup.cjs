@@ -88,7 +88,7 @@ async function activate(file) {
   const installed=path.join(directory,'runtime');
   for(const part of ['worker/doubao-local','server']) {
     const files=part==='server'?['video-export.cjs','errors.cjs']:
-      ['main.cjs','driver.cjs','cdp.cjs','background.cjs','mac-setup.cjs'];
+      ['main.cjs','driver.cjs','cdp.cjs','background.cjs','public-ip-whitelist.cjs','mac-setup.cjs'];
     fs.mkdirSync(path.join(installed,part),{recursive:true,mode:0o700});
     for(const name of files) fs.copyFileSync(path.join(payload,part,name),path.join(installed,part,name));
   }
