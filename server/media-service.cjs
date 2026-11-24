@@ -4,6 +4,7 @@ const path = require("node:path");
 const { ApiError } = require("./errors.cjs");
 
 const IMAGE_LIMIT = 50 * 1024 * 1024;
+const AUDIO_LIMIT = 15 * 1000 * 1000;
 const VIDEO_LIMIT = 500 * 1024 * 1024;
 
 function sniff(bytes) {
@@ -15,6 +16,14 @@ function sniff(bytes) {
   }
   if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") {
     return { ext: ".webp", mime: "image/webp", kind: "image" };
+  }
+  if (bytes.length >= 44 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WAVE") {
+    return { ext: ".wav", mime: "audio/wav", kind: "audio" };
+  }
+  if (bytes.length > 10 && (bytes.toString("ascii", 0, 3) === "ID3" ||
+      (bytes[0] === 0xff && (bytes[1] & 0xe6) === 0xe2 && (bytes[1] & 0x18) !== 0x08 &&
+       (bytes[2] & 0xf0) > 0 && (bytes[2] & 0xf0) < 0xf0 && (bytes[2] & 0x0c) !== 0x0c))) {
+    return { ext: ".mp3", mime: "audio/mpeg", kind: "audio" };
   }
   if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
     return { ext: ".mp4", mime: "video/mp4", kind: "video" };
@@ -115,14 +124,15 @@ function createMediaService({ root, oss = null }) {
     return file;
   }
 
-  function inspect(bytes, { video = false } = {}) {
+  function inspect(bytes, { video = false, audio = false } = {}) {
     if (!bytes?.length) throw new ApiError(400, "empty_file", "文件是空的");
-    const limit = video ? VIDEO_LIMIT : IMAGE_LIMIT;
-    if (bytes.length > limit) throw new ApiError(413, "file_too_large", video ? "视频超过 500MB" : "图片超过 50MB");
+    const limit = video ? VIDEO_LIMIT : audio ? AUDIO_LIMIT : IMAGE_LIMIT;
+    if (bytes.length > limit) throw new ApiError(413, "file_too_large", video ? "视频超过 500MB" : audio ? "音频超过 15 MB" : "图片超过 50MB");
     const kind = sniff(bytes);
+    if (audio && kind?.kind !== "audio") throw new ApiError(400, "unsupported_media", "音色文件只接受 WAV 或 MP3");
     if (!kind) throw new ApiError(400, "unsupported_media", "只接受 PNG、JPEG、WebP 图片或 MP4 视频");
     if (video && kind.kind !== "video") throw new ApiError(400, "unsupported_media", "文件不是 MP4 视频");
-    if (!video && kind.kind !== "image") throw new ApiError(400, "unsupported_media", "只接受 PNG、JPEG 或 WebP 图片");
+    if (!video && !audio && kind.kind !== "image") throw new ApiError(400, "unsupported_media", "只接受 PNG、JPEG 或 WebP 图片");
     return {
       ...kind,
       bytes: bytes.length,

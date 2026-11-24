@@ -12,6 +12,7 @@ function imageBaseName(value) {
 function planAssetImageExport(project, db, media, { allVersions = false } = {}) {
   const files = [], missing = [], used = new Set();
   for (const asset of project.data.assets) {
+    if (asset.type === "音色") continue;
     const versions = allVersions ? asset.versions : asset.versions.filter(v => v.id === asset.selectedVersionId);
     for (const [index, version] of versions.entries()) {
       // Resolve only media owned by this project; no caller-provided file paths.

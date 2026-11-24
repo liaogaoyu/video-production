@@ -7,9 +7,10 @@ export interface Asset {
   externalKey: string;
   revision: number;
   image: string;
+  audio?: string;
   locked: boolean;
   selectedVersionId: string;
-  versions: { id: string; image: string; createdAt: string; prompt: string }[];
+  versions: { id: string; image: string; audio?: string; createdAt: string; prompt: string }[];
   references: { id: string; mediaId: string; url: string }[];
 }
 export interface Episode {

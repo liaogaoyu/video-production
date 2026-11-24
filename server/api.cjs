@@ -304,7 +304,14 @@ async function createHttpApp(services) {
     let disposition;
     if (request.query?.download === "1") {
       const storedName = services.db.prepare("SELECT filename FROM episode_final_videos WHERE media_id=?").get(row.id)?.filename;
-      const filename = (storedName || path.basename(row.storage_key)).toWellFormed();
+      const voiceName = row.mime.startsWith("audio/") ? services.db.prepare(`
+        SELECT a.name FROM asset_versions v JOIN assets a ON a.id=v.asset_id
+        WHERE v.media_id=? AND a.project_id=? AND a.type='音色' AND a.deleted_at IS NULL
+        ORDER BY a.name LIMIT 1
+      `).get(row.id, row.project_id)?.name : null;
+      const filename = (storedName || (voiceName
+        ? voiceName.replace(/[\\/\x00-\x1f\x7f]/g, "_") + path.extname(row.storage_key)
+        : path.basename(row.storage_key))).toWellFormed();
       const encoded = encodeURIComponent(filename).replace(/['()*]/g, char => "%" + char.charCodeAt(0).toString(16));
       disposition = `attachment; filename*=UTF-8''${encoded}`;
     }
@@ -433,7 +440,7 @@ async function createHttpApp(services) {
         prompt: asset.prompt || asset.name,
         externalKey: asset.externalKey || "",
       });
-      const packed = fileFor(asset.image);
+      const packed = fileFor(asset.audio || asset.image);
       if (packed) {
         await repos.content.addVersion(created.id, { bytes: packed.data, source: "import" });
         if (asset.locked) {
@@ -443,7 +450,7 @@ async function createHttpApp(services) {
           if (version) repos.content.setLockedVersion(saved.id, version.id);
         }
         images += 1;
-      } else if (asset.image) missing.push(String(asset.image));
+      } else if (asset.audio || asset.image) missing.push(String(asset.audio || asset.image));
     }
     for (const shot of source.data.shots || []) {
       repos.content.createShot({

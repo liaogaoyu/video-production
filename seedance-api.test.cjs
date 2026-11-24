@@ -31,3 +31,72 @@ test('fixed quote never uploads or estimates; confirmed generation prepares refe
  await assert.rejects(f.s.seedanceApi.estimate(f.p.id,{sourceIds:[shot.id],model:'seedance-2.5-draft'}),/固定单价/);
  }finally{f.close();}
 });
+
+test("fixed voice assets are submitted as audio references with their own numbering", async () => {
+  const uploads = [];
+  const f = fixture(async (url, options) => {
+    if (url.endsWith("/uploads")) {
+      const { kind, content_type } = JSON.parse(options.body);
+      uploads.push({ kind, content_type });
+      return json({ disposition: "reused", storage_object_id: "stored-" + kind });
+    }
+    if (url.endsWith("/video-generations")) {
+      assert.deepEqual(JSON.parse(options.body).content, [
+        { type: "audio_url", role: "reference_audio", storage_object_id: "stored-audio" },
+        { type: "image_url", role: "reference_image", storage_object_id: "stored-image" },
+      ]);
+      return json({ id: "video" });
+    }
+    throw Error("unexpected " + url);
+  });
+  try {
+    f.s.seedanceApi.save({ revision: 0, apiKey: "test", enabled: true, markupPercent: 0 });
+    const content = f.s.repos.content;
+    const voice = content.createAsset({ projectId: f.p.id, name: "知性女声", type: "音色" });
+    const wav = Buffer.alloc(44 + 64000);
+    wav.write("RIFF");
+    wav.writeUInt32LE(wav.length - 8, 4);
+    wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(16000, 24);
+    wav.writeUInt32LE(32000, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write("data", 36);
+    wav.writeUInt32LE(wav.length - 44, 40);
+
+    await assert.rejects(content.addVersion(voice.id, { bytes: PNG, source: "upload" }), /WAV 或 MP3/);
+    const audio = await content.addVersion(voice.id, { bytes: wav, source: "upload" });
+    content.setLockedVersion(voice.id, audio.id);
+    const project = require("./server/present.cjs").presentProject(content.graph(f.p.id));
+    const voiceAsset = project.data.assets.find(asset => asset.id === voice.id);
+    assert.equal(voiceAsset.audio, "/api/v1/media/" + audio.mediaId);
+    assert.equal(voiceAsset.image, "");
+
+    const scene = content.createAsset({ projectId: f.p.id, name: "溪谷", type: "场景" });
+    const image = await content.addVersion(scene.id, { bytes: PNG, source: "upload" });
+    content.setLockedVersion(scene.id, image.id);
+    const shot = content.createShot({
+      projectId: f.p.id, episode: 1, number: 1, title: "溪谷", duration: 11,
+      prompt: "@知性女声 作为旁白。@溪谷 缓慢推近。@知性女声 延续同一音色。",
+    });
+
+    const quote = await f.s.billing.quote(f.user, f.p.id, { sourceIds: [shot.id], offerId: "api-seedance-2.0" });
+    assert.equal(uploads.length, 0);
+    const result = f.s.billing.confirm(f.user, quote.id);
+    const job = f.s.repos.jobs.getJob(result.jobIds[0]);
+    const provider = f.s.seedanceApi.provider();
+    await provider.prepare(job);
+    assert.deepEqual(uploads, [
+      { kind: "audio", content_type: "audio/wav" },
+      { kind: "image", content_type: "image/png" },
+    ]);
+    const request = f.s.db.prepare("SELECT request_json FROM seedance_api_runs WHERE job_id=?").get(job.id);
+    assert.equal(JSON.parse(request.request_json).prompt, "[@Audio 1] 作为旁白。[@Image 1] 缓慢推近。[@Audio 1] 延续同一音色。");
+    assert.equal((await provider.submit(job)).remoteTaskId, "video");
+  } finally {
+    f.close();
+  }
+});

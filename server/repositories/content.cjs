@@ -7,7 +7,7 @@ const { findScenePeopleClause } = require("../scene-prompt-check.cjs");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RATIOS = new Set(["16:9", "9:16", "1:1"]);
-const TYPES = { character: "角色", scene: "场景", prop: "道具", 角色: "角色", 场景: "场景", 道具: "道具" };
+const TYPES = { character: "角色", scene: "场景", prop: "道具", 角色: "角色", 场景: "场景", 道具: "道具", voice: "音色", 音色: "音色" };
 
 function iso(date = new Date()) {
   return date.toISOString();
@@ -148,7 +148,7 @@ function createContentRepository(db, { media, record }) {
     const project = mustProject(input.projectId);
     const name = text(input.name, "资产名称", 80, { required: true });
     const type = TYPES[input.type];
-    if (!type) throw new ApiError(400, "invalid_field", "资产类型只支持角色、场景、道具");
+    if (!type) throw new ApiError(400, "invalid_field", "资产类型只支持角色、场景、道具、音色");
     if (db.prepare("SELECT id FROM assets WHERE project_id=? AND name=? AND deleted_at IS NULL").get(project.id, name)) {
       throw new ApiError(409, "ambiguous_reference", `已有同名资产“${name}”，请确认后再创建`);
     }
@@ -172,6 +172,11 @@ function createContentRepository(db, { media, record }) {
     const asset = mustAsset(id);
     if (Number(patch.revision) !== asset.revision) conflict();
     const name = patch.name === undefined ? asset.name : text(patch.name, "资产名称", 80, { required: true });
+    const type = patch.type === undefined ? asset.type : TYPES[patch.type];
+    if (!type) throw new ApiError(400, "invalid_field", "资产类型只支持角色、场景、道具、音色");
+    if ((type === "音色") !== (asset.type === "音色")) {
+      throw new ApiError(400, "invalid_field", "音色与图片资产不能互相转换");
+    }
     const duplicate = db.prepare("SELECT id FROM assets WHERE project_id=? AND name=? AND deleted_at IS NULL AND id<>?").get(asset.project_id, name, asset.id);
     if (duplicate) throw new ApiError(409, "ambiguous_reference", `已有同名资产“${name}”，请确认后再修改`);
     const now = iso();
@@ -179,7 +184,7 @@ function createContentRepository(db, { media, record }) {
       const result = db.prepare("UPDATE assets SET name=?, type=?, description=?, prompt=?, external_key=?, selected_version_id=?, revision=revision+1, updated_at=? WHERE id=? AND revision=? AND deleted_at IS NULL")
         .run(
           name,
-          patch.type === undefined ? asset.type : (TYPES[patch.type] || (() => { throw new ApiError(400, "invalid_field", "资产类型只支持角色、场景、道具"); })()),
+          type,
           patch.description === undefined ? asset.description : text(patch.description, "描述", 500),
           patch.prompt === undefined ? asset.prompt : text(patch.prompt, "提示词", 20000),
           patch.externalKey === undefined ? asset.external_key : text(patch.externalKey, "资产键", 80),
@@ -211,9 +216,9 @@ function createContentRepository(db, { media, record }) {
     return { deleted: true };
   }
 
-  async function saveMedia({ projectId, bytes, source, video = false, assetId = "", jobId = "", onOssError }) {
+  async function saveMedia({ projectId, bytes, source, video = false, audio = false, assetId = "", jobId = "", onOssError }) {
     mustProject(projectId);
-    const info = media.inspect(bytes, { video });
+    const info = media.inspect(bytes, { video, audio });
     const findExisting = db.prepare("SELECT * FROM media WHERE project_id=? AND sha256=? AND mime=?");
     const existing = findExisting.get(projectId, info.sha256, info.mime);
     if (existing && (!onOssError || fs.existsSync(media.locate(existing.storage_key)))) return existing;
@@ -232,23 +237,26 @@ function createContentRepository(db, { media, record }) {
 
   async function addVersion(assetId, { bytes, source }) {
     const asset = mustAsset(assetId);
-    if (asset.locked_version_id) throw new ApiError(409, "asset_locked", "请先解锁资产再更换图片");
-    const stored = await saveMedia({ projectId: asset.project_id, bytes, source, assetId: asset.id });
+    if (asset.locked_version_id) throw new ApiError(409, "asset_locked", "请先解锁资产再更换文件");
+    const stored = await saveMedia({ projectId: asset.project_id, bytes, source, audio: asset.type === "音色", assetId: asset.id });
     const now = iso();
     const id = crypto.randomUUID();
-    transaction(db, () => {
+    return transaction(db, () => {
+      const current = mustAsset(asset.id);
+      if (current.locked_version_id) throw new ApiError(409, "asset_locked", "请先解锁资产再更换文件");
       db.prepare("INSERT INTO asset_versions(id,asset_id,media_id,prompt,source,created_at) VALUES(?,?,?,?,?,?)")
-        .run(id, asset.id, stored.id, asset.prompt, source, now);
+        .run(id, asset.id, stored.id, current.prompt, source, now);
       db.prepare("UPDATE assets SET selected_version_id=?, locked_version_id=NULL, revision=revision+1, updated_at=? WHERE id=?")
         .run(id, now, asset.id);
       record("asset.version", { projectId: asset.project_id, assetId: asset.id, versionId: id });
+      return { id, mediaId: stored.id, revision: current.revision + 1 };
     });
-    return { id, mediaId: stored.id, revision: asset.revision + 1 };
   }
 
   async function addReference(assetId, bytes) {
     const asset = mustAsset(assetId);
     if (asset.locked_version_id) throw new ApiError(409, "asset_locked", "请先解锁资产再修改参考图");
+    if (asset.type === "音色") throw new ApiError(400, "invalid_field", "音色资产请上传音频版本");
     const count = db.prepare("SELECT count(*) AS count FROM asset_references WHERE asset_id=?").get(asset.id).count;
     if (count >= 15) throw new ApiError(400, "too_many_references", "参考图最多 15 张");
     const stored = await saveMedia({ projectId: asset.project_id, bytes, source: "reference", assetId: asset.id });
@@ -269,9 +277,9 @@ function createContentRepository(db, { media, record }) {
     return { deleted: true };
   }
 
-  function readReferenceMedia(projectId, mediaId, expectedSha) {
+  function readReferenceMedia(projectId, mediaId, expectedSha, kind = "image") {
     const row = db.prepare("SELECT * FROM media WHERE id=? AND project_id=?").get(mediaId, projectId);
-    if (!row || !row.mime.startsWith("image/") || (expectedSha && row.sha256 !== expectedSha)) throw new ApiError(409,"reference_not_ready","任务中的参考图不存在或已损坏");
+    if (!row || !row.mime.startsWith(kind + "/") || (expectedSha && row.sha256 !== expectedSha)) throw new ApiError(409,"reference_not_ready","任务中的参考素材不存在或已损坏");
     return { mime: row.mime, bytes: fs.readFileSync(media.locate(row.storage_key)) };
   }
   async function addProjectReference(projectId, bytes) {
@@ -416,7 +424,7 @@ function createContentRepository(db, { media, record }) {
       const name = text(item?.name, "资产名称", 80);
       const type = TYPES[item?.type];
       const prompt = text(item?.prompt, "提示词", 20000);
-      if (!name || !type || !prompt) {
+      if (!name || !type || type === "音色" || !prompt) {
         preview.push({ name, accepted: false, reason: "名称、类型或提示词不正确" });
         continue;
       }
